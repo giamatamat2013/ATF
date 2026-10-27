@@ -1,0 +1,147 @@
+// calculator.atf - a pocket calculator in the style of the Windows one.
+// Shows: grid of buttons, one state struct, a reusable style per key kind, keyboard shortcuts.
+// Run:   atf run examples/ui/calculator.atf      (digits, Enter, Backspace and Esc work too)
+
+import "std/ui"
+
+struct Calc {
+    shown: str = "0"      // what the display shows
+    acc: float = 0.0      // the left operand
+    op: str = ""          // pending operator
+    fresh: bool = true    // next digit starts a new number
+}
+
+let KEY_NUM = style().bg(hex("#ffffff")).color(hex("#111827")).radius(8).border(1, hex("#e5e7eb")).hover(style().bg(hex("#f3f4f6")))
+let KEY_OP = style().bg(hex("#e0e7ff")).color(hex("#3730a3")).radius(8).border(0, TRANSPARENT).hover(style().bg(hex("#c7d2fe")))
+let KEY_EQ = style().bg(hex("#4f46e5")).color(WHITE).radius(8).border(0, TRANSPARENT).hover(style().bg(hex("#4338ca")))
+let KEY_CLR = style().bg(hex("#fee2e2")).color(hex("#991b1b")).radius(8).border(0, TRANSPARENT).hover(style().bg(hex("#fecaca")))
+
+fn calc_fmt(x: float) -> str {
+    if x == float(int(x)) and abs(x) < 1.0e15 { return str(int(x)) }
+    return str(x)
+}
+
+fn calc_apply(a: float, op: str, b: float) -> float {
+    if op == "+" { return a + b }
+    if op == "-" { return a - b }
+    if op == "*" { return a * b }
+    if op == "/" { return a / b }
+    return b
+}
+
+fn calc_digit(c: Calc, d: str) {
+    if c.fresh or c.shown == "0" {
+        c.shown = d
+    } else if c.shown.len() < 15 {
+        c.shown = c.shown + d
+    }
+    c.fresh = false
+}
+
+fn calc_dot(c: Calc) {
+    if c.fresh {
+        c.shown = "0."
+        c.fresh = false
+    } else if not c.shown.contains(".") {
+        c.shown = c.shown + "."
+    }
+}
+
+fn calc_equals(c: Calc) {
+    if c.op == "" { return }
+    let b = c.shown.to_float()
+    if c.op == "/" and b == 0.0 {
+        c.shown = "Cannot divide by zero"
+        c.op = ""
+        c.acc = 0.0
+        c.fresh = true
+        return
+    }
+    c.shown = calc_fmt(calc_apply(c.acc, c.op, b))
+    c.op = ""
+    c.fresh = true
+}
+
+fn calc_operator(c: Calc, op: str) {
+    if c.op != "" and not c.fresh { calc_equals(c) }
+    c.acc = c.shown.to_float()
+    c.op = op
+    c.fresh = true
+}
+
+fn calc_clear(c: Calc) {
+    c.shown = "0"
+    c.acc = 0.0
+    c.op = ""
+    c.fresh = true
+}
+
+fn calc_back(c: Calc) {
+    if c.fresh { return }
+    c.shown = c.shown[..c.shown.len() - 1]
+    if c.shown == "" or c.shown == "-" { c.shown = "0"; c.fresh = true }
+}
+
+fn calc_negate(c: Calc) {
+    if c.shown == "0" { return }
+    if c.shown.starts_with("-") { c.shown = c.shown[1..] } else { c.shown = "-" + c.shown }
+}
+
+fn calc_percent(c: Calc) {
+    c.shown = calc_fmt(c.shown.to_float() / 100.0)
+    c.fresh = true
+}
+
+fn key(label: str, st: Style, f: fn()) -> Node {
+    return button(label, f).style(st).height(56).grow().font_size(20)
+}
+
+fn calc_view(c: Calc) -> Node {
+    var size = 44
+    if c.shown.len() > 9 { size = 30 }
+    if c.shown.len() > 14 { size = 22 }
+    var hint = " "
+    if c.op != "" { hint = "{calc_fmt(c.acc)} {c.op}" }
+    let keys = [
+        key("%", KEY_OP, || { calc_percent(c) }),
+        key("CE", KEY_CLR, || { calc_clear(c) }),
+        key("C", KEY_CLR, || { calc_clear(c) }),
+        key("⌫", KEY_OP, || { calc_back(c) }),
+        key("7", KEY_NUM, || { calc_digit(c, "7") }),
+        key("8", KEY_NUM, || { calc_digit(c, "8") }),
+        key("9", KEY_NUM, || { calc_digit(c, "9") }),
+        key("÷", KEY_OP, || { calc_operator(c, "/") }),
+        key("4", KEY_NUM, || { calc_digit(c, "4") }),
+        key("5", KEY_NUM, || { calc_digit(c, "5") }),
+        key("6", KEY_NUM, || { calc_digit(c, "6") }),
+        key("×", KEY_OP, || { calc_operator(c, "*") }),
+        key("1", KEY_NUM, || { calc_digit(c, "1") }),
+        key("2", KEY_NUM, || { calc_digit(c, "2") }),
+        key("3", KEY_NUM, || { calc_digit(c, "3") }),
+        key("−", KEY_OP, || { calc_operator(c, "-") }),
+        key("±", KEY_NUM, || { calc_negate(c) }),
+        key("0", KEY_NUM, || { calc_digit(c, "0") }),
+        key(".", KEY_NUM, || { calc_dot(c) }),
+        key("+", KEY_OP, || { calc_operator(c, "+") }),
+    ]
+    return column([
+        column([
+            text(hint).font_size(14).color(hex("slate")).text_align(Align.End),
+            text(c.shown).font_size(size).bold().text_align(Align.End).nowrap(),
+        ]).padding(8, 12).gap(2).height(96).justify(Justify.End),
+        grid(4, keys).gap(8),
+        key("=", KEY_EQ, || { calc_equals(c) }),
+    ]).gap(8).padding(14).bg(hex("#f9fafb"))
+}
+
+fn main() {
+    let c = Calc()
+    for d in ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"] {
+        let digit = d
+        ui_shortcut(digit, || { calc_digit(c, digit) })
+    }
+    ui_shortcut("enter", || { calc_equals(c) })
+    ui_shortcut("backspace", || { calc_back(c) })
+    ui_shortcut("esc", || { calc_clear(c) })
+    ui_run("Calculator", 340, 520, || calc_view(c))
+}

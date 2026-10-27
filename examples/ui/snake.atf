@@ -1,0 +1,129 @@
+// snake.atf - the classic snake game.
+// Shows: canvas drawing, a game loop with ui_every, held keys with ui_key_down, a high score.
+// Run:   atf run examples/ui/snake.atf      (arrow keys or WASD, Space restarts)
+
+import "std/ui"
+
+const SN_COLS = 20
+const SN_ROWS = 16
+const SN_CELL = 24
+
+struct Snake {
+    xs: [int] = []        // body segments, head first
+    ys: [int] = []
+    dx: int = 1
+    dy: int = 0
+    food_x: int = 0
+    food_y: int = 0
+    score: int = 0
+    best: int = 0
+    dead: bool = false
+}
+
+fn sn_on_snake(s: Snake, x: int, y: int) -> bool {
+    for i in 0..s.xs.len() {
+        if s.xs[i] == x and s.ys[i] == y { return true }
+    }
+    return false
+}
+
+fn sn_new_food(s: Snake) {
+    loop {
+        let x = rand_int(0, SN_COLS - 1)
+        let y = rand_int(0, SN_ROWS - 1)
+        if not sn_on_snake(s, x, y) {
+            s.food_x = x
+            s.food_y = y
+            return
+        }
+    }
+}
+
+fn sn_reset(s: Snake) {
+    s.xs = [5, 4, 3]
+    s.ys = [8, 8, 8]
+    s.dx = 1
+    s.dy = 0
+    s.score = 0
+    s.dead = false
+    sn_new_food(s)
+}
+
+fn sn_steer(s: Snake) {
+    if (ui_key_down("left") or ui_key_down("a")) and s.dx == 0 { s.dx = -1; s.dy = 0 }
+    else if (ui_key_down("right") or ui_key_down("d")) and s.dx == 0 { s.dx = 1; s.dy = 0 }
+    else if (ui_key_down("up") or ui_key_down("w")) and s.dy == 0 { s.dx = 0; s.dy = -1 }
+    else if (ui_key_down("down") or ui_key_down("s")) and s.dy == 0 { s.dx = 0; s.dy = 1 }
+}
+
+fn sn_step(s: Snake) {
+    if s.dead {
+        if ui_key_down("space") { sn_reset(s) }
+        return
+    }
+    sn_steer(s)
+    let nx = s.xs[0] + s.dx
+    let ny = s.ys[0] + s.dy
+    let ate = nx == s.food_x and ny == s.food_y
+    // the tail moves away this step, unless the snake grows
+    var body = s.xs.len()
+    if not ate { body -= 1 }
+    var hit = nx < 0 or nx >= SN_COLS or ny < 0 or ny >= SN_ROWS
+    for i in 0..body {
+        if s.xs[i] == nx and s.ys[i] == ny { hit = true }
+    }
+    if hit {
+        s.dead = true
+        if s.score > s.best { s.best = s.score }
+        return
+    }
+    s.xs.insert(0, nx)
+    s.ys.insert(0, ny)
+    if ate {
+        s.score += 10
+        sn_new_food(s)
+    } else {
+        s.xs.pop()
+        s.ys.pop()
+    }
+}
+
+fn sn_draw(c: Canvas, s: Snake) {
+    let w = SN_COLS * SN_CELL
+    let h = SN_ROWS * SN_CELL
+    c.clear(hex("#0f172a"))
+    for y in 0..SN_ROWS {
+        for x in 0..SN_COLS {
+            if (x + y) % 2 == 0 { c.rect(x * SN_CELL, y * SN_CELL, SN_CELL, SN_CELL, hex("#111c33")) }
+        }
+    }
+    c.circle(s.food_x * SN_CELL + SN_CELL / 2, s.food_y * SN_CELL + SN_CELL / 2, SN_CELL / 2 - 3, hex("#ef4444"))
+    for i in 0..s.xs.len() {
+        var col = hex("#22c55e")
+        if i == 0 { col = hex("#86efac") }
+        c.rect(s.xs[i] * SN_CELL + 1, s.ys[i] * SN_CELL + 1, SN_CELL - 2, SN_CELL - 2, col)
+    }
+    if s.dead {
+        c.rect(0, 0, w, h, rgba(0, 0, 0, 0.55))
+        c.text(w / 2 - 90, h / 2 - 30, "Game over", WHITE, 32, true)
+        c.text(w / 2 - 80, h / 2 + 14, "Space to play again", hex("#cbd5e1"), 16)
+    }
+}
+
+fn sn_view(s: Snake) -> Node {
+    return column([
+        row([
+            text("Score {s.score}").bold().font_size(18),
+            spacer(),
+            text("Best {s.best}").color(hex("slate")),
+        ]),
+        canvas(|c| { sn_draw(c, s) }).size(SN_COLS * SN_CELL, SN_ROWS * SN_CELL).radius(8).clip(),
+    ]).gap(8).padding(12)
+}
+
+fn main() {
+    let s = Snake()
+    sn_reset(s)
+    ui_every(120, || { sn_step(s) })
+    ui_run("Snake", SN_COLS * SN_CELL + 24, SN_ROWS * SN_CELL + 60, || sn_view(s))
+}

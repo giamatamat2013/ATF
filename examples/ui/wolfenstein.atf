@@ -1,0 +1,416 @@
+// wolfenstein.atf - a small first-person shooter in the style of Wolfenstein 3D (1992).
+// Shows: a software ray caster written in ATF (DDA walls, textures, fog), sprites with a depth buffer,
+//        enemy AI with line of sight, hit scan shooting, a mini map, all drawn on one canvas at 30 frames a second.
+// Run:   atf run examples/ui/wolfenstein.atf
+// Keys:  W A S D move, mouse or left/right arrows turn, left click or Space shoots, R restarts, Esc quits.
+
+import "std/ui"
+
+const WF_W = 256
+const WF_H = 160
+const WF_S = 4
+const WF_N = 16
+
+let WF_MAP = [
+    "################",
+    "#P.....#.......#",
+    "#......#...E...#",
+    "#..##..#...##..#",
+    "#..#.......#...#",
+    "#..#..###..#..E#",
+    "#.........#....#",
+    "####.####..##.##",
+    "#..E.....#.....#",
+    "#.......##..E..#",
+    "#..222..#......#",
+    "#..2.2......##.#",
+    "#..2.2..E...#..#",
+    "#..222......#..#",
+    "#.....E........#",
+    "################",
+]
+
+struct Enemy { x: float, y: float, hp: int = 3, cool: float = 1.0, hurt: float = 0.0, seen: bool = false }
+
+var wf_grid: [int] = []
+var wf_enemies: [Enemy] = []
+var wf_buf: [int] = []
+var wf_zbuf: [float] = []
+var wf_px = 1.5
+var wf_py = 1.5
+var wf_a = 0.6          // the angle the player looks at
+var wf_hp = 100
+var wf_ammo = 60
+var wf_kills = 0
+var wf_fire_cool = 0.0
+var wf_flash = 0.0      // muzzle flash time left
+var wf_pain = 0.0       // red screen time left
+var wf_over = false
+var wf_won = false
+
+// results of the last wf_cast
+var wf_side = 0
+var wf_tile = 0
+var wf_u = 0.0
+
+fn wf_reset() {
+    wf_grid = array_make::<int>(WF_N * WF_N)
+    wf_enemies = []
+    for y in 0..WF_N {
+        for x in 0..WF_N {
+            let ch = WF_MAP[y][x..x + 1]
+            if ch == "#" { wf_grid[y * WF_N + x] = 1 }
+            else if ch == "2" { wf_grid[y * WF_N + x] = 2 }
+            else if ch == "P" { wf_px = float(x) + 0.5; wf_py = float(y) + 0.5 }
+            else if ch == "E" { wf_enemies.push(Enemy{ x: float(x) + 0.5, y: float(y) + 0.5 }) }
+        }
+    }
+    wf_a = 0.6
+    wf_hp = 100
+    wf_ammo = 60
+    wf_kills = 0
+    wf_fire_cool = 0.0
+    wf_flash = 0.0
+    wf_pain = 0.0
+    wf_over = false
+    wf_won = false
+}
+
+fn wf_solid(x: float, y: float) -> bool {
+    let mx = int(floor(x))
+    let my = int(floor(y))
+    if mx < 0 or my < 0 or mx >= WF_N or my >= WF_N { return true }
+    return wf_grid[my * WF_N + mx] > 0
+}
+
+// the player and the enemies are a little square, so test its four corners
+fn wf_blocked(x: float, y: float) -> bool {
+    let r = 0.22
+    return wf_solid(x - r, y - r) or wf_solid(x + r, y - r) or wf_solid(x - r, y + r) or wf_solid(x + r, y + r)
+}
+
+// distance from (ox, oy) to the first wall along (dx, dy); sets wf_side, wf_tile and wf_u
+fn wf_cast(ox: float, oy: float, dx: float, dy: float) -> float {
+    var mx = int(floor(ox))
+    var my = int(floor(oy))
+    var ddx = 1.0e9
+    var ddy = 1.0e9
+    if dx != 0.0 { ddx = abs(1.0 / dx) }
+    if dy != 0.0 { ddy = abs(1.0 / dy) }
+    var stepx = 1
+    var stepy = 1
+    var sdx = (float(mx) + 1.0 - ox) * ddx
+    var sdy = (float(my) + 1.0 - oy) * ddy
+    if dx < 0.0 { stepx = -1; sdx = (ox - float(mx)) * ddx }
+    if dy < 0.0 { stepy = -1; sdy = (oy - float(my)) * ddy }
+    var steps = 0
+    while steps < 40 {
+        var side = 0
+        if sdx < sdy { sdx += ddx; mx += stepx } else { sdy += ddy; my += stepy; side = 1 }
+        if mx < 0 or my < 0 or mx >= WF_N or my >= WF_N { break }
+        let t = wf_grid[my * WF_N + mx]
+        if t > 0 {
+            wf_tile = t
+            wf_side = side
+            var d = sdx - ddx
+            var hit = oy + d * dy
+            if side == 1 { d = sdy - ddy; hit = ox + d * dx }
+            wf_u = hit - floor(hit)
+            return d
+        }
+        steps += 1
+    }
+    return 40.0
+}
+
+fn wf_clear_shot(ax: float, ay: float, bx: float, by: float) -> bool {
+    let dx = bx - ax
+    let dy = by - ay
+    let dist = sqrt(dx * dx + dy * dy)
+    return wf_cast(ax, ay, dx / dist, dy / dist) >= dist
+}
+
+// ---------------------------------------------------------------- game logic
+
+fn wf_shoot() {
+    if wf_fire_cool > 0.0 or wf_ammo <= 0 or wf_over { return }
+    wf_fire_cool = 0.28
+    wf_flash = 0.07
+    wf_ammo -= 1
+    let dx = cos(wf_a)
+    let dy = sin(wf_a)
+    let wall = wf_cast(wf_px, wf_py, dx, dy)
+    var best: Enemy? = nil
+    var best_d = 999.0
+    for e in wf_enemies {
+        if e.hp <= 0 { continue }
+        let rx = e.x - wf_px
+        let ry = e.y - wf_py
+        let depth = rx * dx + ry * dy
+        let side = abs(-rx * dy + ry * dx)
+        if depth > 0.2 and depth < wall and side < 0.3 and depth < best_d {
+            best = e
+            best_d = depth
+        }
+    }
+    if let e = best {
+        e.hp -= 1
+        e.hurt = 0.15
+        e.seen = true
+        if e.hp <= 0 { wf_kills += 1 }
+    }
+}
+
+fn wf_enemy_step(e: Enemy, dt: float) {
+    e.hurt -= dt
+    let rx = wf_px - e.x
+    let ry = wf_py - e.y
+    let dist = sqrt(rx * rx + ry * ry)
+    if dist < 9.0 and wf_clear_shot(e.x, e.y, wf_px, wf_py) { e.seen = true }
+    if not e.seen { return }
+    if dist > 1.1 {
+        let sp = 1.3 * dt
+        let nx = e.x + rx / dist * sp
+        let ny = e.y + ry / dist * sp
+        if not wf_blocked(nx, e.y) { e.x = nx }
+        if not wf_blocked(e.x, ny) { e.y = ny }
+    }
+    e.cool -= dt
+    if e.cool <= 0.0 and dist < 8.0 and wf_clear_shot(e.x, e.y, wf_px, wf_py) {
+        e.cool = 1.0 + rand_float()
+        if rand_float() < 0.45 or dist < 1.3 {
+            wf_hp -= 4 + rand_int(0, 5)
+            wf_pain = 0.2
+        }
+    }
+}
+
+fn wf_step() {
+    if ui_key_down("r") { wf_reset() }
+    if wf_over { return }
+    let dt = 0.03
+    let (mdx, _) = ui_mouse_delta()
+    wf_a += float(mdx) * 0.0025
+    if ui_key_down("left") { wf_a -= 2.2 * dt }
+    if ui_key_down("right") { wf_a += 2.2 * dt }
+    var fwd = 0.0
+    var side = 0.0
+    if ui_key_down("w") { fwd += 1.0 }
+    if ui_key_down("s") { fwd -= 1.0 }
+    if ui_key_down("d") { side += 1.0 }
+    if ui_key_down("a") { side -= 1.0 }
+    let sp = 3.2 * dt
+    let mx = (cos(wf_a) * fwd - sin(wf_a) * side) * sp
+    let my = (sin(wf_a) * fwd + cos(wf_a) * side) * sp
+    if not wf_blocked(wf_px + mx, wf_py) { wf_px += mx }
+    if not wf_blocked(wf_px, wf_py + my) { wf_py += my }
+    wf_fire_cool -= dt
+    wf_flash -= dt
+    wf_pain -= dt
+    if ui_mouse_held(0) or ui_key_down("space") { wf_shoot() }
+    for e in wf_enemies {
+        if e.hp > 0 { wf_enemy_step(e, dt) }
+    }
+    if wf_hp <= 0 { wf_hp = 0; wf_over = true }
+    if wf_kills == wf_enemies.len() { wf_over = true; wf_won = true }
+}
+
+// ---------------------------------------------------------------- drawing
+
+fn wf_pack(r: int, g: int, b: int) -> int {
+    return (clamp(r, 0, 255) << 16) | (clamp(g, 0, 255) << 8) | clamp(b, 0, 255)
+}
+
+// the colour of one point of a wall: type 1 is red brick, type 2 is blue stone
+fn wf_wall_color(tile: int, u: float, v: float, light: float) -> int {
+    var r = 0
+    var g = 0
+    var b = 0
+    if tile == 1 {
+        let row = int(v * 8.0)
+        let off = float(row % 2) * 0.5
+        let bu = u * 4.0 + off
+        let fu = bu - floor(bu)
+        let fv = v * 8.0 - floor(v * 8.0)
+        if fu < 0.07 or fv < 0.12 {
+            r = 120; g = 112; b = 104
+        } else {
+            let n = ((int(bu) * 7 + row * 13) % 5) * 6
+            r = 150 + n; g = 60 + n / 2; b = 48
+        }
+    } else {
+        let gx = int(u * 4.0)
+        let gy = int(v * 4.0)
+        let fu = u * 4.0 - floor(u * 4.0)
+        let fv = v * 4.0 - floor(v * 4.0)
+        if fu < 0.06 or fv < 0.06 {
+            r = 30; g = 40; b = 70
+        } else {
+            let n = ((gx * 5 + gy * 3) % 4) * 8
+            r = 60 + n; g = 90 + n; b = 160 + n
+        }
+    }
+    return wf_pack(int(float(r) * light), int(float(g) * light), int(float(b) * light))
+}
+
+// a soldier, drawn from u, v in 0..1; -1 means "see through"
+fn wf_soldier(u: float, v: float, hurt: bool) -> int {
+    var col = -1
+    let hx = u - 0.5
+    let hy = v - 0.17
+    if hx * hx + hy * hy < 0.012 { col = wf_pack(230, 190, 150) }
+    if v > 0.06 and v < 0.14 and abs(hx) < 0.13 and hy < 0.0 { col = wf_pack(90, 100, 70) }
+    if v > 0.30 and v < 0.70 and u > 0.28 and u < 0.72 { col = wf_pack(70, 110, 60) }
+    if v > 0.70 and v < 0.97 and ((u > 0.30 and u < 0.48) or (u > 0.52 and u < 0.70)) { col = wf_pack(50, 50, 60) }
+    if v > 0.42 and v < 0.49 and u > 0.60 and u < 0.88 { col = wf_pack(20, 20, 20) }
+    if v > 0.30 and v < 0.62 and (u < 0.28 and u > 0.20) { col = wf_pack(70, 110, 60) }
+    if hurt and col >= 0 { col = wf_pack(255, 60, 60) }
+    return col
+}
+
+fn wf_render() {
+    if wf_buf.len() != WF_W * WF_H {
+        wf_buf = array_make::<int>(WF_W * WF_H)
+        wf_zbuf = array_make::<float>(WF_W)
+    }
+    let dx = cos(wf_a)
+    let dy = sin(wf_a)
+    let plx = -dy * 0.66
+    let ply = dx * 0.66
+    let half = WF_H / 2
+    for x in 0..WF_W {
+        let cam = float(x) / float(WF_W) * 2.0 - 1.0
+        let d = wf_cast(wf_px, wf_py, dx + plx * cam, dy + ply * cam)
+        wf_zbuf[x] = d
+        var lh = WF_H * 2
+        if d > 0.01 { lh = int(float(WF_H) / d) }
+        let top = half - lh / 2
+        var light = 1.0 / (1.0 + d * d * 0.03)
+        if wf_side == 1 { light *= 0.72 }
+        let tile = wf_tile
+        let u = wf_u
+        for y in 0..WF_H {
+            var col = 0
+            if y < top {
+                let k = 30 + y * 40 / half
+                col = wf_pack(k, k, k + 8)
+            } else if y >= top + lh {
+                let k = 40 + (y - half) * 70 / half
+                col = wf_pack(k, k - 6, k - 14)
+            } else {
+                col = wf_wall_color(tile, u, float(y - top) / float(lh), light)
+            }
+            wf_buf[y * WF_W + x] = col
+        }
+    }
+    // sprites, far to near
+    var order: [Enemy] = []
+    for e in wf_enemies {
+        if e.hp > 0 { order.push(e) }
+    }
+    order.sort_by(|a, b| {
+        let da = (a.x - wf_px) * (a.x - wf_px) + (a.y - wf_py) * (a.y - wf_py)
+        let db = (b.x - wf_px) * (b.x - wf_px) + (b.y - wf_py) * (b.y - wf_py)
+        if da < db { return 1 }
+        if da > db { return -1 }
+        return 0
+    })
+    let inv = 1.0 / (plx * dy - dx * ply)
+    for e in order {
+        let rx = e.x - wf_px
+        let ry = e.y - wf_py
+        let tx = inv * (dy * rx - dx * ry)
+        let ty = inv * (-ply * rx + plx * ry)
+        if ty < 0.25 { continue }
+        let size = int(float(WF_H) / ty)
+        let sx = int(float(WF_W) / 2.0 * (1.0 + tx / ty))
+        let left = sx - size / 2
+        let top = half - size / 2
+        let light = 1.0 / (1.0 + ty * ty * 0.03)
+        for cx in max(left, 0)..min(left + size, WF_W) {
+            if ty >= wf_zbuf[cx] { continue }
+            let u = float(cx - left) / float(size)
+            for cy in max(top, 0)..min(top + size, WF_H) {
+                let v = float(cy - top) / float(size)
+                let col = wf_soldier(u, v, e.hurt > 0.0)
+                if col >= 0 {
+                    let r = int(float((col >> 16) & 255) * light)
+                    let g = int(float((col >> 8) & 255) * light)
+                    let b = int(float(col & 255) * light)
+                    wf_buf[cy * WF_W + cx] = wf_pack(r, g, b)
+                }
+            }
+        }
+    }
+}
+
+fn wf_draw(c: Canvas) {
+    wf_render()
+    let w = WF_W * WF_S
+    let h = WF_H * WF_S
+    c.pixels(0, 0, w, h, wf_buf, WF_W, WF_H)
+    if wf_pain > 0.0 { c.rect(0, 0, w, h, rgba(200, 0, 0, 0.35)) }
+
+    // the gun
+    let gx = w / 2
+    var kick = 0
+    if wf_fire_cool > 0.1 { kick = 10 }
+    if wf_flash > 0.0 {
+        c.circle(gx, h - 170 + kick, 34, rgb(255, 220, 90))
+        c.circle(gx, h - 170 + kick, 18, rgb(255, 255, 220))
+    }
+    c.rect(gx - 14, h - 150 + kick, 28, 90, rgb(60, 62, 70))
+    c.rect(gx - 8, h - 160 + kick, 16, 20, rgb(40, 42, 48))
+    c.rect(gx - 40, h - 70 + kick, 80, 70, rgb(214, 170, 130))
+    c.rect(gx - 50, h - 40 + kick, 100, 40, rgb(70, 110, 60))
+    // crosshair
+    c.rect(gx - 8, h / 2 - 1, 16, 2, WHITE)
+    c.rect(gx - 1, h / 2 - 8, 2, 16, WHITE)
+
+    // status bar
+    c.rect(0, h - 36, w, 36, rgba(10, 10, 20, 0.75))
+    var hp_col = rgb(80, 220, 100)
+    if wf_hp < 35 { hp_col = rgb(240, 70, 60) }
+    c.text(16, h - 30, "HEALTH {wf_hp}", hp_col, 20, true)
+    c.text(w / 2 - 50, h - 30, "AMMO {wf_ammo}", rgb(250, 220, 90), 20, true)
+    c.text(w - 190, h - 30, "KILLS {wf_kills}/{wf_enemies.len()}", WHITE, 20, true)
+
+    // mini map
+    let t = 7
+    c.rect(w - WF_N * t - 12, 8, WF_N * t + 4, WF_N * t + 4, rgba(0, 0, 0, 0.6))
+    for y in 0..WF_N {
+        for x in 0..WF_N {
+            let tile = wf_grid[y * WF_N + x]
+            if tile > 0 {
+                var col = rgb(160, 70, 50)
+                if tile == 2 { col = rgb(80, 110, 190) }
+                c.rect(w - WF_N * t - 10 + x * t, 10 + y * t, t, t, col)
+            }
+        }
+    }
+    for e in wf_enemies {
+        if e.hp > 0 { c.circle(w - WF_N * t - 10 + int(e.x * float(t)), 10 + int(e.y * float(t)), 2, rgb(255, 60, 60)) }
+    }
+    let mx = w - WF_N * t - 10 + int(wf_px * float(t))
+    let my = 10 + int(wf_py * float(t))
+    c.circle(mx, my, 2, WHITE)
+    c.line(mx, my, mx + int(cos(wf_a) * 8.0), my + int(sin(wf_a) * 8.0), 1, WHITE)
+
+    if wf_over {
+        c.rect(0, 0, w, h, rgba(0, 0, 0, 0.6))
+        if wf_won {
+            c.text(w / 2 - 170, h / 2 - 40, "LEVEL CLEARED", rgb(250, 220, 90), 48, true)
+        } else {
+            c.text(w / 2 - 120, h / 2 - 40, "YOU DIED", rgb(240, 70, 60), 48, true)
+        }
+        c.text(w / 2 - 90, h / 2 + 24, "Press R to play again", WHITE, 18)
+    }
+}
+
+fn main() {
+    wf_reset()
+    ui_mouse_capture(true)
+    ui_every(30, || { wf_step() })
+    ui_shortcut("esc", || { ui_quit() })
+    ui_run("ATF Wolfenstein", WF_W * WF_S, WF_H * WF_S, || canvas(|c| { wf_draw(c) }).size(WF_W * WF_S, WF_H * WF_S))
+}

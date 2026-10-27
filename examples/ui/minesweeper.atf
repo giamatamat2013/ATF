@@ -1,0 +1,188 @@
+// minesweeper.atf - the classic mine field.
+// Shows: a grid of cells built from data, flood fill, a flag mode toggle, a timer with ui_every.
+// Run:   atf run examples/ui/minesweeper.atf      (click to dig; switch to Flag mode to mark mines)
+
+import "std/ui"
+
+const MS_W = 9
+const MS_H = 9
+const MS_MINES = 10
+
+struct Cell { mine: bool = false, open: bool = false, flag: bool = false, near: int = 0 }
+
+struct Game {
+    cells: [Cell] = []
+    started: bool = false
+    over: bool = false
+    won: bool = false
+    flag_mode: bool = false
+    seconds: int = 0
+    ticks: int = 0
+}
+
+fn ms_new_game(g: Game) {
+    g.cells = []
+    for i in 0..(MS_W * MS_H) { g.cells.push(Cell()) }
+    g.started = false
+    g.over = false
+    g.won = false
+    g.seconds = 0
+    g.ticks = 0
+}
+
+fn ms_neighbors(i: int) -> [int] {
+    let x = i % MS_W
+    let y = i / MS_W
+    var out: [int] = []
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let nx = x + dx
+            let ny = y + dy
+            if (dx != 0 or dy != 0) and nx >= 0 and nx < MS_W and ny >= 0 and ny < MS_H {
+                out.push(ny * MS_W + nx)
+            }
+        }
+    }
+    return out
+}
+
+// mines are placed after the first click, so the first click is always safe
+fn ms_place_mines(g: Game, safe: int) {
+    var placed = 0
+    while placed < MS_MINES {
+        let i = rand_int(0, MS_W * MS_H - 1)
+        if i != safe and not g.cells[i].mine and not (i in ms_neighbors(safe)) {
+            g.cells[i].mine = true
+            placed += 1
+        }
+    }
+    for i in 0..(MS_W * MS_H) {
+        var n = 0
+        for j in ms_neighbors(i) {
+            if g.cells[j].mine { n += 1 }
+        }
+        g.cells[i].near = n
+    }
+}
+
+fn ms_flood(g: Game, start: int) {
+    var todo = [start]
+    while todo.len() > 0 {
+        let i = todo.pop()
+        let c = g.cells[i]
+        if c.open or c.flag { continue }
+        c.open = true
+        if c.near == 0 {
+            for j in ms_neighbors(i) { todo.push(j) }
+        }
+    }
+}
+
+fn ms_check_win(g: Game) {
+    for c in g.cells {
+        if not c.mine and not c.open { return }
+    }
+    g.over = true
+    g.won = true
+}
+
+fn ms_click(g: Game, i: int) {
+    if g.over { return }
+    let c = g.cells[i]
+    if g.flag_mode {
+        if not c.open { c.flag = not c.flag }
+        return
+    }
+    if c.flag or c.open { return }
+    if not g.started {
+        g.started = true
+        ms_place_mines(g, i)
+    }
+    if c.mine {
+        g.over = true
+        for x in g.cells {
+            if x.mine { x.open = true }
+        }
+        return
+    }
+    ms_flood(g, i)
+    ms_check_win(g)
+}
+
+fn ms_flags(g: Game) -> int {
+    var n = 0
+    for c in g.cells {
+        if c.flag { n += 1 }
+    }
+    return n
+}
+
+fn ms_color(n: int) -> int {
+    return match n {
+        1 => hex("#2563eb")
+        2 => hex("#16a34a")
+        3 => hex("#dc2626")
+        4 => hex("#1e3a8a")
+        5 => hex("#991b1b")
+        _ => hex("#0f766e")
+    }
+}
+
+let MS_CLOSED = style().bg(hex("#cbd5e1")).border(2, hex("#f8fafc")).radius(2).hover(style().bg(hex("#e2e8f0")))
+let MS_OPEN = style().bg(hex("#e5e7eb")).border(1, hex("#cbd5e1")).radius(0)
+
+fn ms_cell(g: Game, i: int) -> Node {
+    let c = g.cells[i]
+    var label = ""
+    var st = MS_CLOSED
+    var col = BLACK
+    if c.open {
+        st = MS_OPEN
+        if c.mine {
+            label = "💣"
+            st = MS_OPEN.bg(hex("#fecaca"))
+        } else if c.near > 0 {
+            label = str(c.near)
+            col = ms_color(c.near)
+        }
+    } else if c.flag {
+        label = "🚩"
+    }
+    return button(label, || { ms_click(g, i) }).style(st).color(col).bold().font_size(18).size(40, 40).padding(0)
+}
+
+fn ms_view(g: Game) -> Node {
+    var face = "🙂"
+    if g.won { face = "😎" } else if g.over { face = "😵" }
+    var cells: [Node] = []
+    for i in 0..(MS_W * MS_H) { cells.push(ms_cell(g, i)) }
+    var mode = "Dig"
+    if g.flag_mode { mode = "Flag" }
+    let left = MS_MINES - ms_flags(g)
+    return column([
+        row([
+            text("{left:03}").font_size(24).bold().color(hex("#dc2626")),
+            spacer(),
+            button(face, || { ms_new_game(g) }).font_size(22).size(48, 40),
+            spacer(),
+            text("{g.seconds:03}").font_size(24).bold().color(hex("#dc2626")),
+        ]).padding(8).bg(hex("#f1f5f9")).radius(6),
+        grid(MS_W, cells).gap(0).align(Align.Center),
+        row([
+            toggle(g.flag_mode, |b| { g.flag_mode = b }),
+            text("Mode: {mode}").color(hex("slate")),
+        ]).gap(8),
+    ]).gap(10).padding(14)
+}
+
+fn main() {
+    let g = Game()
+    ms_new_game(g)
+    ui_every(100, || {
+        if g.started and not g.over {
+            g.ticks += 1
+            if g.ticks % 10 == 0 { g.seconds += 1 }
+        }
+    })
+    ui_run("Minesweeper", 400, 470, || ms_view(g))
+}

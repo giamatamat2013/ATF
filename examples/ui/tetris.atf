@@ -1,0 +1,270 @@
+// tetris.atf - Tetris with the modern rules: 7-bag randomizer, ghost piece, wall kicks, levels and score.
+// Shows: a game written as plain data + one canvas, a timer with ui_every, ui_shortcut for the keys, tuples.
+// Run:   atf run examples/ui/tetris.atf
+// Keys:  left/right move, up or X rotate, Z rotate back, down soft drop, Space hard drop, P pause, R restart.
+
+import "std/ui"
+
+const TT_COLS = 10
+const TT_ROWS = 20
+const TT_CELL = 30
+
+// each piece as four (x, y) offsets from its pivot: I O T S Z J L
+let TT_SHAPES = [
+    [(-1, 0), (0, 0), (1, 0), (2, 0)],
+    [(0, 0), (1, 0), (0, 1), (1, 1)],
+    [(-1, 0), (0, 0), (1, 0), (0, -1)],
+    [(-1, 0), (0, 0), (0, -1), (1, -1)],
+    [(-1, -1), (0, -1), (0, 0), (1, 0)],
+    [(-1, -1), (-1, 0), (0, 0), (1, 0)],
+    [(1, -1), (-1, 0), (0, 0), (1, 0)],
+]
+let TT_COLORS = ["#000000", "#06b6d4", "#eab308", "#a855f7", "#22c55e", "#ef4444", "#3b82f6", "#f97316"]
+
+struct Tetris {
+    board: [int] = []     // TT_COLS * TT_ROWS, 0 = empty, otherwise piece number + 1
+    kind: int = 0
+    rot: int = 0
+    px: int = 4
+    py: int = 1
+    bag: [int] = []
+    next: int = 0
+    score: int = 0
+    lines: int = 0
+    level: int = 1
+    over: bool = false
+    paused: bool = false
+    acc: int = 0          // milliseconds since the piece last fell
+}
+
+fn tt_take(t: Tetris) -> int {
+    if t.bag.len() == 0 {
+        t.bag = [0, 1, 2, 3, 4, 5, 6]
+        shuffle(t.bag)
+    }
+    return t.bag.pop()
+}
+
+fn tt_cells(kind: int, rot: int, x: int, y: int) -> [(int, int)] {
+    var out: [(int, int)] = []
+    for (cx, cy) in TT_SHAPES[kind] {
+        var a = cx
+        var b = cy
+        if kind != 1 {
+            for _ in 0..(rot % 4) {
+                let na = -b
+                b = a
+                a = na
+            }
+        }
+        out.push((x + a, y + b))
+    }
+    return out
+}
+
+fn tt_fits(t: Tetris, kind: int, rot: int, x: int, y: int) -> bool {
+    for (cx, cy) in tt_cells(kind, rot, x, y) {
+        if cx < 0 or cx >= TT_COLS or cy >= TT_ROWS { return false }
+        if cy >= 0 and t.board[cy * TT_COLS + cx] != 0 { return false }
+    }
+    return true
+}
+
+fn tt_spawn(t: Tetris) {
+    t.kind = t.next
+    t.next = tt_take(t)
+    t.rot = 0
+    t.px = 4
+    t.py = 1
+    t.acc = 0
+    if not tt_fits(t, t.kind, t.rot, t.px, t.py) { t.over = true }
+}
+
+fn tt_reset(t: Tetris) {
+    t.board = array_make::<int>(TT_COLS * TT_ROWS)
+    t.bag = []
+    t.score = 0
+    t.lines = 0
+    t.level = 1
+    t.over = false
+    t.paused = false
+    t.next = tt_take(t)
+    tt_spawn(t)
+}
+
+fn tt_clear_lines(t: Tetris) {
+    var cleared = 0
+    var y = TT_ROWS - 1
+    while y >= 0 {
+        var full = true
+        for x in 0..TT_COLS {
+            if t.board[y * TT_COLS + x] == 0 { full = false }
+        }
+        if full {
+            // everything above falls one row
+            var r = y
+            while r > 0 {
+                for x in 0..TT_COLS { t.board[r * TT_COLS + x] = t.board[(r - 1) * TT_COLS + x] }
+                r -= 1
+            }
+            for x in 0..TT_COLS { t.board[x] = 0 }
+            cleared += 1
+        } else {
+            y -= 1
+        }
+    }
+    if cleared > 0 {
+        let points = [0, 100, 300, 500, 800]
+        t.score += points[cleared] * t.level
+        t.lines += cleared
+        t.level = 1 + t.lines / 10
+    }
+}
+
+fn tt_lock(t: Tetris) {
+    for (cx, cy) in tt_cells(t.kind, t.rot, t.px, t.py) {
+        if cy >= 0 { t.board[cy * TT_COLS + cx] = t.kind + 1 }
+    }
+    tt_clear_lines(t)
+    tt_spawn(t)
+}
+
+fn tt_move(t: Tetris, dx: int) {
+    if t.over or t.paused { return }
+    if tt_fits(t, t.kind, t.rot, t.px + dx, t.py) { t.px += dx }
+}
+
+fn tt_rotate(t: Tetris, dir: int) {
+    if t.over or t.paused { return }
+    let nr = (t.rot + dir + 4) % 4
+    // wall kicks: try shifting sideways if the rotated piece does not fit
+    for kick in [0, -1, 1, -2, 2] {
+        if tt_fits(t, t.kind, nr, t.px + kick, t.py) {
+            t.rot = nr
+            t.px += kick
+            return
+        }
+    }
+}
+
+fn tt_down(t: Tetris, by_player: bool) {
+    if t.over or t.paused { return }
+    if tt_fits(t, t.kind, t.rot, t.px, t.py + 1) {
+        t.py += 1
+        if by_player { t.score += 1 }
+        t.acc = 0
+    } else {
+        tt_lock(t)
+    }
+}
+
+fn tt_ghost_y(t: Tetris) -> int {
+    var y = t.py
+    while tt_fits(t, t.kind, t.rot, t.px, y + 1) { y += 1 }
+    return y
+}
+
+fn tt_drop(t: Tetris) {
+    if t.over or t.paused { return }
+    let y = tt_ghost_y(t)
+    t.score += (y - t.py) * 2
+    t.py = y
+    tt_lock(t)
+}
+
+fn tt_tick(t: Tetris, ms: int) {
+    if t.over or t.paused { return }
+    t.acc += ms
+    let interval = max(80, 800 - (t.level - 1) * 70)
+    if t.acc >= interval { tt_down(t, false) }
+}
+
+fn tt_block(c: Canvas, x: int, y: int, size: int, code: str, alpha: float) {
+    let col = hex(code)
+    if alpha < 1.0 {
+        c.rect(x + 1, y + 1, size - 2, size - 2, fade(col, alpha))
+        return
+    }
+    c.rect(x, y, size, size, darken(col, 0.35))
+    c.rect(x + 2, y + 2, size - 4, size - 4, col)
+    c.rect(x + 2, y + 2, size - 4, 4, lighten(col, 0.4))
+    c.rect(x + 2, y + 2, 4, size - 4, lighten(col, 0.25))
+}
+
+fn tt_draw(c: Canvas, t: Tetris) {
+    let w = TT_COLS * TT_CELL
+    let h = TT_ROWS * TT_CELL
+    c.clear(hex("#0b1020"))
+    for y in 0..TT_ROWS {
+        for x in 0..TT_COLS {
+            c.rect(x * TT_CELL, y * TT_CELL, TT_CELL, TT_CELL, hex("#0f172a"))
+            c.rect(x * TT_CELL + 1, y * TT_CELL + 1, TT_CELL - 2, TT_CELL - 2, hex("#111a30"))
+            let v = t.board[y * TT_COLS + x]
+            if v != 0 { tt_block(c, x * TT_CELL, y * TT_CELL, TT_CELL, TT_COLORS[v], 1.0) }
+        }
+    }
+    if not t.over {
+        let gy = tt_ghost_y(t)
+        for (cx, cy) in tt_cells(t.kind, t.rot, t.px, gy) {
+            tt_block(c, cx * TT_CELL, cy * TT_CELL, TT_CELL, TT_COLORS[t.kind + 1], 0.25)
+        }
+        for (cx, cy) in tt_cells(t.kind, t.rot, t.px, t.py) {
+            if cy >= 0 { tt_block(c, cx * TT_CELL, cy * TT_CELL, TT_CELL, TT_COLORS[t.kind + 1], 1.0) }
+        }
+    }
+    if t.over or t.paused {
+        c.rect(0, 0, w, h, rgba(0, 0, 0, 0.6))
+        if t.over {
+            c.text(w / 2 - 80, h / 2 - 30, "GAME OVER", WHITE, 30, true)
+            c.text(w / 2 - 70, h / 2 + 14, "Press R to restart", hex("#cbd5e1"), 16)
+        } else {
+            c.text(w / 2 - 50, h / 2 - 16, "PAUSED", WHITE, 30, true)
+        }
+    }
+}
+
+fn tt_preview(c: Canvas, kind: int) {
+    c.clear(hex("#0f172a"))
+    for (cx, cy) in tt_cells(kind, 0, 1, 1) {
+        tt_block(c, 12 + cx * 24, 12 + cy * 24, 24, TT_COLORS[kind + 1], 1.0)
+    }
+}
+
+fn tt_stat(label: str, value: str) -> Node {
+    return column([
+        text(label).font_size(12).color(hex("#94a3b8")),
+        text(value).font_size(26).bold().color(WHITE),
+    ]).gap(0)
+}
+
+fn tt_view(t: Tetris) -> Node {
+    return row([
+        canvas(|c| { tt_draw(c, t) }).size(TT_COLS * TT_CELL, TT_ROWS * TT_CELL).radius(6).clip(),
+        column([
+            text("TETRIS").font_size(28).bold().color(hex("#38bdf8")),
+            text("NEXT").font_size(12).color(hex("#94a3b8")),
+            canvas(|c| { tt_preview(c, t.next) }).size(120, 72).radius(6).clip(),
+            tt_stat("SCORE", "{t.score}"),
+            tt_stat("LINES", "{t.lines}"),
+            tt_stat("LEVEL", "{t.level}"),
+            spacer(),
+            text("← → move\n↑ rotate\n↓ soft drop\nSpace hard drop\nP pause   R restart").font_size(12).color(hex("#64748b")),
+        ]).gap(10).width(150),
+    ]).gap(16).padding(16).bg(hex("#020617")).color(WHITE)
+}
+
+fn main() {
+    let t = Tetris()
+    tt_reset(t)
+    ui_every(50, || { tt_tick(t, 50) })
+    ui_shortcut("left", || { tt_move(t, -1) })
+    ui_shortcut("right", || { tt_move(t, 1) })
+    ui_shortcut("up", || { tt_rotate(t, 1) })
+    ui_shortcut("x", || { tt_rotate(t, 1) })
+    ui_shortcut("z", || { tt_rotate(t, -1) })
+    ui_shortcut("down", || { tt_down(t, true) })
+    ui_shortcut("space", || { tt_drop(t) })
+    ui_shortcut("p", || { if not t.over { t.paused = not t.paused } })
+    ui_shortcut("r", || { tt_reset(t) })
+    ui_run("Tetris", TT_COLS * TT_CELL + 210, TT_ROWS * TT_CELL + 32, || tt_view(t))
+}

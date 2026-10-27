@@ -1,0 +1,101 @@
+// paint.atf - a small drawing program in the spirit of MS Paint.
+// Shows: canvas with on_pointer, strokes kept as data, a color palette, brush size slider, undo and clear.
+// Run:   atf run examples/ui/paint.atf      (draw with the mouse, Ctrl+Z undoes the last stroke)
+
+import "std/ui"
+
+struct Stroke { color: int, width: int, xs: [int], ys: [int] }
+
+struct Paint {
+    strokes: [Stroke] = []
+    color: int = 0
+    width: int = 6
+    eraser: bool = false
+    drawing: bool = false
+    last_x: int = -1
+    last_y: int = -1
+}
+
+const PT_W = 520
+const PT_H = 360
+let PT_PAPER = WHITE
+
+let PT_COLORS = ["#111827", "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#a855f7", "#ec4899", "#92400e"]
+
+fn pt_pen(p: Paint) -> int {
+    if p.eraser { return PT_PAPER }
+    return p.color
+}
+
+fn pt_pointer(p: Paint, x: int, y: int) {
+    // on_pointer fires on press and again for every move with the button down; a jump means a new stroke
+    if p.strokes.len() == 0 or not p.drawing {
+        p.strokes.push(Stroke{ color: pt_pen(p), width: p.width, xs: [x], ys: [y] })
+        p.drawing = true
+    } else {
+        let s = p.strokes.last()
+        s.xs.push(x)
+        s.ys.push(y)
+    }
+    p.last_x = x
+    p.last_y = y
+}
+
+fn pt_undo(p: Paint) {
+    if p.strokes.len() > 0 { p.strokes.pop() }
+}
+
+fn pt_draw(c: Canvas, p: Paint) {
+    c.clear(PT_PAPER)
+    for s in p.strokes {
+        if s.xs.len() == 1 {
+            c.circle(s.xs[0], s.ys[0], s.width / 2, s.color)
+        }
+        for i in 1..s.xs.len() {
+            c.line(s.xs[i - 1], s.ys[i - 1], s.xs[i], s.ys[i], s.width, s.color)
+        }
+    }
+}
+
+fn pt_swatch(p: Paint, code: str) -> Node {
+    let col = hex(code)
+    var b = box().size(28, 28).bg(col).radius(14).border(2, TRANSPARENT).cursor(Cursor.Pointer)
+    if p.color == col and not p.eraser { b = b.border(2, hex("#4f46e5")) }
+    return b.on_click(|| { p.color = col; p.eraser = false })
+}
+
+fn pt_view(p: Paint) -> Node {
+    var swatches: [Node] = []
+    for code in PT_COLORS { swatches.push(pt_swatch(p, code)) }
+    var eraser_style = style()
+    if p.eraser { eraser_style = style().bg(hex("#e0e7ff")) }
+    return column([
+        column([
+            row(swatches).gap(6),
+            row([
+                button("Eraser", || { p.eraser = not p.eraser }).style(eraser_style),
+                text("Size {p.width}").color(hex("slate")),
+                slider(float(p.width) / 40.0, |f| { p.width = max(1, int(f * 40.0)) }).width(160),
+                spacer(),
+                button("Undo", || { pt_undo(p) }),
+                button("Clear", || { p.strokes = [] }),
+            ]).gap(10),
+        ]).gap(8).padding(8).bg(hex("#f1f5f9")).radius(8),
+        canvas(|c| { pt_draw(c, p) }).size(PT_W, PT_H).border(1, hex("#cbd5e1")).on_pointer(|x, y| { pt_pointer(p, x, y) }),
+    ]).gap(10).padding(12)
+}
+
+fn main() {
+    let p = Paint()
+    p.color = hex("#111827")
+    ui_shortcut("ctrl+z", || { pt_undo(p) })
+    // the button is up again when no pointer event arrived since the last tick
+    var seen_x = -2
+    var seen_y = -2
+    ui_every(60, || {
+        if p.last_x == seen_x and p.last_y == seen_y { p.drawing = false }
+        seen_x = p.last_x
+        seen_y = p.last_y
+    })
+    ui_run("Paint", PT_W + 24, PT_H + 130, || pt_view(p))
+}

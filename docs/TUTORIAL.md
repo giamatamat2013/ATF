@@ -2850,7 +2850,9 @@ dark 900 false
 A whole program that uses all of this, a notes editor with a menu bar, a search box, a text area, shortcuts, file
 dialogs, a dark theme and automatic saving, is in `examples/ui/notes.atf`.
 
-The complete reference is in [STDLIB.md](STDLIB.md#stdui). Larger programs are in `examples/ui/`: `counter.atf`, `todo.atf` (a
+The complete reference is in [STDLIB.md](STDLIB.md#stdui). Look-alikes of familiar programs are there too: `calculator.atf`,
+`minesweeper.atf`, `snake.atf`, `paint.atf`, `tetris.atf`, `spreadsheet.atf` (a formula engine with cell references and
+`SUM(A1:A5)`) and `wolfenstein.atf` (a 3D shooter with a ray caster, enemies and a mini map). Larger programs are in `examples/ui/`: `counter.atf`, `todo.atf` (a
 task list with a text box, check boxes and filters) and `dashboard.atf` (a sidebar, gradient cards, a bar chart, settings and
 a light and dark theme). `minecraft.atf` is a small first-person block world (a ray caster drawn on a `canvas`, walking, jumping,
 breaking and placing blocks).
