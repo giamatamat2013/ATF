@@ -2310,6 +2310,56 @@ fn main() {
 1 0 8
 ```
 
+### תוכנית שורת פקודה שלמה
+
+ארבעה מודולים נותנים לתוכנית את מה שמתכנתי Python מכירים: `std/args` (כמו `argparse`), `std/log` (כמו `logging`),
+`std/text` (כמו `textwrap` ו-`string.Template`) ו-`std/math` (כמו `math` ו-`statistics`).
+בתוכנית אמיתית מעבירים את `args` של `main` אל `parse_or_exit`; בדוגמה כאן מעבירים רשימה כדי שתרוץ בכל מקום.
+
+```atf
+import "std/args"
+import "std/log"
+import "std/text"
+import "std/math"
+
+fn main() {
+    let p = args_parser("stats", "Summarises numbers")
+    p.flag("verbose", "v", "explain what happens")
+    p.option("title", "t", "heading", "Report")
+    p.positional("numbers", "comma separated numbers")
+    let a = p.parse_or_exit(["-v", "--title=sales", "3,1,4,1,5"])   // בקוד אמיתי: p.parse_or_exit(args)
+
+    log_to_stdout(true)                       // כברירת מחדל שורות הלוג הולכות לשגיאה הסטנדרטית
+    if a.flag("verbose") { log_set_level(LOG_DEBUG) }
+    log_debug("parsing {a.get("numbers")}")
+
+    var nums: [float] = []
+    for part in a.get("numbers").split(",") { nums.push(part.to_float()) }
+    println(text_title(a.get("title")))
+    print(text_table([
+        ["mean", fmt_fixed(stats_mean(nums), 2)],
+        ["median", fmt_fixed(stats_median(nums), 2)],
+        ["max", fmt_fixed(nums.max(), 2)],
+    ]))
+    println(text_snake_case("MeanOfNumbers"), math_primes(20).len())
+}
+```
+```output
+DEBUG parsing 3,1,4,1,5
+Sales
+mean    2.80
+median  3.00
+max     5.00
+mean_of_numbers 8
+```
+
+`--help` מדפיס את ההסבר ש-`args_parser` בנה מההגדרות שלכם, וטעות (למשל אפשרות לא מוכרת) מדפיסה הודעה ויוצאת עם קוד 2.
+ב-`std/text` יש גם `text_wrap`, `text_template` (מקומות שמורים בצורת `${name}`), `text_distance` ל"האם התכוונת ל...?"
+והמרות בין סגנונות שמות; ב-`std/math` יש `math_is_prime`, `math_mod_pow`, `stats_stdev` ועוד. `std/algo` אוסף אלגוריתמים מ-C++ (`algo_lower_bound`, `algo_next_permutation`), מ-itertools של Python
+(`algo_combinations`, `algo_product`) ומ-JavaScript (`algo_group_by`, `algo_flatten`, `algo_union`). `std/random` מוסיף את התוספות של `random` מ-Python (`random_sample`, `random_weighted`,
+`random_gauss`, `random_uuid`) ו-`std/bits` את טריקי הביטים של C++ (`bits_rotl`, `bits_is_power_of_two`, `bits_to_str`).
+כל הפונקציות מופיעות ב-[STDLIB.md](STDLIB.md).
+
 ### מודולים משלכם
 
 תוכנית גדולה אפשר לפצל לכמה קבצים. `import "name"` טוען את הקובץ `name.atf` מאותה תיקייה (הנתיב יחסי לקובץ שמייבא).
@@ -2465,7 +2515,7 @@ true
 | דיאלוג | `dialog("Title", body, [buttons], on_close)`, או `modal(content, on_close)` לכרטיס משלכם |
 | הסבר בהצבעה | `.tooltip("text")` |
 | סמלים קטנים | `icon("save")`, `icon("search")`, ... (הרשימה ב-[STDLIB.md](STDLIB.md#stdui)) |
-| ציור | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, ועם `.on_pointer(\|x, y\| ..)` |
+| ציור | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, ועם `.on_pointer(\|x, y\| ..)`. `c.pixels(x, y, w, h, colors, pw, ph)` מציירת תמונה מתוך `[int]` של ערכי `0xRRGGBB`, מהר מספיק לרינדור בתוכנה. למשחקים: `ui_key_down("w")`, `ui_mouse_held(0)` (0 שמאלי, 1 ימני, 2 אמצעי), ומבט בעכבר עם `ui_mouse_capture(true)` + `ui_mouse_delta()` |
 | קיצורי מקלדת | `ui_shortcut("ctrl+s", save)` |
 | דיאלוגים סטנדרטיים | `message_box`, `confirm_box`, `open_file_dialog`, `save_file_dialog` |
 | הלוח (clipboard) | `clipboard_get()`, `clipboard_set(text)` |
@@ -2580,7 +2630,8 @@ dark 900 false
 
 כל הפונקציות מתוארות ב-[STDLIB.md](STDLIB.md#stdui). תוכניות גדולות יותר נמצאות ב-`examples/ui/`: `counter.atf`,
 `todo.atf` (רשימת משימות עם תיבת טקסט, תיבות סימון וסינון) ו-`dashboard.atf` (תפריט צד, כרטיסים עם מעברי צבע, גרף
-עמודות, הגדרות וערכת נושא בהירה וכהה).
+עמודות, הגדרות וערכת נושא בהירה וכהה). `minecraft.atf` הוא עולם קוביות קטן בגוף ראשון (מעקב קרניים שמצויר על `canvas`,
+הליכה, קפיצה, שבירה והצבה של קוביות).
 
 ### תרגיל 18.1
 

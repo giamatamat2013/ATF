@@ -1,0 +1,55 @@
+// tests for std/args
+import "std/args"
+
+fn make() -> ArgParser {
+    let p = args_parser("tool", "Copies files around")
+    p.flag("verbose", "v", "more output")
+    p.flag("quiet", "q", "less output")
+    p.option("output", "o", "where to write", "out.txt")
+    p.option("count", "n", "how many")
+    p.positional("input", "the input file")
+    p.positional("extra", "an optional second file", false)
+    return p
+}
+
+fn show(r: Result<ParsedArgs, str>) {
+    match r {
+        Result.Ok(a) => println("ok: input={a.get("input", "-")} extra={a.get("extra", "-")} output={a.get("output")} count={a.get_int("count", -1)} verbose={a.flag("verbose")} quiet={a.flag("quiet")} rest={a.rest} help={a.help_requested}")
+        Result.Err(e) => println("error: {e}")
+    }
+}
+
+fn main() {
+    let p = make()
+    print(p.help())
+    println(p.usage())
+
+    show(p.parse(["a.txt"]))
+    show(p.parse(["a.txt", "b.txt", "-v"]))
+    show(p.parse(["--verbose", "--output", "x.bin", "--count=5", "a.txt"]))
+    show(p.parse(["-vq", "-o", "y", "-n7", "a.txt"]))
+    show(p.parse(["-n", "-5", "a.txt"]))
+    show(p.parse(["a.txt", "--", "--not-a-flag"]))
+    show(p.parse(["--help"]))
+    show(p.parse(["a.txt", "-h"]))
+
+    show(p.parse([]))
+    show(p.parse(["a.txt", "b.txt", "c.txt"]))
+    show(p.parse(["--nope", "a.txt"]))
+    show(p.parse(["-x", "a.txt"]))
+    show(p.parse(["a.txt", "--count"]))
+    show(p.parse(["a.txt", "-o"]))
+    show(p.parse(["a.txt", "--verbose=1"]))
+
+    let q = args_parser("rest")
+    q.required_option("mode", "m", "the mode")
+    q.allow_extra()
+    show(q.parse(["x", "y"]))
+    show(q.parse(["--mode", "fast", "x", "y"]))
+    println(q.usage())
+
+    let a = p.parse(["a.txt", "-n", "abc"]).unwrap()
+    println(catch_panic(|| { a.get_int("count", 0) }))
+    let b = p.parse(["a.txt"]).unwrap()
+    println(b.get_float("count", 1.5), b.has("input"), b.has("count"), b.has("verbose"))
+}

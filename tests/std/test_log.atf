@@ -1,0 +1,48 @@
+// tests for std/log
+import "std/log"
+import "std/fs"
+
+fn main() {
+    log_to_stdout(true)
+    log_debug("hidden at the default level")
+    log_info("started")
+    log_warn("careful")
+    log_error("broken")
+
+    log_set_level(LOG_DEBUG)
+    log_debug("now visible")
+    log_set_prefix("[app] ")
+    log_info("with prefix")
+    log_set_prefix("")
+
+    log_set_level(LOG_ERROR)
+    log_warn("hidden")
+    log_error("still shown")
+    log_set_level(LOG_OFF)
+    log_error("nothing at all")
+
+    println(log_level_from_name("DEBUG") ?? -1, log_level_from_name("warning") ?? -1, log_level_from_name("nope") ?? -1)
+
+    let path = temp_dir() + "atf_test_log.txt"
+    delete_file(path)
+    log_set_level(LOG_INFO)
+    println(log_set_file(path))
+    log_info("to file")
+    log_debug("not to file")
+    log_error("also to file")
+    println(read_file(path) ?? "(no file)")
+    log_set_file("")
+    log_info("not to file anymore")
+    println((read_file(path) ?? "").lines().len())
+    delete_file(path)
+
+    // with timestamps the line starts with "YYYY-MM-DD HH:MM:SS " (the time itself changes, so only the shape is checked)
+    log_timestamps(true)
+    log_to_stdout(false)
+    log_set_file(path)
+    log_info("x")
+    log_set_file("")
+    let line = (read_file(path) ?? "").trim()
+    println(line.len(), line[4..5], line[10..11], line[13..14], line[19..])
+    delete_file(path)
+}

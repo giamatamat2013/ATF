@@ -61,7 +61,11 @@ total: 5.25
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
-  an HTTP/HTTPS client (`std/http`) and a test framework (`std/test`).
+  an HTTP/HTTPS client (`std/http`), a test framework (`std/test`), and the Python-style tools for whole programs:
+  command-line parsing (`std/args`, like argparse), leveled logging (`std/log`), text helpers (`std/text`:
+  wrap, title, snake_case, templates, tables), number theory and statistics (`std/math`), and algorithms from
+  C++, itertools and JavaScript (`std/algo`: binary search, permutations, combinations, group_by, flatten, set operations), Python's `random` extras
+  (`std/random`: sample, weighted choice, gauss, UUID) and C++ bit tricks (`std/bits`: rotate, reverse, power of two, Gray code).
 - **Windows and design.** `std/ui` builds graphical programs the way HTML and CSS do, written as ATF code: a view function
   returns a tree of elements (`column`, `row`, `text`, `button`, `textbox`, ...), styled with chained methods
   (`.padding(8, 16).bg(hex("#4f46e5")).radius(12).shadow(..)`). It supports flexbox and grid layout, gradients, soft shadows,

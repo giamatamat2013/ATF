@@ -439,6 +439,25 @@
       "settings.save()"
     ]
   },
+  "Command-line parser": {
+    "prefix": "argsparse",
+    "description": "A command-line program with std/args and std/log",
+    "body": [
+      "import \"std/args\"",
+      "import \"std/log\"",
+      "",
+      "fn main(argv: [str]) -> int {",
+      "\tlet p = args_parser(\"${1:tool}\", \"${2:what it does}\")",
+      "\tp.flag(\"verbose\", \"v\", \"more output\")",
+      "\tp.option(\"${3:output}\", \"${4:o}\", \"${5:where to write}\", \"${6:out.txt}\")",
+      "\tp.positional(\"${7:input}\", \"${8:the input file}\")",
+      "\tlet a = p.parse_or_exit(argv)",
+      "\tif a.flag(\"verbose\") { log_set_level(LOG_DEBUG) }",
+      "\t$0",
+      "\treturn 0",
+      "}"
+    ]
+  },
   "Regex match": {
     "prefix": "regex",
     "description": "Find a regular expression in text with std/regex",

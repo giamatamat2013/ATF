@@ -22,14 +22,28 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [Sets](#sets)
   - [Files, time, random](#files-time-random)
 - Modules
+  - [std/algo](#stdalgo)
   - [std/app](#stdapp)
+  - [std/args](#stdargs)
   - [std/base64](#stdbase64)
+  - [std/bits](#stdbits)
   - [std/collections](#stdcollections)
   - [std/csv](#stdcsv)
   - [std/datetime](#stddatetime)
+  - [std/fs](#stdfs)
   - [std/hash](#stdhash)
   - [std/hex](#stdhex)
+  - [std/http](#stdhttp)
   - [std/json](#stdjson)
+  - [std/log](#stdlog)
+  - [std/math](#stdmath)
+  - [std/path](#stdpath)
+  - [std/process](#stdprocess)
+  - [std/random](#stdrandom)
+  - [std/regex](#stdregex)
+  - [std/test](#stdtest)
+  - [std/text](#stdtext)
+  - [std/toml](#stdtoml)
   - [std/ui](#stdui)
 
 ## Built-in functions
@@ -370,6 +384,59 @@ These are part of the language itself (they accept values of any printable type 
 - `fn rand_choice<T>(a: [T]) -> T` - a random element of a; panics when a is empty
 - `fn shuffle<T>(a: [T])` - puts the elements of a in random order, in place
 
+## std/algo
+
+Algorithms from C++ (<algorithm>, <numeric>), Python (itertools) and JavaScript / TypeScript (lodash-style array helpers).
+
+```text
+import "std/algo"
+algo_lower_bound([1, 3, 3, 5], 3)          == 1          // first index whose element is >= 3 (sorted input)
+algo_binary_search([1, 3, 5], 4)           == false
+algo_prefix_sums([1, 2, 3, 4])             == [1, 3, 6, 10]
+algo_flatten([[1, 2], [3], []])            == [1, 2, 3]
+algo_group_by(["ant", "bee", "ape"], |w| w[0..1]) == {"a": ["ant", "ape"], "b": ["bee"]}
+algo_combinations([1, 2, 3], 2)            == [[1, 2], [1, 3], [2, 3]]
+algo_permutations([1, 2, 3]).len()         == 6
+```
+
+None of the functions change their input unless the name says so (rotate / next_permutation work in place).
+
+**Functions**
+
+- `fn algo_lower_bound<T>(a: [T], x: T) -> int` - the first index whose element is >= x in an array sorted ascending (a.len() when there is none)
+- `fn algo_upper_bound<T>(a: [T], x: T) -> int` - the first index whose element is > x in an array sorted ascending (a.len() when there is none)
+- `fn algo_binary_search<T>(a: [T], x: T) -> bool` - true when x is in an array sorted ascending
+- `fn algo_prefix_sums(a: [int]) -> [int]` - running totals: [1, 2, 3] -> [1, 3, 6] (C++ partial_sum, JavaScript scan)
+- `fn algo_differences(a: [int]) -> [int]` - the differences between neighbours: [1, 4, 9] -> [3, 5] (C++ adjacent_difference without the first element)
+- `fn algo_iota(count: int, start: int = 0) -> [int]` - start, start + 1, start + 2, ... with count elements (C++ iota)
+- `fn algo_dot(a: [int], b: [int]) -> int` - the sum of a[i] * b[i] (C++ inner_product)
+- `fn algo_rotate<T>(a: [T], k: int)` - moves the first k elements to the end, in place: rotating [1, 2, 3, 4] by 1 gives [2, 3, 4, 1]; k may be negative
+- `fn algo_next_permutation<T>(a: [T]) -> bool` - Rearranges a in place into the next larger ordering (C++ next_permutation); false, with a sorted ascending again, when it was the last one. Start from a sorted array to visit all orderings.
+- `fn algo_permutations<T>(a: [T]) -> [[T]]` - every ordering of the elements, in the order of the positions (3 elements give 6 arrays); the array is not changed
+- `fn algo_permute_rec<T>(a: [T], used: [bool], cur: [T], out: [[T]])`
+- `fn algo_combinations<T>(a: [T], k: int) -> [[T]]` - every way to pick k elements in their original order: [1, 2, 3] with k = 2 gives [[1, 2], [1, 3], [2, 3]]
+- `fn algo_combine_rec<T>(a: [T], k: int, start: int, cur: [T], out: [[T]])`
+- `fn algo_product<A, B>(a: [A], b: [B]) -> [(A, B)]` - all pairs (x, y) with x from a and y from b (itertools.product of two lists)
+- `fn algo_subsets<T>(a: [T]) -> [[T]]` - every array that is a subset of a, the empty one first (the power set; a.len() must be at most 20)
+- `fn algo_pairwise<T>(a: [T]) -> [(T, T)]` - neighbouring pairs: [1, 2, 3] -> [(1, 2), (2, 3)] (Python pairwise)
+- `fn algo_cycle<T>(a: [T], count: int) -> [T]` - the elements of the array again and again, count elements in all (itertools.cycle with a limit)
+- `fn algo_flatten<T>(a: [[T]]) -> [T]` - one level of nesting removed (JavaScript flat()): [[1, 2], [3]] -> [1, 2, 3]
+- `fn algo_flat_map<T, U>(a: [T], f: fn(T) -> [U]) -> [U]` - map then flatten (JavaScript flatMap): words.flat_map(|w| w.chars())
+- `fn algo_group_by<T, K>(a: [T], key: fn(T) -> K) -> {K: [T]}` - the elements grouped by key, in order of first appearance (lodash groupBy)
+- `fn algo_count_by<T, K>(a: [T], key: fn(T) -> K) -> {K: int}` - how many elements have each key (lodash countBy)
+- `fn algo_key_by<T, K>(a: [T], key: fn(T) -> K) -> {K: T}` - the elements by key, a later element replacing an earlier one with the same key (lodash keyBy)
+- `fn algo_unique_by<T, K>(a: [T], key: fn(T) -> K) -> [T]` - the elements without repeats of the same key, first one kept (lodash uniqBy)
+- `fn algo_take_while<T>(a: [T], test: fn(T) -> bool) -> [T]` - the longest start of the array whose elements pass the test (C++ find_if_not + take)
+- `fn algo_drop_while<T>(a: [T], test: fn(T) -> bool) -> [T]` - the array without the longest start whose elements pass the test
+- `fn algo_find_index<T>(a: [T], test: fn(T) -> bool) -> int` - the index of the first element that passes the test, -1 if none (JavaScript findIndex)
+- `fn algo_argmin<T>(a: [T]) -> int` - the index of the smallest element (the first on ties; C++ min_element); panics on an empty array
+- `fn algo_argmax<T>(a: [T]) -> int` - the index of the largest element (the first on ties; C++ max_element); panics on an empty array
+- `fn algo_zip3<A, B, C>(a: [A], b: [B], c: [C]) -> [(A, B, C)]` - three arrays side by side: zip3([1, 2], ["a", "b"], [true, false]) -> [(1, "a", true), (2, "b", false)]
+- `fn algo_split_at<T>(a: [T], n: int) -> ([T], [T])` - the first array split in two: the first n elements and the rest (like TypeScript's destructuring [head, ...tail])
+- `fn algo_union<T>(a: [T], b: [T]) -> [T]` - the elements that are in a or in b, without repeats
+- `fn algo_intersection<T>(a: [T], b: [T]) -> [T]` - the elements of a that are also in b, without repeats
+- `fn algo_difference<T>(a: [T], b: [T]) -> [T]` - the elements of a that are not in b, without repeats
+
 ## std/app
 
 Where a program keeps its settings and data, and a small settings file.
@@ -424,6 +491,84 @@ struct Settings {
 - `.remove(key: str)`
 - `.save() -> bool` - writes the file (keys in alphabetical order); false when it cannot be written
 
+## std/args
+
+Command-line parsing, like Python's argparse.
+
+```text
+import "std/args"
+fn main(argv: [str]) -> int {
+    let p = args_parser("greet", "Says hello")
+    p.flag("loud", "l", "shout")
+    p.option("times", "n", "how many times", "1")
+    p.positional("name", "who to greet")
+    let a = p.parse_or_exit(argv)         // prints the usage and exits on --help or on a mistake
+    for i in 0..a.get_int("times", 1) { println("hello {a.get("name")}") }
+    return 0
+}
+```
+
+Accepted forms: --name value, --name=value, -n value, -n5, grouped flags -lq, a lone -- (everything after it
+is positional), negative numbers as positional values. -h and --help are always there.
+
+**Types**
+
+```text
+struct ArgSpec {
+    name: str,
+    short: str,
+    help: str,
+    kind: int,          // 0 flag, 1 option with a value, 2 positional
+    default: str,
+    required: bool,
+}
+```
+
+```text
+struct ArgParser {
+    prog: str,
+    about: str,
+    specs: [ArgSpec],
+    allow_rest: bool,
+}
+```
+
+```text
+struct ParsedArgs {
+    values: {str: str},
+    flags: {str: bool},
+    rest: [str],
+    help_requested: bool,
+}
+```
+
+
+**Functions**
+
+- `fn args_parser(prog: str, about: str = "") -> ArgParser` - a new parser; prog is the program name shown in the usage line
+
+**Methods of `ArgParser`**
+
+- `.flag(name: str, short: str, help: str)` - a switch without a value: --name (and -s when short is not "")
+- `.option(name: str, short: str, help: str, default: str = "")` - an option with a value; default "" means no default
+- `.required_option(name: str, short: str, help: str)` - an option that must be given
+- `.positional(name: str, help: str, required: bool = true)` - the next positional argument, in the order they are declared; required unless required is false
+- `.allow_extra()` - allows more positional arguments than declared; they are collected in ParsedArgs.rest
+- `.find_long(name: str) -> ArgSpec?`
+- `.find_short(short: str) -> ArgSpec?`
+- `.usage() -> str` - the one-line usage: Usage: prog [options] <input> [output]
+- `.help() -> str` - the full help text: usage, description, the arguments and the options
+- `.parse(argv: [str]) -> Result<ParsedArgs, str>` - Parses the arguments (without the program name; in `fn main(argv: [str])` pass argv). Err holds a readable message. With -h or --help the result has help_requested set and nothing else is checked.
+- `.parse_or_exit(argv: [str]) -> ParsedArgs` - like parse, but on --help prints the help and exits with 0, and on a mistake prints the message and the usage to standard error and exits with 2
+
+**Methods of `ParsedArgs`**
+
+- `.has(name: str) -> bool` - true when the flag was given or the option / positional has a value
+- `.flag(name: str) -> bool` - true when the flag was given
+- `.get(name: str, fallback: str = "") -> str` - the value of an option or positional argument, or fallback when it has none
+- `.get_int(name: str, fallback: int = 0) -> int` - the value as an int; fallback when it is missing; panics with a clear message when it is not a number
+- `.get_float(name: str, fallback: float = 0.0) -> float` - the value as a float; fallback when it is missing
+
 ## std/base64
 
 Base64 encoding and decoding (RFC 4648), standard and URL-safe alphabets.
@@ -456,6 +601,42 @@ Whitespace (spaces, tabs, CR, LF) inside the input is ignored when decoding; pad
 - `fn b64_decode_url(s: str) -> Result<str, str>` - decodes URL-safe Base64 ('-' '_')
 - `fn b64_decode_bytes(s: str) -> Result<[byte], str>` - decodes standard Base64 into a byte array
 - `fn b64_is_valid(s: str) -> bool` - true if s is valid standard Base64
+
+## std/bits
+
+Bit tricks from C++ (<bit>, std::bitset) and C, on 64-bit ints.
+
+```text
+import "std/bits"
+bits_length(255)             == 8          // bits needed to write the number
+bits_is_power_of_two(64)     == true
+bits_next_power_of_two(100)  == 128
+bits_set(0, 3)               == 8          // set bit number 3 (bit 0 is the lowest)
+bits_rotl(1, 63)             == INT_MIN
+bits_to_str(5, 8)            == "00000101"
+```
+
+A negative int has all 64 bits (two's complement); `n.popcount()` in the prelude counts the 1 bits.
+
+**Functions**
+
+- `fn bits_length(n: int) -> int` - the number of bits needed to write n: 0 for 0, 8 for 255, 64 for a negative number
+- `fn bits_trailing_zeros(n: int) -> int` - how many 0 bits are at the low end; 64 for 0
+- `fn bits_leading_zeros(n: int) -> int` - how many 0 bits are at the high end of the 64 bits; 64 for 0
+- `fn bits_parity(n: int) -> int` - 1 when the number of 1 bits is odd, otherwise 0
+- `fn bits_is_power_of_two(n: int) -> bool` - true when n is 1, 2, 4, 8, ...
+- `fn bits_next_power_of_two(n: int) -> int` - the smallest power of two that is >= n (1 for n <= 1); panics when it would not fit (n > 2^62)
+- `fn bits_get(n: int, i: int) -> bool` - true when bit number i (0 is the lowest) of n is 1
+- `fn bits_set(n: int, i: int) -> int` - n with bit number i set to 1
+- `fn bits_clear(n: int, i: int) -> int` - n with bit number i set to 0
+- `fn bits_toggle(n: int, i: int) -> int` - n with bit number i flipped
+- `fn bits_rotl(n: int, k: int) -> int` - the 64 bits turned left by k places; the bits that fall off the top come back at the bottom (k may be negative)
+- `fn bits_rotr(n: int, k: int) -> int` - the 64 bits turned right by k places
+- `fn bits_reverse(n: int) -> int` - the 64 bits in reverse order
+- `fn bits_to_gray(n: int) -> int` - the Gray code of n: neighbours differ in one bit only
+- `fn bits_from_gray(g: int) -> int` - the number whose Gray code is g
+- `fn bits_to_str(n: int, width: int = 64) -> str` - the lowest width bits of n as 0 and 1 characters (like C++ std::bitset<width>::to_string): bits_to_str(5, 8) == "00000101"
+- `fn bits_from_str(s: str) -> int?` - the int written by 0 and 1 characters ("101" is 5, "_" and spaces are skipped); nil for any other character or more than 64 digits
 
 ## std/collections
 
@@ -912,6 +1093,40 @@ struct DateTime {
 - `.to_str() -> str`
 - `.format(fmt: str) -> str` - strftime-style formatting: %Y year  %y 2-digit year  %m month 01-12  %d day 01-31  %e day, space padded  %j day of year 001-366 %H hour 00-23  %I hour 01-12  %p AM/PM  %M minute  %S second  %f milliseconds 000-999 %B month name  %b short month name  %A weekday name  %a short weekday name %u weekday 1-7 (Monday = 1)  %w weekday 0-6 (Sunday = 0)  %V ISO week 01-53  %G ISO week year %z offset +hhmm  %Z offset as "UTC" or "+hh:mm"  %s Unix seconds  %F = %Y-%m-%d  %T = %H:%M:%S  %% a '%'
 
+## std/fs
+
+Files and folders: listing, copying, moving, deleting, appending.
+
+```text
+import "std/fs"
+fs_make_dirs("out\\logs\\today")
+fs_append_file("out\\logs\\today\\a.log", "started\n")
+for name in fs_list_dir("out\\logs\\today") { println(name) }
+fs_remove_all("out")
+```
+
+read_file, write_file, file_exists, delete_file and make_dir are in the prelude.
+Failures are reported with false or nil, like the prelude functions.
+
+**Functions**
+
+- `fn fs_is_dir(path: str) -> bool` - true when path is an existing folder
+- `fn fs_exists(path: str) -> bool` - true when path is an existing file or folder
+- `fn fs_size(path: str) -> int?` - size of a file in bytes, nil when it cannot be opened
+- `fn fs_list_dir(path: str) -> [str]?` - the names (not full paths) of the files and folders inside a folder, sorted; nil when it cannot be read
+- `fn fs_make_dirs(path: str) -> bool` - creates a folder and any missing parents; true when the folder exists afterwards
+- `fn fs_remove_dir(path: str) -> bool` - removes an empty folder; false when that fails
+- `fn fs_remove_all(path: str) -> bool` - removes a file, or a folder with everything in it; false when something could not be removed
+- `fn fs_copy(from: str, to: str) -> bool` - copies a file, replacing the target; false when that fails
+- `fn fs_move(from: str, to: str) -> bool` - moves or renames a file or folder, replacing a target file; false when that fails
+- `fn fs_append_file(path: str, text: str) -> bool` - adds text to the end of a file, creating it when it does not exist; false when that fails
+- `fn fs_read_lines(path: str) -> [str]?` - the lines of a file without line endings, nil when it cannot be read
+- `fn fs_write_lines(path: str, lines: [str]) -> bool` - writes the lines to a file, each followed by a newline; false when that fails
+- `fn fs_cwd() -> str` - the current folder of the program
+- `fn fs_chdir(path: str) -> bool` - makes path the current folder; false when that fails
+- `fn fs_absolute(path: str) -> str` - the absolute form of a path (relative to the current folder); the file does not have to exist
+- `fn fs_walk(root: str) -> [str]` - every file below a folder (not the folders), as paths that start with root; sorted
+
 ## std/hash
 
 Checksums and cryptographic hash functions.
@@ -990,6 +1205,67 @@ Text (str) is treated as raw bytes. Decoding returns Result<str, str> with a rea
 - `fn hex_decode(s: str) -> Result<str, str>` - Decodes hex text into bytes. Upper and lower case digits are accepted, an optional "0x" prefix is skipped, and whitespace between digit pairs is ignored ("de ad be ef" works).
 - `fn hex_decode_bytes(s: str) -> Result<[byte], str>` - like hex_decode, but returns a byte array
 - `fn hex_dump(s: str) -> str` - Classic hex dump: 8-digit offset, 16 bytes in hex (split in two groups of 8), and the printable ASCII characters ('.' for the others). Every line ends with a newline.
+
+## std/http
+
+An HTTP and HTTPS client (built on the Windows WinInet library, so it uses the system's proxy and certificates).
+
+```text
+import "std/http"
+
+match http_get("https://example.com/") {
+    Result.Ok(r) => println(r.status, r.body.len(), r.header("content-type") ?? "?")
+    Result.Err(e) => println("request failed: " + e)
+}
+let r = http_post("https://example.com/api", "\{\"x\": 1}", ["Content-Type: application/json"])
+println(http_url_encode("a b&c"))          // a%20b%26c
+```
+
+A response with any status (404, 500, ...) is a normal Ok result: check r.ok() or r.status.
+An Err means the request could not be made at all (bad URL, no network, refused connection).
+Redirects are followed. The body is the raw bytes as a str.
+
+**Types**
+
+the answer to a request
+
+```text
+struct HttpResponse {
+    status: int        // 200, 404, ...
+    body: str
+    headers: str       // all response headers, one "Name: value" per line
+}
+```
+
+a URL taken apart
+
+```text
+struct HttpUrl {
+    secure: bool
+    host: str
+    port: int
+    path: str          // starts with /, includes the query
+}
+```
+
+
+**Functions**
+
+- `fn http_parse_url(url: str) -> Result<HttpUrl, str>` - splits "https://host:8080/path?q=1" into its parts (http and https only)
+- `fn http_url_encode(s: str) -> str` - Percent-encodes text for use in a URL: letters, digits and - _ . ~ stay, every other byte becomes %XX.
+- `fn http_url_decode(s: str) -> str` - Reverses http_url_encode; + becomes a space and a % that is not followed by two hex digits is kept as it is.
+- `fn http_hex_val(c: byte) -> int`
+- `fn http_query(pairs: [(str, str)]) -> str` - "a=1&b=x%20y" from pairs: http_query([("a", "1"), ("b", "x y")])
+- `fn http_query_info(req: int, level: int) -> str`
+- `fn http_request(method: str, url: str, body: str = "", headers: [str] = [], timeout_ms: int = 30000) -> Result<HttpResponse, str>` - Sends a request. method is "GET", "POST", ...; headers are lines such as "Accept: text/html"; body may be "". timeout_ms limits each connect, send and receive step (0 means the system default).
+- `fn http_get(url: str, headers: [str] = []) -> Result<HttpResponse, str>` - GET a URL
+- `fn http_post(url: str, body: str, headers: [str] = []) -> Result<HttpResponse, str>` - POST body to a URL (add a Content-Type header to say what the body is)
+- `fn http_download(url: str, path: str) -> Result<int, str>` - GET a URL and save the body to a file; Ok(bytes written) when the status is 2xx, otherwise Err
+
+**Methods of `HttpResponse`**
+
+- `.ok() -> bool` - true for the statuses 200 to 299
+- `.header(name: str) -> str?` - the value of a response header (the name is not case-sensitive), nil when it is missing
 
 ## std/json
 
@@ -1090,6 +1366,423 @@ enum JsonValue {
 - `.remove(key: str) -> bool` - removes a member of an object; true if it was there
 - `.push(v: JsonValue)` - appends to an array (does nothing for other values)
 - `.to_str() -> str` - compact JSON text (used by println and string interpolation)
+
+## std/log
+
+Leveled logging, like Python's logging module.
+
+```text
+import "std/log"
+log_info("server started on port {port}")      // INFO  server started on port 8080
+log_set_level(LOG_DEBUG)                        // show everything (the default level is LOG_INFO)
+log_set_file("app.log")                         // also append every line to a file
+log_timestamps(true)                            // 2026-10-27 12:00:00 INFO  message
+log_warn("disk almost full"); log_error("cannot open {path}")
+```
+
+Lines go to standard error unless log_to_stdout(true) is called. Messages below the level are dropped.
+
+**Constants**
+
+- `LOG_DEBUG = 10`
+- `LOG_INFO = 20`
+- `LOG_WARN = 30`
+- `LOG_ERROR = 40`
+- `LOG_OFF = 100`
+
+**Functions**
+
+- `fn log_set_level(level: int)` - messages below this level (LOG_DEBUG, LOG_INFO, LOG_WARN, LOG_ERROR, LOG_OFF) are dropped
+- `fn log_get_level() -> int` - the level as set by log_set_level
+- `fn log_level_from_name(name: str) -> int?` - the level for a name: "debug", "info", "warn" (or "warning"), "error", "off"; nil for anything else
+- `fn log_set_file(path: str) -> bool` - also appends every logged line to this file ("" stops that); false when the file cannot be written
+- `fn log_timestamps(on: bool)` - puts the local date and time in front of every line
+- `fn log_to_stdout(on: bool)` - writes to standard output instead of standard error
+- `fn log_set_prefix(prefix: str)` - text put after the level on every line, for example the program name: "[mytool] "
+- `fn log_level_name(level: int) -> str` - the name of a level: "DEBUG", "INFO", "WARN", "ERROR"
+- `fn log_at(level: int, msg: str)` - logs msg at the given level (the other log_* functions call this)
+- `fn log_debug(msg: str)`
+- `fn log_info(msg: str)`
+- `fn log_warn(msg: str)`
+- `fn log_error(msg: str)`
+
+## std/math
+
+Number theory helpers (like Python's math) and descriptive statistics (like Python's statistics).
+
+```text
+import "std/math"
+math_factorial(10)                  == 3628800
+math_is_prime(97)                   == true
+math_primes(20)                     == [2, 3, 5, 7, 11, 13, 17, 19]
+stats_mean([1.0, 2.0, 3.0, 4.0])    == 2.5
+stats_stdev([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]) == 2.0
+```
+
+The statistics functions take [float] and panic on an empty array (and the sample versions on fewer than 2 values).
+
+**Functions**
+
+- `fn math_factorial(n: int) -> int` - n! as an int; panics for a negative n and for n > 20 (the result would not fit in 64 bits)
+- `fn math_binomial(n: int, k: int) -> int` - n choose k (the number of ways to pick k of n); 0 when k is outside 0..n
+- `fn math_isqrt(n: int) -> int` - the largest int r with r * r <= n; panics for a negative n
+- `fn math_is_prime(n: int) -> bool` - true when n is a prime number (trial division, fine up to about 10^12)
+- `fn math_primes(limit: int) -> [int]` - all primes <= limit, smallest first (sieve of Eratosthenes)
+- `fn math_prime_factors(n: int) -> [int]` - the prime factors of n with repeats, smallest first: math_prime_factors(12) == [2, 2, 3]; [] for n < 2
+- `fn math_fib(n: int) -> int` - the n-th Fibonacci number (fib(0) == 0, fib(1) == 1); panics when n < 0 or n > 92 (it would overflow)
+- `fn math_mod_pow(base: int, exp: int, m: int) -> int` - (base ** exp) % m without overflow for m up to 3 billion; exp must not be negative
+- `fn math_lerp(a: float, b: float, t: float) -> float` - a + (b - a) * t: the point t of the way from a to b (t = 0.5 is the middle)
+- `fn stats_sum(a: [float]) -> float` - the sum of the values
+- `fn stats_mean(a: [float]) -> float` - the average
+- `fn stats_median(a: [float]) -> float` - the middle value (the average of the two middle values when the count is even)
+- `fn stats_mode<T>(a: [T]) -> T` - the most common value (the first one that reaches the highest count on ties)
+- `fn stats_variance(a: [float]) -> float` - population variance (divides by n)
+- `fn stats_sample_variance(a: [float]) -> float` - sample variance (divides by n - 1); needs at least 2 values
+- `fn stats_stdev(a: [float]) -> float` - population standard deviation
+- `fn stats_sample_stdev(a: [float]) -> float` - sample standard deviation
+- `fn stats_percentile(a: [float], p: float) -> float` - the p-th percentile (p from 0 to 100) with linear interpolation between neighbours: stats_percentile(a, 50.0) is the median
+- `fn stats_correlation(a: [float], b: [float]) -> float` - the Pearson correlation of two arrays of the same length (nan when one of them is constant)
+
+## std/path
+
+Working with file paths as text (no file system access).
+
+```text
+import "std/path"
+path_join("a", "b.txt")            == "a\\b.txt"
+path_basename("C:\\x\\y.tar.gz")   == "y.tar.gz"
+path_dirname("C:\\x\\y.txt")       == "C:\\x"
+path_ext("notes.md")               == ".md"
+path_stem("notes.md")              == "notes"
+path_normalize("a/./b/../c")       == "a\\c"
+```
+
+Both / and \ are accepted as separators on input. Results use \ (the Windows separator).
+
+**Functions**
+
+- `fn path_is_sep(c: byte) -> bool`
+- `fn path_last_sep(p: str) -> int` - index of the last separator in p, or -1
+- `fn path_basename(p: str) -> str` - the last part of the path: path_basename("a\\b\\c.txt") == "c.txt"
+- `fn path_dirname(p: str) -> str` - everything before the last part: path_dirname("a\\b\\c.txt") == "a\\b"; "" when there is no folder part
+- `fn path_ext(p: str) -> str` - the extension of the last part including the dot, or "": path_ext("a.tar.gz") == ".gz"
+- `fn path_stem(p: str) -> str` - the last part without its extension: path_stem("a\\b.txt") == "b"
+- `fn path_with_ext(p: str, ext: str) -> str` - the path with another extension (give it with the dot, or "" to remove it)
+- `fn path_is_absolute(p: str) -> bool` - true for "C:\\x", "\\\\server\\share" and "\\x"
+- `fn path_join(a: str, b: str) -> str` - joins parts with one separator between them; an absolute part restarts the path
+- `fn path_join_all(parts: [str]) -> str` - joins any number of parts: path_join_all(["a", "b", "c"]) == "a\\b\\c"
+- `fn path_parts(p: str) -> [str]` - splits into parts at the separators; empty parts are dropped
+- `fn path_normalize(p: str) -> str` - removes "." parts, resolves ".." where it can and uses \ everywhere: path_normalize("a/./b/../c") == "a\\c"
+
+## std/process
+
+Running programs and capturing what they print, environment variables, process info.
+
+```text
+import "std/process"
+let r = proc_output("cmd /c echo hi")
+println(r.0, r.1)                     // 0 "hi\r\n"
+proc_setenv("MODE", "fast")
+println(proc_pid(), proc_cpu_count())
+```
+
+run_command and run_process (the prelude) run a program with its output on the console;
+proc_output and proc_output_args capture it as text instead.
+
+**Functions**
+
+- `fn proc_output(cmdline: str) -> (int, str)` - Runs a command line, waits for it and returns (exit code, everything it wrote to stdout and stderr). The exit code is -1 and the text empty when the program could not be started.
+- `fn proc_output_args(path: str, args: [str]) -> (int, str)` - like proc_output, for a program and its arguments (they are quoted for you)
+- `fn proc_setenv(name: str, value: str) -> bool` - sets an environment variable for this program and the programs it starts; false when that fails
+- `fn proc_unsetenv(name: str) -> bool` - removes an environment variable
+- `fn proc_pid() -> int` - the id of this process
+- `fn proc_cpu_count() -> int` - the number of logical processors
+
+## std/random
+
+More random numbers, like Python's random module (the prelude has rand_int, rand_float, rand_choice, shuffle).
+
+```text
+import "std/random"
+random_range(0, 10)                   // 0..9, like Python's randrange (the end is not included)
+random_range(0, 100, 5)               // 0, 5, 10 ... 95
+random_sample([1, 2, 3, 4, 5], 2)     // 2 different elements
+random_choices(["a", "b"], 5)         // 5 elements, repeats allowed
+random_weighted(["rare", "common"], [1.0, 9.0])
+random_gauss(100.0, 15.0)             // normally distributed
+random_uuid()                         // "3f2b8c1e-...-4..."
+```
+
+All of them use the same generator as rand_int, so rand_seed(n) makes a run repeatable.
+
+**Functions**
+
+- `fn random_range(lo: int, hi: int, by: int = 1) -> int` - a random number from lo up to (not including) hi, moving in steps of by: random_range(0, 10, 3) is 0, 3, 6 or 9
+- `fn random_bool(p: float = 0.5) -> bool` - true with probability p (0.5 by default)
+- `fn random_gauss(mean: float = 0.0, sd: float = 1.0) -> float` - a normally distributed number with the given mean and standard deviation (Box-Muller)
+- `fn random_sample<T>(a: [T], k: int) -> [T]` - k different elements of a, in random order (a itself is not changed); k must not be larger than a.len()
+- `fn random_choices<T>(a: [T], k: int) -> [T]` - k elements of a picked one by one, so the same element can come up again; a must not be empty
+- `fn random_weighted<T>(a: [T], weights: [float]) -> T` - one element of a, where weights[i] (not negative, not all 0) says how likely a[i] is compared to the others
+- `fn random_shuffled<T>(a: [T]) -> [T]` - a shuffled copy of a (shuffle changes the array itself)
+- `fn random_string(n: int, alphabet: str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") -> str` - n random characters from the alphabet (letters and digits by default)
+- `fn random_hex(n: int) -> str` - 2 * n lowercase hex digits from n random bytes
+- `fn random_uuid() -> str` - a random (version 4) UUID like "9b2f4c1e-7d3a-4f8e-a1b2-0c9d8e7f6a5b"
+
+## std/regex
+
+Regular expressions (a backtracking matcher working on bytes).
+
+```text
+import "std/regex"
+let re = regex_compile("(\\d+)-(\\d+)").unwrap()
+if let m = re.find("tel 12-345") { println(m.text, m.group(1), m.group(2), m.start) }   // 12-345 12 345 4
+println(re.is_match("no digits"))                          // false
+println(re.replace_all("1-2 and 3-4", "$2:$1"))            // 2:1 and 4:3
+println(regex_split(",\\s*", "a, b,c"))                    // ["a", "b", "c"]
+```
+
+Supported: literals, . (any byte except newline), classes [a-z0-9_] and [^...], \d \w \s and their
+upper-case negations, \b \B, anchors ^ $, groups (...) and (?:...), alternation a|b, and the
+repeats * + ? {n} {n,} {n,m} (add ? after one for the lazy form). Escape a special character with \.
+Not supported: look-around, back-references and named groups.
+Text is matched byte by byte, so . matches one byte of a multi-byte character.
+
+**Types**
+
+```text
+struct RxNode {
+    kind: int          // 0 char, 1 any, 2 set, 3 sequence, 4 alternation, 5 repeat, 6 group, 7 start, 8 end, 9 word edge, 10 not word edge, 11 empty
+    ch: int            // the byte of a char node, the number of a group node
+    set: [bool]
+    kids: [RxNode]
+    min: int
+    max: int           // -1 means no limit
+    lazy: bool
+}
+```
+
+a compiled regular expression
+
+```text
+struct Regex {
+    pattern: str
+    root: RxNode
+    groups: int        // number of capture groups
+}
+```
+
+one match: the byte range [start, end), its text and the text of every group (index 0 is the whole match, "" for a group that did not take part)
+
+```text
+struct RxMatch {
+    start: int
+    end: int
+    text: str
+    groups: [str]
+}
+```
+
+```text
+struct RxParser {
+    p: str
+    i: int
+    ngroups: int
+    err: str
+    icase: bool
+}
+```
+
+```text
+struct RxState {
+    s: str
+    caps: [int]
+    end: int
+}
+```
+
+
+**Functions**
+
+- `fn rx_node(kind: int) -> RxNode`
+- `fn rx_is_word(c: int) -> bool`
+- `fn rx_class_set(c: byte) -> [bool]`
+- `fn rx_escape_byte(c: byte) -> int`
+- `fn rx_fail(ps: RxParser, msg: str)`
+- `fn rx_peek(ps: RxParser) -> int`
+- `fn rx_icase_set(set: [bool])`
+- `fn rx_char_node(ps: RxParser, c: int) -> RxNode`
+- `fn rx_parse_class(ps: RxParser) -> RxNode`
+- `fn rx_parse_atom(ps: RxParser) -> RxNode`
+- `fn rx_parse_braces(ps: RxParser, n: RxNode) -> bool` - reads {n}, {n,} or {n,m} at ps.i (which is on the {); returns false and leaves ps.i alone when it is not one
+- `fn rx_parse_seq(ps: RxParser) -> RxNode`
+- `fn rx_parse_alt(ps: RxParser) -> RxNode`
+- `fn regex_compile(pattern: str, ignore_case: bool = false) -> Result<Regex, str>` - Compiles a pattern. The error text says what is wrong and where. With ignore_case, letters match in both cases.
+- `fn regex(pattern: str, ignore_case: bool = false) -> Regex` - the compiled pattern; panics when it is not valid
+- `fn rx_one(n: RxNode, s: str, i: int) -> bool`
+- `fn rx_accept(st: RxState, j: int) -> bool`
+- `fn rx_seq(kids: [RxNode], idx: int, st: RxState, i: int, k: fn(int) -> bool) -> bool`
+- `fn rx_rep(n: RxNode, st: RxState, i: int, count: int, k: fn(int) -> bool) -> bool`
+- `fn rx_m(n: RxNode, st: RxState, i: int, k: fn(int) -> bool) -> bool`
+- `fn rx_find_at(re: Regex, s: str, from: int) -> RxMatch?`
+- `fn regex_anchored(re: Regex, s: str) -> bool` - true when some match of re covers the whole of s (tries the pattern at 0 with a required end)
+- `fn rx_expand(repl: str, m: RxMatch) -> str`
+- `fn regex_match(pattern: str, s: str) -> bool` - true when the pattern matches somewhere in s; panics when the pattern is not valid
+- `fn regex_split(pattern: str, s: str) -> [str]` - the pieces of s between the matches of the pattern; panics when the pattern is not valid
+- `fn regex_replace(pattern: str, s: str, repl: str) -> str` - replaces every match of the pattern in s (see Regex.replace for $1); panics when the pattern is not valid
+- `fn regex_find_all(pattern: str, s: str) -> [str]` - the text of every match of the pattern in s; panics when the pattern is not valid
+
+**Methods of `RxMatch`**
+
+- `.group(i: int) -> str` - the text of group i (0 is the whole match); "" when there is no such group
+
+**Methods of `Regex`**
+
+- `.find(s: str) -> RxMatch?` - the first match in s, or nil
+- `.find_from(s: str, from: int) -> RxMatch?` - the first match that starts at byte position from or later, or nil
+- `.is_match(s: str) -> bool` - true when the pattern matches somewhere in s
+- `.full_match(s: str) -> bool` - true when the pattern matches the whole of s
+- `.find_all(s: str) -> [RxMatch]` - all the matches, left to right, not overlapping
+- `.replace(s: str, repl: str) -> str` - replaces the first match; in repl, $0 is the whole match, $1 to $9 are groups and $$ is a dollar sign
+- `.replace_all(s: str, repl: str) -> str` - replaces every match (see replace for $1)
+- `.replace_with(s: str, f: fn(RxMatch) -> str) -> str` - replaces every match with whatever f returns for it
+- `.split(s: str) -> [str]` - the pieces of s between the matches
+
+## std/test
+
+A small test framework for ATF programs.
+
+```text
+import "std/test"
+
+fn main() -> int {
+    test("addition", || {
+        expect_eq(1 + 1, 2)
+        expect(2 > 1, "two is bigger")
+    })
+    test("a panic is a failure", || { expect_eq([1, 2][0], 1) })
+    expect_panics("division by zero", || { let z = 0; println(1 / z) })
+    return test_report()          // prints a summary, returns 0 when everything passed (else 1)
+}
+```
+
+A failed expectation is recorded and the test goes on; a panic inside a test fails that test
+and the next test still runs. Every test prints one line, "ok" or "FAIL" followed by the reasons.
+
+**Functions**
+
+- `fn test_fail(msg: str)` - records a failure for the running test
+- `fn test(name: str, f: fn())` - Runs f as a test called name and prints "ok   name" or "FAIL name" with the reasons.
+- `fn expect(cond: bool, msg: str = "expectation failed")` - fails the test when cond is false
+- `fn expect_eq<T>(got: T, want: T)` - fails the test when got != want, showing both values
+- `fn expect_ne<T>(got: T, other: T)` - fails the test when got == other
+- `fn expect_near(got: float, want: float, eps: float = 0.000001)` - fails the test when two floats differ by more than eps
+- `fn expect_panics(name: str, f: fn())` - Runs f as a test called name that passes only when f panics.
+- `fn test_report() -> int` - prints how many tests ran and failed; returns 0 when all passed and 1 otherwise (use it as the exit code of main)
+
+## std/text
+
+Text helpers known from Python (textwrap, string, str methods) and other languages.
+
+```text
+import "std/text"
+text_title("hello big world")          == "Hello Big World"
+text_snake_case("HelloBigWorld")       == "hello_big_world"
+text_wrap("the quick brown fox", 10)   == ["the quick", "brown fox"]
+text_template("Hi ${name}!", {"name": "Ana"}) == "Hi Ana!"
+print(text_table([["name", "age"], ["Ana", "7"]]))
+```
+
+Text is bytes: the case functions change only ASCII letters, and widths count bytes.
+
+**Functions**
+
+- `fn text_is_lower_byte(c: byte) -> bool`
+- `fn text_is_upper_byte(c: byte) -> bool`
+- `fn text_is_alnum_byte(c: byte) -> bool`
+- `fn text_is_alpha(s: str) -> bool` - true when the text is not empty and every byte is an ASCII letter
+- `fn text_is_alnum(s: str) -> bool` - true when the text is not empty and every byte is an ASCII letter or digit
+- `fn text_title(s: str) -> str` - the first letter of every word in uppercase and the others in lowercase: "hello big world" -> "Hello Big World"
+- `fn text_swapcase(s: str) -> str` - upper case letters become lower case and the other way round
+- `fn text_partition(s: str, sep: str) -> (str, str, str)` - splits at the first sep: (before, sep, after); (s, "", "") when sep is not found
+- `fn text_rpartition(s: str, sep: str) -> (str, str, str)` - splits at the last sep: (before, sep, after); ("", "", s) when sep is not found
+- `fn text_split_n(s: str, sep: str, max_splits: int) -> [str]` - like split, but cuts at most max_splits times (the rest stays in the last piece): text_split_n("a=b=c", "=", 1) == ["a", "b=c"]
+- `fn text_words(s: str) -> [str]` - the words of a name written in any style: "HelloBigWorld", "hello_big-world" and "hello big world" give ["hello", "big", "world"]
+- `fn text_snake_case(s: str) -> str` - "HelloBigWorld" -> "hello_big_world"
+- `fn text_kebab_case(s: str) -> str` - "HelloBigWorld" -> "hello-big-world"
+- `fn text_camel_case(s: str) -> str` - "hello_big_world" -> "helloBigWorld"
+- `fn text_pascal_case(s: str) -> str` - "hello_big_world" -> "HelloBigWorld"
+- `fn text_wrap(s: str, width: int) -> [str]` - Breaks the text into lines of at most width bytes at the spaces (a longer word gets a line of its own). Runs of whitespace count as one space; empty text gives [].
+- `fn text_fill(s: str, width: int) -> str` - text_wrap joined with newlines
+- `fn text_indent(s: str, prefix: str) -> str` - prefix added in front of every non-empty line
+- `fn text_dedent(s: str) -> str` - removes the leading whitespace that all non-empty lines have in common
+- `fn text_shorten(s: str, width: int, placeholder: str = "...") -> str` - the text cut to at most width bytes, ending in placeholder when it had to be cut: text_shorten("hello world", 8) == "hello..."
+- `fn text_distance(a: str, b: str) -> int` - the number of single-byte edits (insert, delete, change) that turn a into b - handy for "did you mean ...?"
+- `fn text_template(s: str, values: {str: str}) -> str` - Replaces ${name} (or $name) by the value in values, like Python's string.Template. A name that is missing stays as written; $$ gives a single $.
+- `fn text_table(rows: [[str]], right: bool = false) -> str` - Rows of cells as a text table: every column as wide as its widest cell, columns separated by two spaces, no trailing spaces, every line ends with a newline. Numbers look better aligned right: pass right: true.
+
+## std/toml
+
+Reading and writing TOML (the configuration file format).
+
+```text
+import "std/toml"
+
+let r = toml_parse("name = \"app\"\n[server]\nport = 8080\nhosts = [\"a\", \"b\"]\n")
+match r {
+    Result.Ok(v) => println(v.get_str("name", "?"), v.query("server.port"), v.query("server.hosts[1]"))
+    Result.Err(e) => println("bad toml: " + e)          // e.g. "line 3: expected '=' after the key"
+}
+println(toml_stringify(doc))
+```
+
+A document becomes a JsonValue (from std/json, which this module imports): tables are objects,
+arrays are arrays, integers are Int, floats are Float. Dates and times are kept as Str.
+Supported: comments, bare / quoted / dotted keys, [tables], [[arrays of tables]], inline tables,
+multi-line arrays, basic and literal strings (also the multi-line forms), numbers with _ and 0x 0o 0b.
+Not supported: inf and nan values.
+
+**Types**
+
+```text
+struct TomlParser {
+    s: str
+    i: int
+    err: str
+}
+```
+
+
+**Functions**
+
+- `fn toml_line_of(p: TomlParser) -> int`
+- `fn toml_fail(p: TomlParser, msg: str)`
+- `fn toml_peek(p: TomlParser) -> int`
+- `fn toml_at(p: TomlParser, t: str) -> bool`
+- `fn toml_skip_ws(p: TomlParser)` - skips spaces and tabs
+- `fn toml_skip_comment(p: TomlParser)` - skips to the end of a comment (not past the newline)
+- `fn toml_skip_blank(p: TomlParser)` - skips spaces, comments and newlines
+- `fn toml_utf8(sb: StrBuilder, cp: int)`
+- `fn toml_hex_value(p: TomlParser, digits: int) -> int`
+- `fn toml_parse_string(p: TomlParser) -> str` - a string starting at the opening quote; handles """ ''' and the one-line forms
+- `fn toml_is_bare(c: int) -> bool`
+- `fn toml_parse_key_part(p: TomlParser) -> str` - one key part: bare, "quoted" or 'literal'
+- `fn toml_parse_key(p: TomlParser) -> [str]` - a dotted key such as a.b."c d"
+- `fn toml_looks_like_date(tok: str) -> bool`
+- `fn toml_parse_scalar(p: TomlParser) -> JsonValue`
+- `fn toml_parse_value(p: TomlParser) -> JsonValue`
+- `fn toml_object_of(v: JsonValue) -> {str: JsonValue}?`
+- `fn toml_descend(p: TomlParser, m: {str: JsonValue}, key: str) -> {str: JsonValue}` - the table named key inside m (created when missing); an array of tables gives its last table
+- `fn toml_set(p: TomlParser, m: {str: JsonValue}, key: [str], v: JsonValue)`
+- `fn toml_end_of_line(p: TomlParser)`
+- `fn toml_parse(text: str) -> Result<JsonValue, str>` - Reads a TOML document. The error text starts with the line number.
+- `fn toml_quote(s: str) -> str`
+- `fn toml_key_text(k: str) -> str`
+- `fn toml_is_table_array(v: JsonValue) -> bool`
+- `fn toml_inline(v: JsonValue) -> str`
+- `fn toml_inline_table(o: {str: JsonValue}) -> str`
+- `fn toml_float(f: float) -> str`
+- `fn toml_write_table(sb: StrBuilder, o: {str: JsonValue}, path: [str])`
+- `fn toml_stringify(v: JsonValue) -> str` - Writes a document (a JsonValue object) as TOML text. Plain values come first in each table, then its sub-tables. Null values are written as empty strings, since TOML has no null. Panics when v is not an object.
 
 ## std/ui
 
@@ -1296,3 +1989,4 @@ struct Canvas {
 - `.line(x1: int, y1: int, x2: int, y2: int, width: int, c: int)` - a straight line with round ends, width pixels thick
 - `.text(x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false)` - one line of text with its top left corner at (x, y)
 - `.text_width(s: str, size: int = 15, bold: bool = false) -> int` - the width text would take
+- `.pixels(x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int)` - Draw a picture from an array of 0xRRGGBB ints (pw * ph pixels, row by row), stretched to w x h pixels with the nearest pixel. Much faster than one rect per pixel: use it for software rendered scenes.

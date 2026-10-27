@@ -1,0 +1,323 @@
+// std/algo - algorithms from C++ (<algorithm>, <numeric>), Python (itertools) and JavaScript / TypeScript (lodash-style array helpers).
+//
+//   import "std/algo"
+//   algo_lower_bound([1, 3, 3, 5], 3)          == 1          // first index whose element is >= 3 (sorted input)
+//   algo_binary_search([1, 3, 5], 4)           == false
+//   algo_prefix_sums([1, 2, 3, 4])             == [1, 3, 6, 10]
+//   algo_flatten([[1, 2], [3], []])            == [1, 2, 3]
+//   algo_group_by(["ant", "bee", "ape"], |w| w[0..1]) == {"a": ["ant", "ape"], "b": ["bee"]}
+//   algo_combinations([1, 2, 3], 2)            == [[1, 2], [1, 3], [2, 3]]
+//   algo_permutations([1, 2, 3]).len()         == 6
+//
+// None of the functions change their input unless the name says so (rotate / next_permutation work in place).
+
+// ---- searching in sorted arrays (C++ lower_bound, upper_bound, binary_search) ----
+
+// the first index whose element is >= x in an array sorted ascending (a.len() when there is none)
+fn algo_lower_bound<T>(a: [T], x: T) -> int {
+    var lo = 0
+    var hi = a.len()
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2
+        if a[mid] < x { lo = mid + 1 } else { hi = mid }
+    }
+    return lo
+}
+
+// the first index whose element is > x in an array sorted ascending (a.len() when there is none)
+fn algo_upper_bound<T>(a: [T], x: T) -> int {
+    var lo = 0
+    var hi = a.len()
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2
+        if a[mid] <= x { lo = mid + 1 } else { hi = mid }
+    }
+    return lo
+}
+
+// true when x is in an array sorted ascending
+fn algo_binary_search<T>(a: [T], x: T) -> bool {
+    let i = algo_lower_bound(a, x)
+    return i < a.len() and a[i] == x
+}
+
+// ---- numeric (C++ <numeric>) ----
+
+// running totals: [1, 2, 3] -> [1, 3, 6] (C++ partial_sum, JavaScript scan)
+fn algo_prefix_sums(a: [int]) -> [int] {
+    var out: [int] = []
+    var total = 0
+    for x in a {
+        total += x
+        out.push(total)
+    }
+    return out
+}
+
+// the differences between neighbours: [1, 4, 9] -> [3, 5] (C++ adjacent_difference without the first element)
+fn algo_differences(a: [int]) -> [int] {
+    var out: [int] = []
+    for i in 1..a.len() { out.push(a[i] - a[i - 1]) }
+    return out
+}
+
+// start, start + 1, start + 2, ... with count elements (C++ iota)
+fn algo_iota(count: int, start: int = 0) -> [int] {
+    var out: [int] = []
+    for i in 0..count { out.push(start + i) }
+    return out
+}
+
+// the sum of a[i] * b[i] (C++ inner_product)
+fn algo_dot(a: [int], b: [int]) -> int {
+    assert(a.len() == b.len(), "algo_dot: the arrays must have the same length")
+    var total = 0
+    for i in 0..a.len() { total += a[i] * b[i] }
+    return total
+}
+
+// ---- rearranging (C++ rotate, reverse, next_permutation) ----
+
+// moves the first k elements to the end, in place: rotating [1, 2, 3, 4] by 1 gives [2, 3, 4, 1]; k may be negative
+fn algo_rotate<T>(a: [T], k: int) {
+    let n = a.len()
+    if n == 0 { return }
+    let s = ((k % n) + n) % n
+    if s == 0 { return }
+    let copy = a.copy()
+    for i in 0..n { a[i] = copy[(i + s) % n] }
+}
+
+// Rearranges a in place into the next larger ordering (C++ next_permutation); false, with a sorted ascending again,
+// when it was the last one. Start from a sorted array to visit all orderings.
+fn algo_next_permutation<T>(a: [T]) -> bool {
+    var i = a.len() - 2
+    while i >= 0 and a[i] >= a[i + 1] { i -= 1 }
+    if i < 0 {
+        a.reverse()
+        return false
+    }
+    var j = a.len() - 1
+    while a[j] <= a[i] { j -= 1 }
+    a.swap(i, j)
+    var lo = i + 1
+    var hi = a.len() - 1
+    while lo < hi {
+        a.swap(lo, hi)
+        lo += 1
+        hi -= 1
+    }
+    return true
+}
+
+// ---- itertools ----
+
+// every ordering of the elements, in the order of the positions (3 elements give 6 arrays); the array is not changed
+fn algo_permutations<T>(a: [T]) -> [[T]] {
+    var out: [[T]] = []
+    var cur: [T] = []
+    let used = array_make::<bool>(a.len())
+    algo_permute_rec(a, used, cur, out)
+    return out
+}
+
+fn algo_permute_rec<T>(a: [T], used: [bool], cur: [T], out: [[T]]) {
+    if cur.len() == a.len() {
+        out.push(cur.copy())
+        return
+    }
+    for i in 0..a.len() {
+        if used[i] { continue }
+        used[i] = true
+        cur.push(a[i])
+        algo_permute_rec(a, used, cur, out)
+        cur.pop()
+        used[i] = false
+    }
+}
+
+// every way to pick k elements in their original order: [1, 2, 3] with k = 2 gives [[1, 2], [1, 3], [2, 3]]
+fn algo_combinations<T>(a: [T], k: int) -> [[T]] {
+    var out: [[T]] = []
+    var cur: [T] = []
+    if k < 0 or k > a.len() { return out }
+    algo_combine_rec(a, k, 0, cur, out)
+    return out
+}
+
+fn algo_combine_rec<T>(a: [T], k: int, start: int, cur: [T], out: [[T]]) {
+    if cur.len() == k {
+        out.push(cur.copy())
+        return
+    }
+    for i in start..a.len() {
+        cur.push(a[i])
+        algo_combine_rec(a, k, i + 1, cur, out)
+        cur.pop()
+    }
+}
+
+// all pairs (x, y) with x from a and y from b (itertools.product of two lists)
+fn algo_product<A, B>(a: [A], b: [B]) -> [(A, B)] {
+    var out: [(A, B)] = []
+    for x in a { for y in b { out.push((x, y)) } }
+    return out
+}
+
+// every array that is a subset of a, the empty one first (the power set; a.len() must be at most 20)
+fn algo_subsets<T>(a: [T]) -> [[T]] {
+    assert(a.len() <= 20, "algo_subsets: at most 20 elements")
+    var out: [[T]] = []
+    for mask in 0..(1 << a.len()) {
+        var cur: [T] = []
+        for i in 0..a.len() { if (mask >> i) & 1 == 1 { cur.push(a[i]) } }
+        out.push(cur)
+    }
+    return out
+}
+
+// neighbouring pairs: [1, 2, 3] -> [(1, 2), (2, 3)] (Python pairwise)
+fn algo_pairwise<T>(a: [T]) -> [(T, T)] {
+    var out: [(T, T)] = []
+    for i in 1..a.len() { out.push((a[i - 1], a[i])) }
+    return out
+}
+
+// the elements of the array again and again, count elements in all (itertools.cycle with a limit)
+fn algo_cycle<T>(a: [T], count: int) -> [T] {
+    var out: [T] = []
+    if a.is_empty() { return out }
+    for i in 0..count { out.push(a[i % a.len()]) }
+    return out
+}
+
+// ---- JavaScript / TypeScript style helpers ----
+
+// one level of nesting removed (JavaScript flat()): [[1, 2], [3]] -> [1, 2, 3]
+fn algo_flatten<T>(a: [[T]]) -> [T] {
+    var out: [T] = []
+    for part in a { out.extend(part) }
+    return out
+}
+
+// map then flatten (JavaScript flatMap): words.flat_map(|w| w.chars())
+fn algo_flat_map<T, U>(a: [T], f: fn(T) -> [U]) -> [U] {
+    var out: [U] = []
+    for x in a { out.extend(f(x)) }
+    return out
+}
+
+// the elements grouped by key, in order of first appearance (lodash groupBy)
+fn algo_group_by<T, K>(a: [T], key: fn(T) -> K) -> {K: [T]} {
+    var out: {K: [T]} = {}
+    for x in a {
+        let k = key(x)
+        if not out.has(k) {
+            let fresh: [T] = []
+            out[k] = fresh
+        }
+        out[k].push(x)
+    }
+    return out
+}
+
+// how many elements have each key (lodash countBy)
+fn algo_count_by<T, K>(a: [T], key: fn(T) -> K) -> {K: int} {
+    var out: {K: int} = {}
+    for x in a {
+        let k = key(x)
+        out[k] = out.get(k, 0) + 1
+    }
+    return out
+}
+
+// the elements by key, a later element replacing an earlier one with the same key (lodash keyBy)
+fn algo_key_by<T, K>(a: [T], key: fn(T) -> K) -> {K: T} {
+    var out: {K: T} = {}
+    for x in a { out[key(x)] = x }
+    return out
+}
+
+// the elements without repeats of the same key, first one kept (lodash uniqBy)
+fn algo_unique_by<T, K>(a: [T], key: fn(T) -> K) -> [T] {
+    var seen: {K: bool} = {}
+    var out: [T] = []
+    for x in a {
+        let k = key(x)
+        if k in seen { continue }
+        seen[k] = true
+        out.push(x)
+    }
+    return out
+}
+
+// the longest start of the array whose elements pass the test (C++ find_if_not + take)
+fn algo_take_while<T>(a: [T], test: fn(T) -> bool) -> [T] {
+    var out: [T] = []
+    for x in a {
+        if not test(x) { break }
+        out.push(x)
+    }
+    return out
+}
+
+// the array without the longest start whose elements pass the test
+fn algo_drop_while<T>(a: [T], test: fn(T) -> bool) -> [T] {
+    var i = 0
+    while i < a.len() and test(a[i]) { i += 1 }
+    return a.skip(i)
+}
+
+// the index of the first element that passes the test, -1 if none (JavaScript findIndex)
+fn algo_find_index<T>(a: [T], test: fn(T) -> bool) -> int {
+    for i in 0..a.len() { if test(a[i]) { return i } }
+    return -1
+}
+
+// the index of the smallest element (the first on ties; C++ min_element); panics on an empty array
+fn algo_argmin<T>(a: [T]) -> int {
+    assert(a.len() > 0, "algo_argmin: the array is empty")
+    var best = 0
+    for i in 1..a.len() { if a[i] < a[best] { best = i } }
+    return best
+}
+
+// the index of the largest element (the first on ties; C++ max_element); panics on an empty array
+fn algo_argmax<T>(a: [T]) -> int {
+    assert(a.len() > 0, "algo_argmax: the array is empty")
+    var best = 0
+    for i in 1..a.len() { if a[i] > a[best] { best = i } }
+    return best
+}
+
+// three arrays side by side: zip3([1, 2], ["a", "b"], [true, false]) -> [(1, "a", true), (2, "b", false)]
+fn algo_zip3<A, B, C>(a: [A], b: [B], c: [C]) -> [(A, B, C)] {
+    var out: [(A, B, C)] = []
+    let n = min(a.len(), min(b.len(), c.len()))
+    for i in 0..n { out.push((a[i], b[i], c[i])) }
+    return out
+}
+
+// the first array split in two: the first n elements and the rest (like TypeScript's destructuring [head, ...tail])
+fn algo_split_at<T>(a: [T], n: int) -> ([T], [T]) {
+    return (a.take(n), a.skip(n))
+}
+
+// ---- sets as arrays (C++ set_union, set_intersection, set_difference; JavaScript Set methods) ----
+
+// the elements that are in a or in b, without repeats
+fn algo_union<T>(a: [T], b: [T]) -> [T] { return (a + b).unique() }
+
+// the elements of a that are also in b, without repeats
+fn algo_intersection<T>(a: [T], b: [T]) -> [T] {
+    var out: [T] = []
+    for x in a.unique() { if x in b { out.push(x) } }
+    return out
+}
+
+// the elements of a that are not in b, without repeats
+fn algo_difference<T>(a: [T], b: [T]) -> [T] {
+    var out: [T] = []
+    for x in a.unique() { if not (x in b) { out.push(x) } }
+    return out
+}

@@ -1,0 +1,84 @@
+// std/log - leveled logging, like Python's logging module.
+//
+//   import "std/log"
+//   log_info("server started on port {port}")      // INFO  server started on port 8080
+//   log_set_level(LOG_DEBUG)                        // show everything (the default level is LOG_INFO)
+//   log_set_file("app.log")                         // also append every line to a file
+//   log_timestamps(true)                            // 2026-10-27 12:00:00 INFO  message
+//   log_warn("disk almost full"); log_error("cannot open {path}")
+//
+// Lines go to standard error unless log_to_stdout(true) is called. Messages below the level are dropped.
+
+import "std/fs"
+import "std/datetime"
+
+const LOG_DEBUG = 10
+const LOG_INFO = 20
+const LOG_WARN = 30
+const LOG_ERROR = 40
+const LOG_OFF = 100
+
+var log_level_now = 20
+var log_file_path = ""
+var log_with_time = false
+var log_on_stdout = false
+var log_name_prefix = ""
+
+// messages below this level (LOG_DEBUG, LOG_INFO, LOG_WARN, LOG_ERROR, LOG_OFF) are dropped
+fn log_set_level(level: int) { log_level_now = level }
+
+// the level as set by log_set_level
+fn log_get_level() -> int { return log_level_now }
+
+// the level for a name: "debug", "info", "warn" (or "warning"), "error", "off"; nil for anything else
+fn log_level_from_name(name: str) -> int? {
+    let n = name.lower()
+    if n == "debug" { return LOG_DEBUG }
+    if n == "info" { return LOG_INFO }
+    if n == "warn" or n == "warning" { return LOG_WARN }
+    if n == "error" { return LOG_ERROR }
+    if n == "off" or n == "none" { return LOG_OFF }
+    return nil
+}
+
+// also appends every logged line to this file ("" stops that); false when the file cannot be written
+fn log_set_file(path: str) -> bool {
+    if path.is_empty() {
+        log_file_path = ""
+        return true
+    }
+    if not fs_append_file(path, "") { return false }
+    log_file_path = path
+    return true
+}
+
+// puts the local date and time in front of every line
+fn log_timestamps(on: bool) { log_with_time = on }
+
+// writes to standard output instead of standard error
+fn log_to_stdout(on: bool) { log_on_stdout = on }
+
+// text put after the level on every line, for example the program name: "[mytool] "
+fn log_set_prefix(prefix: str) { log_name_prefix = prefix }
+
+// the name of a level: "DEBUG", "INFO", "WARN", "ERROR"
+fn log_level_name(level: int) -> str {
+    if level <= LOG_DEBUG { return "DEBUG" }
+    if level <= LOG_INFO { return "INFO" }
+    if level <= LOG_WARN { return "WARN" }
+    return "ERROR"
+}
+
+// logs msg at the given level (the other log_* functions call this)
+fn log_at(level: int, msg: str) {
+    if level < log_level_now { return }
+    var line = log_level_name(level).pad_right(5) + " " + log_name_prefix + msg
+    if log_with_time { line = dt_now_local().format("%Y-%m-%d %H:%M:%S") + " " + line }
+    if log_on_stdout { println(line) } else { eprintln(line) }
+    if not log_file_path.is_empty() { fs_append_file(log_file_path, line + "\n") }
+}
+
+fn log_debug(msg: str) { log_at(LOG_DEBUG, msg) }
+fn log_info(msg: str) { log_at(LOG_INFO, msg) }
+fn log_warn(msg: str) { log_at(LOG_WARN, msg) }
+fn log_error(msg: str) { log_at(LOG_ERROR, msg) }

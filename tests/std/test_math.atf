@@ -1,0 +1,28 @@
+// tests for std/math
+import "std/math"
+
+fn main() {
+    println(math_factorial(0), math_factorial(5), math_factorial(20))
+    println(math_binomial(5, 2), math_binomial(10, 0), math_binomial(52, 5), math_binomial(3, 5))
+    println(math_isqrt(0), math_isqrt(15), math_isqrt(16), math_isqrt(1000000007))
+    println([1, 2, 3, 4, 5, 97, 100, 7919].map(|n| math_is_prime(n)))
+    println(math_primes(30))
+    println(math_primes(1), math_primes(2))
+    println(math_prime_factors(360), math_prime_factors(97), math_prime_factors(1))
+    println(math_fib(0), math_fib(1), math_fib(10), math_fib(92))
+    println(math_mod_pow(2, 10, 1000), math_mod_pow(3, 200, 1000000007), math_mod_pow(5, 0, 1))
+    println(math_lerp(10.0, 20.0, 0.25))
+
+    let data = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    println(stats_sum(data), stats_mean(data), stats_median(data))
+    println(stats_median([3.0, 1.0, 2.0]), stats_median([4.0, 1.0, 3.0, 2.0]))
+    println(stats_variance(data), stats_stdev(data))
+    println(fmt_fixed(stats_sample_variance(data), 4), fmt_fixed(stats_sample_stdev(data), 4))
+    println(stats_mode([1, 2, 2, 3, 3, 3, 2]), stats_mode(["a", "b", "b"]))
+    println(stats_percentile(data, 0.0), stats_percentile(data, 50.0), stats_percentile(data, 90.0), stats_percentile(data, 100.0))
+    println(fmt_fixed(stats_correlation([1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 6.0, 8.5]), 4))
+
+    println(catch_panic(|| { math_factorial(21) }))
+    println(catch_panic(|| { stats_mean([]) }))
+    println(catch_panic(|| { stats_sample_variance([1.0]) }))
+}

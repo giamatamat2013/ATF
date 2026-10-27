@@ -1,0 +1,31 @@
+// tests for std/text
+import "std/text"
+
+fn main() {
+    println(text_title("hello big world"), text_title("it's 3rd-time LUCKY"))
+    println(text_swapcase("Hello World 123"))
+    println(text_is_alpha("abc"), text_is_alpha("ab1"), text_is_alpha(""), text_is_alnum("ab1"), text_is_alnum("a b"))
+
+    println(text_partition("key=value=x", "="), text_partition("none", "="))
+    println(text_rpartition("a/b/c", "/"), text_rpartition("none", "/"))
+    println(text_split_n("a=b=c=d", "=", 2), text_split_n("abc", "=", 5), text_split_n("a=b", "=", 0))
+
+    println(text_words("HelloBigWorld"), text_words("hello_big-world"), text_words("HTTPServer2Go"), text_words("  "))
+    println(text_snake_case("HelloBigWorld"), text_kebab_case("helloBigWorld"))
+    println(text_camel_case("hello_big_world"), text_pascal_case("hello big world"))
+
+    println(text_wrap("the quick brown fox jumps over the lazy dog", 12))
+    println(text_wrap("a verylongwordthatdoesnotfit here", 8), text_wrap("", 10))
+    println(text_fill("one two three four", 9))
+    println(text_indent("a\n\nb", "> "))
+    println(text_dedent("    def f():\n        pass\n\n    end"))
+    println(text_shorten("hello world", 8), text_shorten("short", 8), text_shorten("hello world", 8, "~"), text_shorten("abcdef", 2))
+    println(text_distance("kitten", "sitting"), text_distance("", "abc"), text_distance("same", "same"), text_distance("flaw", "lawn"))
+
+    let vals = {"name": "Ana", "n": "3"}
+    println(text_template(r"Hi ${name}, you have $n new ${what}. Cost: $$5", vals))
+    println(text_template("tail $", vals), text_template(r"open ${name", vals))
+
+    print(text_table([["name", "qty"], ["apple", "3"], ["kiwi", "12"]]))
+    print(text_table([["name", "qty"], ["apple", "3"], ["kiwi", "12"]], right: true))
+}

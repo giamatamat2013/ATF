@@ -1,0 +1,256 @@
+// std/args - command-line parsing, like Python's argparse.
+//
+//   import "std/args"
+//   fn main(argv: [str]) -> int {
+//       let p = args_parser("greet", "Says hello")
+//       p.flag("loud", "l", "shout")
+//       p.option("times", "n", "how many times", "1")
+//       p.positional("name", "who to greet")
+//       let a = p.parse_or_exit(argv)         // prints the usage and exits on --help or on a mistake
+//       for i in 0..a.get_int("times", 1) { println("hello {a.get("name")}") }
+//       return 0
+//   }
+//
+// Accepted forms: --name value, --name=value, -n value, -n5, grouped flags -lq, a lone -- (everything after it
+// is positional), negative numbers as positional values. -h and --help are always there.
+
+struct ArgSpec {
+    name: str,
+    short: str,
+    help: str,
+    kind: int,          // 0 flag, 1 option with a value, 2 positional
+    default: str,
+    required: bool,
+}
+
+struct ArgParser {
+    prog: str,
+    about: str,
+    specs: [ArgSpec],
+    allow_rest: bool,
+}
+
+struct ParsedArgs {
+    values: {str: str},
+    flags: {str: bool},
+    rest: [str],
+    help_requested: bool,
+}
+
+// a new parser; prog is the program name shown in the usage line
+fn args_parser(prog: str, about: str = "") -> ArgParser {
+    let specs: [ArgSpec] = []
+    return ArgParser(prog, about, specs, false)
+}
+
+impl ArgParser {
+    // a switch without a value: --name (and -s when short is not "")
+    fn flag(self, name: str, short: str, help: str) {
+        self.specs.push(ArgSpec(name, short, help, 0, "", false))
+    }
+
+    // an option with a value; default "" means no default
+    fn option(self, name: str, short: str, help: str, default: str = "") {
+        self.specs.push(ArgSpec(name, short, help, 1, default, false))
+    }
+
+    // an option that must be given
+    fn required_option(self, name: str, short: str, help: str) {
+        self.specs.push(ArgSpec(name, short, help, 1, "", true))
+    }
+
+    // the next positional argument, in the order they are declared; required unless required is false
+    fn positional(self, name: str, help: str, required: bool = true) {
+        self.specs.push(ArgSpec(name, "", help, 2, "", required))
+    }
+
+    // allows more positional arguments than declared; they are collected in ParsedArgs.rest
+    fn allow_extra(self) { self.allow_rest = true }
+
+    fn find_long(self, name: str) -> ArgSpec? {
+        for s in self.specs { if s.kind != 2 and s.name == name { return s } }
+        return nil
+    }
+
+    fn find_short(self, short: str) -> ArgSpec? {
+        for s in self.specs { if s.kind != 2 and not s.short.is_empty() and s.short == short { return s } }
+        return nil
+    }
+
+    // the one-line usage: Usage: prog [options] <input> [output]
+    fn usage(self) -> str {
+        var parts = ["Usage: " + self.prog, "[options]"]
+        for s in self.specs {
+            if s.kind == 2 { parts.push(if s.required { "<" + s.name + ">" } else { "[" + s.name + "]" }) }
+        }
+        if self.allow_rest { parts.push("[more...]") }
+        return " ".join(parts)
+    }
+
+    // the full help text: usage, description, the arguments and the options
+    fn help(self) -> str {
+        var sb = str_builder()
+        sb.add(self.usage() + "\n")
+        if not self.about.is_empty() { sb.add("\n" + self.about + "\n") }
+        var names: [str] = []
+        var texts: [str] = []
+        for s in self.specs {
+            if s.kind != 2 { continue }
+            names.push("<" + s.name + ">")
+            texts.push(s.help)
+        }
+        let pos_count = names.len()
+        for s in self.specs {
+            if s.kind == 2 { continue }
+            var left = if s.short.is_empty() { "    --" + s.name } else { "-" + s.short + ", --" + s.name }
+            if s.kind == 1 { left = left + " <value>" }
+            var right = s.help
+            if s.required { right = right + " (required)" }
+            if not s.default.is_empty() { right = right + " (default: " + s.default + ")" }
+            names.push(left)
+            texts.push(right)
+        }
+        names.push("-h, --help")
+        texts.push("show this help and exit")
+        var w = 0
+        for n in names { w = max(w, n.len()) }
+        if pos_count > 0 { sb.add("\nArguments:\n") }
+        for i in 0..names.len() {
+            if i == pos_count { sb.add("\nOptions:\n") }
+            sb.add(("  " + pad_right(names[i], w) + "  " + texts[i]).trim_end() + "\n")
+        }
+        return sb.finish()
+    }
+
+    // Parses the arguments (without the program name; in `fn main(argv: [str])` pass argv).
+    // Err holds a readable message. With -h or --help the result has help_requested set and nothing else is checked.
+    fn parse(self, argv: [str]) -> Result<ParsedArgs, str> {
+        var values: {str: str} = {}
+        var flags: {str: bool} = {}
+        var rest: [str] = []
+        var help = false
+        var positional_specs: [ArgSpec] = []
+        for s in self.specs { if s.kind == 2 { positional_specs.push(s) } }
+        var next_pos = 0
+        var only_positional = false
+        var i = 0
+        while i < argv.len() {
+            let a = argv[i]
+            var is_positional = only_positional or a == "-" or not a.starts_with("-")
+            if not is_positional and a != "--" and a != "-h" and a != "--help" and not a.starts_with("--") {
+                if a[1..].parse_float() != nil { is_positional = true }
+            }
+            if is_positional {
+                if next_pos < positional_specs.len() {
+                    values[positional_specs[next_pos].name] = a
+                    next_pos += 1
+                } else if self.allow_rest {
+                    rest.push(a)
+                } else {
+                    return Result.Err("unexpected argument '{a}'")
+                }
+            } else if a == "--" {
+                only_positional = true
+            } else if a == "-h" or a == "--help" {
+                help = true
+            } else if a.starts_with("--") {
+                let body = a[2..]
+                let eq = body.find("=")
+                let name = if eq >= 0 { body[..eq] } else { body }
+                let found = self.find_long(name)
+                if found == nil { return Result.Err("unknown option --{name}") }
+                let spec = found!
+                if spec.kind == 0 {
+                    if eq >= 0 { return Result.Err("--{name} does not take a value") }
+                    flags[name] = true
+                } else if eq >= 0 {
+                    values[name] = body[eq + 1..]
+                } else {
+                    i += 1
+                    if i >= argv.len() { return Result.Err("--{name} needs a value") }
+                    values[name] = argv[i]
+                }
+            } else {
+                var j = 1
+                while j < a.len() {
+                    let letter = a[j..j + 1]
+                    let found = self.find_short(letter)
+                    if found == nil { return Result.Err("unknown option -{letter}") }
+                    let spec = found!
+                    if spec.kind == 0 {
+                        flags[spec.name] = true
+                        j += 1
+                    } else {
+                        if j + 1 < a.len() {
+                            values[spec.name] = a[j + 1..]
+                        } else {
+                            i += 1
+                            if i >= argv.len() { return Result.Err("-{letter} needs a value") }
+                            values[spec.name] = argv[i]
+                        }
+                        break
+                    }
+                }
+            }
+            i += 1
+        }
+        if not help {
+            for s in self.specs {
+                if s.kind == 0 or s.name in values { continue }
+                if s.required {
+                    return Result.Err(if s.kind == 2 { "missing argument <{s.name}>" } else { "missing required option --{s.name}" })
+                }
+                if not s.default.is_empty() { values[s.name] = s.default }
+            }
+        }
+        return Result.Ok(ParsedArgs(values, flags, rest, help))
+    }
+
+    // like parse, but on --help prints the help and exits with 0, and on a mistake prints the message and the usage to
+    // standard error and exits with 2
+    fn parse_or_exit(self, argv: [str]) -> ParsedArgs {
+        match self.parse(argv) {
+            Result.Ok(a) => {
+                if a.help_requested {
+                    print(self.help())
+                    exit(0)
+                }
+                return a
+            }
+            Result.Err(e) => {
+                eprintln("{self.prog}: error: {e}")
+                eprintln(self.usage())
+                exit(2)
+            }
+        }
+    }
+}
+
+impl ParsedArgs {
+    // true when the flag was given or the option / positional has a value
+    fn has(self, name: str) -> bool { return name in self.flags or name in self.values }
+
+    // true when the flag was given
+    fn flag(self, name: str) -> bool { return self.flags.get(name, false) }
+
+    // the value of an option or positional argument, or fallback when it has none
+    fn get(self, name: str, fallback: str = "") -> str { return self.values.get(name, fallback) }
+
+    // the value as an int; fallback when it is missing; panics with a clear message when it is not a number
+    fn get_int(self, name: str, fallback: int = 0) -> int {
+        let v = self.values.try_get(name)
+        if v == nil { return fallback }
+        let n = v!.parse_int()
+        if n == nil { panic("--{name} expects a whole number, got '{v!}'") }
+        return n!
+    }
+
+    // the value as a float; fallback when it is missing
+    fn get_float(self, name: str, fallback: float = 0.0) -> float {
+        let v = self.values.try_get(name)
+        if v == nil { return fallback }
+        let x = v!.parse_float()
+        if x == nil { panic("--{name} expects a number, got '{v!}'") }
+        return x!
+    }
+}

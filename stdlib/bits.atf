@@ -1,0 +1,137 @@
+// std/bits - bit tricks from C++ (<bit>, std::bitset) and C, on 64-bit ints.
+//
+//   import "std/bits"
+//   bits_length(255)             == 8          // bits needed to write the number
+//   bits_is_power_of_two(64)     == true
+//   bits_next_power_of_two(100)  == 128
+//   bits_set(0, 3)               == 8          // set bit number 3 (bit 0 is the lowest)
+//   bits_rotl(1, 63)             == INT_MIN
+//   bits_to_str(5, 8)            == "00000101"
+//
+// A negative int has all 64 bits (two's complement); `n.popcount()` in the prelude counts the 1 bits.
+
+// the number of bits needed to write n: 0 for 0, 8 for 255, 64 for a negative number
+fn bits_length(n: int) -> int {
+    if n < 0 { return 64 }
+    var len = 0
+    var m = n
+    while m > 0 {
+        len += 1
+        m >>= 1
+    }
+    return len
+}
+
+// how many 0 bits are at the low end; 64 for 0
+fn bits_trailing_zeros(n: int) -> int {
+    if n == 0 { return 64 }
+    var count = 0
+    var m = n
+    while m & 1 == 0 {
+        count += 1
+        m = m >>> 1
+    }
+    return count
+}
+
+// how many 0 bits are at the high end of the 64 bits; 64 for 0
+fn bits_leading_zeros(n: int) -> int { return 64 - bits_length(n) }
+
+// 1 when the number of 1 bits is odd, otherwise 0
+fn bits_parity(n: int) -> int { return n.popcount() & 1 }
+
+// true when n is 1, 2, 4, 8, ...
+fn bits_is_power_of_two(n: int) -> bool { return n > 0 and n & (n - 1) == 0 }
+
+// the smallest power of two that is >= n (1 for n <= 1); panics when it would not fit (n > 2^62)
+fn bits_next_power_of_two(n: int) -> int {
+    if n <= 1 { return 1 }
+    assert(n <= (1 << 62), "bits_next_power_of_two: the result does not fit in an int")
+    return 1 << bits_length(n - 1)
+}
+
+// true when bit number i (0 is the lowest) of n is 1
+fn bits_get(n: int, i: int) -> bool {
+    assert(i >= 0 and i < 64, "bits: the bit number must be 0..63")
+    return (n >>> i) & 1 == 1
+}
+
+// n with bit number i set to 1
+fn bits_set(n: int, i: int) -> int {
+    assert(i >= 0 and i < 64, "bits: the bit number must be 0..63")
+    return n | (1 << i)
+}
+
+// n with bit number i set to 0
+fn bits_clear(n: int, i: int) -> int {
+    assert(i >= 0 and i < 64, "bits: the bit number must be 0..63")
+    return n & ~(1 << i)
+}
+
+// n with bit number i flipped
+fn bits_toggle(n: int, i: int) -> int {
+    assert(i >= 0 and i < 64, "bits: the bit number must be 0..63")
+    return n ^ (1 << i)
+}
+
+// the 64 bits turned left by k places; the bits that fall off the top come back at the bottom (k may be negative)
+fn bits_rotl(n: int, k: int) -> int {
+    let s = ((k % 64) + 64) % 64
+    if s == 0 { return n }
+    return (n << s) | (n >>> (64 - s))
+}
+
+// the 64 bits turned right by k places
+fn bits_rotr(n: int, k: int) -> int { return bits_rotl(n, -k) }
+
+// the 64 bits in reverse order
+fn bits_reverse(n: int) -> int {
+    var r = 0
+    var m = n
+    for i in 0..64 {
+        r = (r << 1) | (m & 1)
+        m = m >>> 1
+    }
+    return r
+}
+
+// the Gray code of n: neighbours differ in one bit only
+fn bits_to_gray(n: int) -> int { return n ^ (n >>> 1) }
+
+// the number whose Gray code is g
+fn bits_from_gray(g: int) -> int {
+    var n = g
+    var shift = 1
+    while shift < 64 {
+        n = n ^ (n >>> shift)
+        shift = shift * 2
+    }
+    return n
+}
+
+// the lowest width bits of n as 0 and 1 characters (like C++ std::bitset<width>::to_string): bits_to_str(5, 8) == "00000101"
+fn bits_to_str(n: int, width: int = 64) -> str {
+    assert(width >= 1 and width <= 64, "bits_to_str: width must be 1..64")
+    var sb = str_builder()
+    var i = width - 1
+    while i >= 0 {
+        sb.add_byte(if (n >>> i) & 1 == 1 { '1' } else { '0' })
+        i -= 1
+    }
+    return sb.finish()
+}
+
+// the int written by 0 and 1 characters ("101" is 5, "_" and spaces are skipped); nil for any other character or more than 64 digits
+fn bits_from_str(s: str) -> int? {
+    var r = 0
+    var digits = 0
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == '_' or c == ' ' { continue }
+        if c != '0' and c != '1' { return nil }
+        digits += 1
+        if digits > 64 { return nil }
+        r = (r << 1) | (c - '0')
+    }
+    return r
+}

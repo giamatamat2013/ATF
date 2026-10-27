@@ -1,0 +1,31 @@
+Hello Big World It's 3rd-Time Lucky
+hELLO wORLD 123
+true false false true false
+("key", "=", "value=x") ("none", "", "")
+("a/b", "/", "c") ("", "", "none")
+["a", "b", "c=d"] ["abc"] ["a=b"]
+["hello", "big", "world"] ["hello", "big", "world"] ["http", "server2", "go"] []
+hello_big_world hello-big-world
+helloBigWorld HelloBigWorld
+["the quick", "brown fox", "jumps over", "the lazy dog"]
+["a", "verylongwordthatdoesnotfit", "here"] []
+one two
+three
+four
+> a
+
+> b
+def f():
+    pass
+
+end
+hello... short hello w~ ..
+3 3 0 2
+Hi Ana, you have 3 new ${what}. Cost: $5
+tail $ open ${name
+name   qty
+apple  3
+kiwi   12
+ name  qty
+apple    3
+ kiwi   12

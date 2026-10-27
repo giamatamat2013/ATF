@@ -1,0 +1,16 @@
+INFO  started
+WARN  careful
+ERROR broken
+DEBUG now visible
+INFO  [app] with prefix
+ERROR still shown
+10 30 -1
+true
+INFO  to file
+ERROR also to file
+INFO  to file
+ERROR also to file
+
+INFO  not to file anymore
+2
+27 -   :  INFO  x

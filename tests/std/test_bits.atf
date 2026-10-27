@@ -1,0 +1,24 @@
+// tests for std/bits
+import "std/bits"
+
+fn main() {
+    println(bits_length(0), bits_length(1), bits_length(255), bits_length(256), bits_length(-1))
+    println(bits_trailing_zeros(8), bits_trailing_zeros(12), bits_trailing_zeros(1), bits_trailing_zeros(0))
+    println(bits_leading_zeros(1), bits_leading_zeros(255), bits_leading_zeros(0), bits_leading_zeros(-1))
+    println(bits_parity(7), bits_parity(3), bits_parity(0))
+    println([0, 1, 2, 3, 64, 96, 1 << 62].map(|n| bits_is_power_of_two(n)))
+    println(bits_next_power_of_two(0), bits_next_power_of_two(1), bits_next_power_of_two(5), bits_next_power_of_two(64), bits_next_power_of_two(65))
+    println(bits_get(5, 0), bits_get(5, 1), bits_get(5, 2), bits_get(-1, 63))
+    println(bits_set(0, 3), bits_clear(15, 0), bits_toggle(5, 1), bits_toggle(5, 0))
+    println(bits_rotl(1, 3), bits_rotl(1, 63) == INT_MIN, bits_rotl(INT_MIN, 1), bits_rotr(1, 1) == INT_MIN, bits_rotl(5, 0), bits_rotl(5, 64), bits_rotl(5, -1) == bits_rotr(5, 1))
+    println(bits_reverse(1) == INT_MIN, bits_reverse(bits_reverse(123456789)), bits_reverse(0))
+    var gray: [int] = []
+    for i in 0..8 { gray.push(bits_to_gray(i)) }
+    println(gray, range(8).map(|i| bits_from_gray(bits_to_gray(i)) == i).all(|b| b))
+    println(bits_from_gray(bits_to_gray(1234567)))
+    println(bits_to_str(5, 8), bits_to_str(255, 4), bits_to_str(-1, 8), bits_to_str(0, 1), bits_to_str(5).len())
+    println(bits_from_str("101"), bits_from_str("1111_0000"), bits_from_str("10 01"), bits_from_str(""), bits_from_str("102"))
+    println(bits_from_str("1".repeat(64)) ?? 0, bits_from_str("1".repeat(65)))
+    println(catch_panic(|| { bits_get(1, 64) }))
+    println(catch_panic(|| { bits_next_power_of_two((1 << 62) + 1) }))
+}

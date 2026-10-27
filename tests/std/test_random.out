@@ -1,0 +1,14 @@
+random_range: true
+random_sample: true [] [1, 2, 3, 4, 5, 6] [1, 2, 3, 4, 5, 6]
+random_choices: 50 true
+random_weighted: true true only
+random_gauss: true true
+random_bool: true false
+random_shuffled: true [1, 2, 3, 4, 5, 6]
+random_string: 12 true xxxxx 
+random_hex: 16 true 0
+random_uuid: true true
+repeatable: true
+"random_range: the range is empty"
+"random_range: by must not be 0"
+"random_sample: k must be between 0 and the array length"

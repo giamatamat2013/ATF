@@ -1,0 +1,35 @@
+Usage: tool [options] <input> [extra]
+
+Copies files around
+
+Arguments:
+  <input>               the input file
+  <extra>               an optional second file
+
+Options:
+  -v, --verbose         more output
+  -q, --quiet           less output
+  -o, --output <value>  where to write (default: out.txt)
+  -n, --count <value>   how many
+  -h, --help            show this help and exit
+Usage: tool [options] <input> [extra]
+ok: input=a.txt extra=- output=out.txt count=-1 verbose=false quiet=false rest=[] help=false
+ok: input=a.txt extra=b.txt output=out.txt count=-1 verbose=true quiet=false rest=[] help=false
+ok: input=a.txt extra=- output=x.bin count=5 verbose=true quiet=false rest=[] help=false
+ok: input=a.txt extra=- output=y count=7 verbose=true quiet=true rest=[] help=false
+ok: input=a.txt extra=- output=out.txt count=-5 verbose=false quiet=false rest=[] help=false
+ok: input=a.txt extra=--not-a-flag output=out.txt count=-1 verbose=false quiet=false rest=[] help=false
+ok: input=- extra=- output= count=-1 verbose=false quiet=false rest=[] help=true
+ok: input=a.txt extra=- output= count=-1 verbose=false quiet=false rest=[] help=true
+error: missing argument <input>
+error: unexpected argument 'c.txt'
+error: unknown option --nope
+error: unknown option -x
+error: --count needs a value
+error: -o needs a value
+error: --verbose does not take a value
+error: missing required option --mode
+ok: input=- extra=- output= count=-1 verbose=false quiet=false rest=["x", "y"] help=false
+Usage: rest [options] [more...]
+"--count expects a whole number, got 'abc'"
+1.5 true false false

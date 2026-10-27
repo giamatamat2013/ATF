@@ -1,0 +1,262 @@
+// std/text - text helpers known from Python (textwrap, string, str methods) and other languages.
+//
+//   import "std/text"
+//   text_title("hello big world")          == "Hello Big World"
+//   text_snake_case("HelloBigWorld")       == "hello_big_world"
+//   text_wrap("the quick brown fox", 10)   == ["the quick", "brown fox"]
+//   text_template("Hi ${name}!", {"name": "Ana"}) == "Hi Ana!"
+//   print(text_table([["name", "age"], ["Ana", "7"]]))
+//
+// Text is bytes: the case functions change only ASCII letters, and widths count bytes.
+
+fn text_is_lower_byte(c: byte) -> bool { return c >= 'a' and c <= 'z' }
+fn text_is_upper_byte(c: byte) -> bool { return c >= 'A' and c <= 'Z' }
+fn text_is_alnum_byte(c: byte) -> bool { return c.is_digit() or c.is_alpha() }
+
+// true when the text is not empty and every byte is an ASCII letter
+fn text_is_alpha(s: str) -> bool {
+    if s.is_empty() { return false }
+    for i in 0..s.len() { if not s.byte_at(i).is_alpha() { return false } }
+    return true
+}
+
+// true when the text is not empty and every byte is an ASCII letter or digit
+fn text_is_alnum(s: str) -> bool {
+    if s.is_empty() { return false }
+    for i in 0..s.len() { if not text_is_alnum_byte(s.byte_at(i)) { return false } }
+    return true
+}
+
+// the first letter of every word in uppercase and the others in lowercase: "hello big world" -> "Hello Big World"
+fn text_title(s: str) -> str {
+    var sb = str_builder()
+    var start = true
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c.is_alpha() {
+            sb.add(if start { s[i..i + 1].upper() } else { s[i..i + 1].lower() })
+            start = false
+        } else {
+            sb.add_byte(c)
+            start = not (c.is_digit() or c == '\'')
+        }
+    }
+    return sb.finish()
+}
+
+// upper case letters become lower case and the other way round
+fn text_swapcase(s: str) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if text_is_upper_byte(c) { sb.add_byte(byte(c + 32)) }
+        else if text_is_lower_byte(c) { sb.add_byte(byte(c - 32)) }
+        else { sb.add_byte(c) }
+    }
+    return sb.finish()
+}
+
+// splits at the first sep: (before, sep, after); (s, "", "") when sep is not found
+fn text_partition(s: str, sep: str) -> (str, str, str) {
+    let i = s.find(sep)
+    if i < 0 or sep.is_empty() { return (s, "", "") }
+    return (s[..i], sep, s[i + sep.len()..])
+}
+
+// splits at the last sep: (before, sep, after); ("", "", s) when sep is not found
+fn text_rpartition(s: str, sep: str) -> (str, str, str) {
+    let i = s.rfind(sep)
+    if i < 0 or sep.is_empty() { return ("", "", s) }
+    return (s[..i], sep, s[i + sep.len()..])
+}
+
+// like split, but cuts at most max_splits times (the rest stays in the last piece):
+// text_split_n("a=b=c", "=", 1) == ["a", "b=c"]
+fn text_split_n(s: str, sep: str, max_splits: int) -> [str] {
+    var out: [str] = []
+    if sep.is_empty() { out.push(s); return out }
+    var pos = 0
+    while out.len() < max_splits {
+        let i = s.find_from(sep, pos)
+        if i < 0 { break }
+        out.push(s[pos..i])
+        pos = i + sep.len()
+    }
+    out.push(s[pos..])
+    return out
+}
+
+// the words of a name written in any style: "HelloBigWorld", "hello_big-world" and "hello big world" give ["hello", "big", "world"]
+fn text_words(s: str) -> [str] {
+    var out: [str] = []
+    var cur = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if not text_is_alnum_byte(c) {
+            if cur.len() > 0 { out.push(cur.finish().lower()); cur.clear() }
+            continue
+        }
+        let prev_lower = i > 0 and (text_is_lower_byte(s.byte_at(i - 1)) or s.byte_at(i - 1).is_digit())
+        let next_lower = i + 1 < s.len() and text_is_lower_byte(s.byte_at(i + 1))
+        let prev_upper = i > 0 and text_is_upper_byte(s.byte_at(i - 1))
+        if text_is_upper_byte(c) and cur.len() > 0 and (prev_lower or (prev_upper and next_lower)) {
+            out.push(cur.finish().lower())
+            cur.clear()
+        }
+        cur.add_byte(c)
+    }
+    if cur.len() > 0 { out.push(cur.finish().lower()) }
+    return out
+}
+
+// "HelloBigWorld" -> "hello_big_world"
+fn text_snake_case(s: str) -> str { return "_".join(text_words(s)) }
+
+// "HelloBigWorld" -> "hello-big-world"
+fn text_kebab_case(s: str) -> str { return "-".join(text_words(s)) }
+
+// "hello_big_world" -> "helloBigWorld"
+fn text_camel_case(s: str) -> str {
+    var out = ""
+    for w in text_words(s) { out = out + (if out.is_empty() { w } else { w.capitalize() }) }
+    return out
+}
+
+// "hello_big_world" -> "HelloBigWorld"
+fn text_pascal_case(s: str) -> str {
+    var out = ""
+    for w in text_words(s) { out = out + w.capitalize() }
+    return out
+}
+
+// Breaks the text into lines of at most width bytes at the spaces (a longer word gets a line of its own).
+// Runs of whitespace count as one space; empty text gives [].
+fn text_wrap(s: str, width: int) -> [str] {
+    var lines: [str] = []
+    var cur = ""
+    for w in s.split_whitespace() {
+        if cur.is_empty() { cur = w }
+        else if cur.len() + 1 + w.len() <= width { cur = cur + " " + w }
+        else {
+            lines.push(cur)
+            cur = w
+        }
+    }
+    if not cur.is_empty() { lines.push(cur) }
+    return lines
+}
+
+// text_wrap joined with newlines
+fn text_fill(s: str, width: int) -> str { return "\n".join(text_wrap(s, width)) }
+
+// prefix added in front of every non-empty line
+fn text_indent(s: str, prefix: str) -> str {
+    var out: [str] = []
+    for line in s.lines() { out.push(if line.trim().is_empty() { line } else { prefix + line }) }
+    return "\n".join(out)
+}
+
+// removes the leading whitespace that all non-empty lines have in common
+fn text_dedent(s: str) -> str {
+    let lines = s.lines()
+    var common = -1
+    for line in lines {
+        if line.trim().is_empty() { continue }
+        var n = 0
+        while n < line.len() and (line.byte_at(n) == ' ' or line.byte_at(n) == 9) { n += 1 }
+        if common < 0 or n < common { common = n }
+    }
+    if common <= 0 { return "\n".join(lines) }
+    var out: [str] = []
+    for line in lines { out.push(if line.len() >= common { line[common..] } else { "" }) }
+    return "\n".join(out)
+}
+
+// the text cut to at most width bytes, ending in placeholder when it had to be cut: text_shorten("hello world", 8) == "hello..."
+fn text_shorten(s: str, width: int, placeholder: str = "...") -> str {
+    if s.len() <= width { return s }
+    if width <= placeholder.len() { return placeholder[..max(width, 0)] }
+    return s[..width - placeholder.len()].trim_end() + placeholder
+}
+
+// the number of single-byte edits (insert, delete, change) that turn a into b - handy for "did you mean ...?"
+fn text_distance(a: str, b: str) -> int {
+    var prev = array_make::<int>(b.len() + 1)
+    var cur = array_make::<int>(b.len() + 1)
+    for j in 0..=b.len() { prev[j] = j }
+    for i in 1..=a.len() {
+        cur[0] = i
+        for j in 1..=b.len() {
+            let cost = if a.byte_at(i - 1) == b.byte_at(j - 1) { 0 } else { 1 }
+            cur[j] = min(min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost)
+        }
+        let t = prev
+        prev = cur
+        cur = t
+    }
+    return prev[b.len()]
+}
+
+// Replaces ${name} (or $name) by the value in values, like Python's string.Template.
+// A name that is missing stays as written; $$ gives a single $.
+fn text_template(s: str, values: {str: str}) -> str {
+    var sb = str_builder()
+    var i = 0
+    let n = s.len()
+    while i < n {
+        let c = s.byte_at(i)
+        if c != '$' or i + 1 >= n {
+            sb.add_byte(c)
+            i += 1
+            continue
+        }
+        let d = s.byte_at(i + 1)
+        if d == '$' {
+            sb.add_byte('$')
+            i += 2
+        } else if d == '{' {
+            let close = s.find_from("}", i + 2)
+            if close < 0 {
+                sb.add_byte(c)
+                i += 1
+                continue
+            }
+            let name = s[i + 2..close]
+            sb.add(values.get(name, s[i..close + 1]))
+            i = close + 1
+        } else if d.is_alpha() or d == '_' {
+            var j = i + 1
+            while j < n and (text_is_alnum_byte(s.byte_at(j)) or s.byte_at(j) == '_') { j += 1 }
+            let name = s[i + 1..j]
+            sb.add(values.get(name, s[i..j]))
+            i = j
+        } else {
+            sb.add_byte(c)
+            i += 1
+        }
+    }
+    return sb.finish()
+}
+
+// Rows of cells as a text table: every column as wide as its widest cell, columns separated by two spaces,
+// no trailing spaces, every line ends with a newline. Numbers look better aligned right: pass right: true.
+fn text_table(rows: [[str]], right: bool = false) -> str {
+    var widths: [int] = []
+    for row in rows {
+        for j in 0..row.len() {
+            if j >= widths.len() { widths.push(0) }
+            widths[j] = max(widths[j], row[j].len())
+        }
+    }
+    var sb = str_builder()
+    for row in rows {
+        var line = str_builder()
+        for j in 0..row.len() {
+            if j > 0 { line.add("  ") }
+            line.add(if right { pad_left(row[j], widths[j]) } else { pad_right(row[j], widths[j]) })
+        }
+        sb.add(line.finish().trim_end())
+        sb.add("\n")
+    }
+    return sb.finish()
+}

@@ -1,0 +1,50 @@
+// numstats - a small command-line program built from std/args, std/log, std/text and std/math.
+//
+// Real use:  atf run examples/numstats.atf -v --title=sales 3,1,4,1,5
+// Here the arguments are fixed so that the example prints the same thing every time.
+import "std/args"
+import "std/log"
+import "std/text"
+import "std/math"
+
+fn summarize(nums: [float], title: str) {
+    println(text_title(title))
+    println("=".repeat(title.len()))
+    print(text_table([
+        ["count", str(nums.len())],
+        ["mean", fmt_fixed(stats_mean(nums), 2)],
+        ["median", fmt_fixed(stats_median(nums), 2)],
+        ["stdev", fmt_fixed(stats_stdev(nums), 2)],
+        ["p90", fmt_fixed(stats_percentile(nums, 90.0), 2)],
+        ["min", fmt_fixed(nums.min(), 2)],
+        ["max", fmt_fixed(nums.max(), 2)],
+    ], right: true))
+}
+
+fn main(argv: [str]) -> int {
+    let p = args_parser("numstats", "Summarises a list of numbers")
+    p.flag("verbose", "v", "explain what happens")
+    p.option("title", "t", "heading of the report", "monthly sales report")
+    p.positional("numbers", "comma separated numbers", false)
+    let given = if argv.len() > 0 { argv } else { ["-v", "3,1,4,1,5,9,2,6,5,3"] }
+    let a = p.parse_or_exit(given)
+
+    log_to_stdout(true)
+    if a.flag("verbose") { log_set_level(LOG_DEBUG) }
+
+    var nums: [float] = []
+    for part in a.get("numbers", "1,2,3").split(",") {
+        let x = part.trim().parse_float()
+        if x == nil {
+            log_error("not a number: '{part}'")
+            return 1
+        }
+        nums.push(x!)
+    }
+    log_debug("read {nums.len()} numbers")
+    summarize(nums, a.get("title"))
+
+    let primes = nums.map(|x| int(x)).filter(|n| math_is_prime(n))
+    log_info("prime values: {primes.unique()}")
+    return 0
+}

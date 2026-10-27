@@ -2264,6 +2264,57 @@ Run it with `atf run prog.atf one "two words"` to see the arguments (`args` does
 `getenv("PATH")` returns an environment variable (or `nil`), and `exit(code)` ends the program at once.
 `run_command("cmd /c dir")` and `run_process("prog.exe", ["arg"])` start another program, wait for it and return its exit code.
 
+### Building a whole command-line program
+
+Four modules give a program the pieces Python programmers know: `std/args` (like `argparse`), `std/log` (like `logging`),
+`std/text` (like `textwrap` and `string.Template`) and `std/math` (like `math` and `statistics`).
+A real program passes `main`'s `args` to `parse_or_exit`; this sample passes a list so that it can run anywhere.
+
+<!-- id: tools -->
+```atf
+import "std/args"
+import "std/log"
+import "std/text"
+import "std/math"
+
+fn main() {
+    let p = args_parser("stats", "Summarises numbers")
+    p.flag("verbose", "v", "explain what happens")
+    p.option("title", "t", "heading", "Report")
+    p.positional("numbers", "comma separated numbers")
+    let a = p.parse_or_exit(["-v", "--title=sales", "3,1,4,1,5"])   // real code: p.parse_or_exit(args)
+
+    log_to_stdout(true)                       // log lines go to standard error by default
+    if a.flag("verbose") { log_set_level(LOG_DEBUG) }
+    log_debug("parsing {a.get("numbers")}")
+
+    var nums: [float] = []
+    for part in a.get("numbers").split(",") { nums.push(part.to_float()) }
+    println(text_title(a.get("title")))
+    print(text_table([
+        ["mean", fmt_fixed(stats_mean(nums), 2)],
+        ["median", fmt_fixed(stats_median(nums), 2)],
+        ["max", fmt_fixed(nums.max(), 2)],
+    ]))
+    println(text_snake_case("MeanOfNumbers"), math_primes(20).len())
+}
+```
+```output
+DEBUG parsing 3,1,4,1,5
+Sales
+mean    2.80
+median  3.00
+max     5.00
+mean_of_numbers 8
+```
+
+`--help` prints the usage that `args_parser` built from your declarations, and a mistake such as an unknown option prints a message
+and exits with code 2. `std/text` also has `text_wrap`, `text_template` (`${name}` placeholders), `text_distance` for
+"did you mean ...?" and the case converters; `std/math` has `math_is_prime`, `math_mod_pow`, `stats_stdev` and more. `std/algo` collects algorithms from C++ (`algo_lower_bound`,
+`algo_next_permutation`), Python's itertools (`algo_combinations`, `algo_product`) and JavaScript (`algo_group_by`, `algo_flatten`, `algo_union`). `std/random` adds Python's `random` extras (`random_sample`, `random_weighted`,
+`random_gauss`, `random_uuid`) and `std/bits` the bit tricks of C++ (`bits_rotl`, `bits_is_power_of_two`, `bits_to_str`).
+Every function is listed in [STDLIB.md](STDLIB.md).
+
 ### Time and random numbers
 
 <!-- id: random -->
@@ -2447,7 +2498,7 @@ Beyond the basics, `std/ui` has what a whole application needs:
 | a dialog | `dialog("Title", body, [buttons], on_close)`, or `modal(content, on_close)` for your own card |
 | a hint on hover | `.tooltip("text")` |
 | small symbols | `icon("save")`, `icon("search")`, ... (a list is in [STDLIB.md](STDLIB.md#stdui)) |
-| drawing | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, with `.on_pointer(\|x, y\| ..)` |
+| drawing | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, with `.on_pointer(\|x, y\| ..)`. `c.pixels(x, y, w, h, colors, pw, ph)` draws a picture from an `[int]` of `0xRRGGBB` values: fast enough for software rendering. For games: `ui_key_down("w")`, `ui_mouse_held(0)` (0 left, 1 right, 2 middle), and mouse look with `ui_mouse_capture(true)` + `ui_mouse_delta()` |
 | shortcuts | `ui_shortcut("ctrl+s", save)` |
 | standard dialogs | `message_box`, `confirm_box`, `open_file_dialog`, `save_file_dialog` |
 | the clipboard | `clipboard_get()`, `clipboard_set(text)` |
@@ -2562,7 +2613,8 @@ dialogs, a dark theme and automatic saving, is in `examples/ui/notes.atf`.
 
 The complete reference is in [STDLIB.md](STDLIB.md#stdui). Larger programs are in `examples/ui/`: `counter.atf`, `todo.atf` (a
 task list with a text box, check boxes and filters) and `dashboard.atf` (a sidebar, gradient cards, a bar chart, settings and
-a light and dark theme).
+a light and dark theme). `minecraft.atf` is a small first-person block world (a ray caster drawn on a `canvas`, walking, jumping,
+breaking and placing blocks).
 
 ---
 

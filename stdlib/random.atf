@@ -1,0 +1,103 @@
+// std/random - more random numbers, like Python's random module (the prelude has rand_int, rand_float, rand_choice, shuffle).
+//
+//   import "std/random"
+//   random_range(0, 10)                   // 0..9, like Python's randrange (the end is not included)
+//   random_range(0, 100, 5)               // 0, 5, 10 ... 95
+//   random_sample([1, 2, 3, 4, 5], 2)     // 2 different elements
+//   random_choices(["a", "b"], 5)         // 5 elements, repeats allowed
+//   random_weighted(["rare", "common"], [1.0, 9.0])
+//   random_gauss(100.0, 15.0)             // normally distributed
+//   random_uuid()                         // "3f2b8c1e-...-4..."
+//
+// All of them use the same generator as rand_int, so rand_seed(n) makes a run repeatable.
+
+// a random number from lo up to (not including) hi, moving in steps of by: random_range(0, 10, 3) is 0, 3, 6 or 9
+fn random_range(lo: int, hi: int, by: int = 1) -> int {
+    assert(by != 0, "random_range: by must not be 0")
+    var count = 0
+    if by > 0 { count = (hi - lo + by - 1) / by } else { count = (lo - hi - by - 1) / (-by) }
+    assert(count > 0, "random_range: the range is empty")
+    return lo + rand_int(0, count - 1) * by
+}
+
+// true with probability p (0.5 by default)
+fn random_bool(p: float = 0.5) -> bool { return rand_float() < p }
+
+// a normally distributed number with the given mean and standard deviation (Box-Muller)
+fn random_gauss(mean: float = 0.0, sd: float = 1.0) -> float {
+    let u1 = 1.0 - rand_float()
+    let u2 = rand_float()
+    return mean + sd * sqrt(-2.0 * log(u1)) * cos(2.0 * PI * u2)
+}
+
+// k different elements of a, in random order (a itself is not changed); k must not be larger than a.len()
+fn random_sample<T>(a: [T], k: int) -> [T] {
+    assert(k >= 0 and k <= a.len(), "random_sample: k must be between 0 and the array length")
+    let pool = a.copy()
+    var out: [T] = []
+    for i in 0..k {
+        let j = rand_int(i, pool.len() - 1)
+        pool.swap(i, j)
+        out.push(pool[i])
+    }
+    return out
+}
+
+// k elements of a picked one by one, so the same element can come up again; a must not be empty
+fn random_choices<T>(a: [T], k: int) -> [T] {
+    assert(a.len() > 0, "random_choices: the array is empty")
+    var out: [T] = []
+    for i in 0..k { out.push(a[rand_int(0, a.len() - 1)]) }
+    return out
+}
+
+// one element of a, where weights[i] (not negative, not all 0) says how likely a[i] is compared to the others
+fn random_weighted<T>(a: [T], weights: [float]) -> T {
+    assert(a.len() > 0 and a.len() == weights.len(), "random_weighted: needs two arrays of the same length (not empty)")
+    var total = 0.0
+    for w in weights {
+        assert(w >= 0.0, "random_weighted: a weight is negative")
+        total += w
+    }
+    assert(total > 0.0, "random_weighted: all weights are 0")
+    var pick = rand_float() * total
+    for i in 0..a.len() {
+        if pick < weights[i] { return a[i] }
+        pick -= weights[i]
+    }
+    return a[a.len() - 1]
+}
+
+// a shuffled copy of a (shuffle changes the array itself)
+fn random_shuffled<T>(a: [T]) -> [T] {
+    let c = a.copy()
+    shuffle(c)
+    return c
+}
+
+// n random characters from the alphabet (letters and digits by default)
+fn random_string(n: int, alphabet: str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") -> str {
+    assert(alphabet.len() > 0, "random_string: the alphabet is empty")
+    var sb = str_builder()
+    for i in 0..n { sb.add_byte(alphabet.byte_at(rand_int(0, alphabet.len() - 1))) }
+    return sb.finish()
+}
+
+// 2 * n lowercase hex digits from n random bytes
+fn random_hex(n: int) -> str {
+    let digits = "0123456789abcdef"
+    var sb = str_builder()
+    for i in 0..n {
+        let b = rand_int(0, 255)
+        sb.add_byte(digits.byte_at(b >> 4))
+        sb.add_byte(digits.byte_at(b & 15))
+    }
+    return sb.finish()
+}
+
+// a random (version 4) UUID like "9b2f4c1e-7d3a-4f8e-a1b2-0c9d8e7f6a5b"
+fn random_uuid() -> str {
+    let h = random_hex(16)
+    let variant = "89ab".byte_at(rand_int(0, 3))
+    return h[0..8] + "-" + h[8..12] + "-4" + h[13..16] + "-" + char_str(variant) + h[17..20] + "-" + h[20..32]
+}

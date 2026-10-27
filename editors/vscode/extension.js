@@ -146,6 +146,8 @@ const PREFIX_MODULES = [
   [/^b64_/, "base64"], [/^hex_/, "hex"], [/^hash_/, "hash"], [/^csv_/, "csv"],
   [/^dt_/, "datetime"], [/^json_/, "json"],
   [/^path_/, "path"], [/^fs_/, "fs"], [/^proc_/, "process"], [/^toml_/, "toml"],
+  [/^(args_parser|ArgParser|ArgSpec|ParsedArgs)$/, "args"], [/^(log_\w+|LOG_\w+)$/, "log"],
+  [/^algo_/, "algo"], [/^bits_/, "bits"], [/^random_/, "random"], [/^text_/, "text"], [/^(math_|stats_)/, "math"],
   [/^(regex|regex_\w+|Regex|RxMatch)$/, "regex"], [/^(http_\w+|Http\w+)$/, "http"],
   [/^(test|test_report|expect|expect_eq|expect_ne|expect_near|expect_panics|test_fail)$/, "test"],
   [/^(Stack|Deque|PriorityQueue|LinkedList|SortedMap|SortedSet|Counter|stack_new|deque_new|deque_from|pq_\w+|linked_list_\w+|sorted_map_\w+|sorted_set_\w+|counter_\w+)$/, "collections"],

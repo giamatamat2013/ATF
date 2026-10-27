@@ -1,0 +1,11 @@
+DEBUG read 10 numbers
+Monthly Sales Report
+====================
+ count    10
+  mean  3.90
+median  3.50
+ stdev  2.34
+   p90  6.30
+   min  1.00
+   max  9.00
+INFO  prime values: [3, 5, 2]
