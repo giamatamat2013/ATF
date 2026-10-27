@@ -2532,6 +2532,91 @@ ping
 pong
 ```
 
+* `std/url` takes web addresses apart and builds them: `url_parse(text)` gives a `Url` (`scheme`, `host`, `port`, `path`,
+  `query`, `fragment`, `param(name)`), `url_join(base, link)` follows a link the way a browser does, and `url_encode` /
+  `url_decode` do the %-escapes.
+
+<!-- id: url-basic -->
+```atf
+import "std/url"
+
+fn main() {
+    let u = url_parse("https://example.com:8080/a/b.html?x=1&y=two%20words#top").unwrap()
+    println(u.host, u.port, u.path, u.param("y") ?? "none")
+    println(url_encode("a b&c"))
+    println(url_join("http://a.com/x/y.html", "../z").unwrap())
+}
+```
+```output
+example.com 8080 /a/b.html two words
+a%20b%26c
+http://a.com/z
+```
+
+* `std/glob` matches file names against patterns (`*`, `?`, `[a-z]`, and `**` across folders), and `glob_find(folder, pattern)`
+  lists the files that match.
+
+<!-- id: glob-basic -->
+```atf
+import "std/glob"
+
+fn main() {
+    println(glob_match("src/**/*.atf", "src/a/b.atf"), glob_match("*.txt", "a.atf"))
+}
+```
+```output
+true false
+```
+
+* `std/ini` reads and writes INI settings files: `ini_parse(text)` gives an `IniDoc` with `get(section, key)`,
+  `get_or`, `get_int`, `get_bool`, `set` and `ini_stringify`. Keys before the first `[section]` belong to the section `""`.
+
+<!-- id: ini-basic -->
+```atf
+import "std/ini"
+
+fn main() {
+    let d = ini_parse("name = app\n[server]\nport = 8080\n").unwrap()
+    println(d.get_or("", "name", "?"), d.get_int("server", "port", 80))
+}
+```
+```output
+app 8080
+```
+
+* `std/httpd` is a small web server. A handler is a function from `HttpRequest` to `HttpReply`; `router_new()` collects
+  routes such as `/users/:id`, and `http_listen(port)` gives a server whose `serve(handler)` answers requests one after
+  another. `serve_one` answers a single request, which is handy in tests.
+
+<!-- id: httpd-router -->
+```atf
+import "std/httpd"
+
+fn main() {
+    var app = router_new()
+    app.get("/users/:id", |req| http_text("user " + req.params["id"]))
+    println(app.handle(HttpRequest{ path: "/users/7" }).body)
+    println(app.handle(HttpRequest{ path: "/nothing" }).status)
+}
+```
+```output
+user 7
+404
+```
+
+```atf nocheck
+import "std/httpd"
+
+fn main() {
+    var app = router_new()
+    app.get("/", |req| http_html("<h1>Hello</h1>"))
+    app.get("/hello/:name", |req| http_text("Hello, " + req.params["name"]))
+    let server = http_listen(8080).unwrap()
+    println("open http://127.0.0.1:8080/")
+    server.serve(|req| app.handle(req))
+}
+```
+
 * `std/test` is a small test framework: `test(name, || { ... })` with `expect`, `expect_eq`, `expect_ne`, `expect_near`
   and `expect_panics`, and `test_report()` for the summary and exit code.
 

@@ -178,8 +178,8 @@ let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 
 `import "other"` loads `other.atf` (the path is relative to the importing file, the ending may be left out).
 `import "std/json"` loads a library module: `algo`, `app`, `args`, `base64`, `bits`, `collections`, `csv`, `datetime`,
-`fs`, `hash`, `hex`, `http`, `json`, `log`, `math`, `net`, `path`, `process`, `random`, `regex`, `test`, `text`, `toml`,
-`ui` and `xml` (all described in [STDLIB.md](STDLIB.md)). Everything in an imported file becomes part of the one global namespace. `include_str("f.txt")` embeds a
+`fs`, `glob`, `hash`, `hex`, `http`, `httpd`, `ini`, `json`, `log`, `math`, `net`, `path`, `process`, `random`, `regex`, `test`, `text`,
+`toml`, `ui`, `url` and `xml` (all described in [STDLIB.md](STDLIB.md)). Everything in an imported file becomes part of the one global namespace. `include_str("f.txt")` embeds a
 file in the program at compile time.
 
 ## Memory

@@ -1,0 +1,41 @@
+ok   encode: a%20b%26c%2Fd%3F%C3%A9
+ok   encode plus: a+b
+ok   decode: Ok(a b&cé)
+ok   decode plus: Ok(a b)
+ok   decode plus off: Ok(a+b)
+ok   decode bad: Err(bad %-escape at position 2)
+ok   decode short: Err(incomplete %-escape at position 2)
+ok   scheme: https
+ok   user: ada
+ok   host: example.com
+ok   port: 8080
+ok   path: /a/b.html
+ok   query: x=1&y=two%20words
+ok   fragment: top
+ok   param y: two words
+ok   param z: none
+ok   to_str: https://ada@example.com:8080/a/b.html?x=1&y=two%20words#top
+ok   target: /a/b.html?x=1&y=two%20words
+ok   no path port: -1
+ok   effective port: 80
+ok   target of empty path: /
+ok   https port: 443
+ok   ipv6 host: [::1]
+ok   ipv6 port: 3000
+ok   relative scheme: 
+ok   relative path: /a/b
+ok   mailto: ada@x.org
+ok   bad port: bad port: 99999
+ok   no host: the address has no host
+ok   query a: 1
+ok   query b: x y
+ok   query c: 
+ok   query d: p q
+ok   query build: q=x%20y&n=1%262
+ok   join relative: Ok(http://a.com/x/z.html)
+ok   join up: Ok(http://a.com/z)
+ok   join root: Ok(http://a.com/r?k=v)
+ok   join absolute: Ok(https://b.org/y)
+ok   join scheme-relative: Ok(https://b.org/y)
+ok   join fragment: Ok(http://a.com/x?q=1#sec)
+failures: 0

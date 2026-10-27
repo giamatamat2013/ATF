@@ -1,0 +1,155 @@
+// std/ini - reading and writing INI files (the simple [section] / key = value settings format).
+//
+//   import "std/ini"
+//
+//   let doc = ini_parse("name = app\n[server]\nport = 8080\nhost = \"localhost\"\n").unwrap()
+//   println(doc.get("", "name") ?? "?")               // app            (keys before any [section] have section "")
+//   println(doc.get_int("server", "port", 80))        // 8080
+//   println(doc.get_or("server", "host", "-"))        // localhost      (matching quotes are removed)
+//   doc.set("server", "port", "9090")
+//   print(ini_stringify(doc))
+//
+// Comments start with ; or # at the beginning of a line. Section and key names keep their case.
+// A repeated key keeps the last value. Values are always text; get_int, get_float and get_bool convert.
+
+struct IniDoc {
+    sections: {str: {str: str}}      // section name -> key -> value; the section "" holds keys before any [section]
+    order: [str]                     // section names in the order they first appear
+}
+
+fn ini_new() -> IniDoc {
+    var d = IniDoc{ sections: {}, order: [] }
+    d.sections[""] = {}
+    d.order.push("")
+    return d
+}
+
+impl IniDoc {
+    fn has_section(self, section: str) -> bool { return section in self.sections }
+
+    // the value of a key, nil when the section or key is missing
+    fn get(self, section: str, key: str) -> str? {
+        if let s = self.sections.try_get(section) { return s.try_get(key) }
+        return nil
+    }
+
+    fn get_or(self, section: str, key: str, default: str) -> str { return self.get(section, key) ?? default }
+
+    fn get_int(self, section: str, key: str, default: int) -> int {
+        if let v = self.get(section, key) { return v.trim().parse_int() ?? default }
+        return default
+    }
+
+    fn get_float(self, section: str, key: str, default: float) -> float {
+        if let v = self.get(section, key) { return v.trim().parse_float() ?? default }
+        return default
+    }
+
+    // true / yes / on / 1 are true; false / no / off / 0 are false; anything else (or missing) gives the default
+    fn get_bool(self, section: str, key: str, default: bool) -> bool {
+        if let v = self.get(section, key) {
+            let l = v.trim().lower()
+            if l == "true" or l == "yes" or l == "on" or l == "1" { return true }
+            if l == "false" or l == "no" or l == "off" or l == "0" { return false }
+        }
+        return default
+    }
+
+    // sets a value; the section is created when needed
+    fn set(self, section: str, key: str, value: str) {
+        if not (section in self.sections) {
+            self.sections[section] = {}
+            self.order.push(section)
+        }
+        self.sections[section][key] = value
+    }
+
+    fn remove(self, section: str, key: str) {
+        if let s = self.sections.try_get(section) {
+            if key in s { s.remove(key) }
+        }
+    }
+
+    // the section names, in file order, without the unnamed first section
+    fn section_names(self) -> [str] {
+        var out: [str] = []
+        for s in self.order {
+            if s != "" { out.push(s) }
+        }
+        return out
+    }
+
+    // the keys of a section in file order (empty when the section does not exist)
+    fn keys(self, section: str) -> [str] {
+        if let s = self.sections.try_get(section) { return s.keys() }
+        return []
+    }
+}
+
+fn ini_unquote(v: str) -> str {
+    if v.len() >= 2 {
+        let f = v.byte_at(0)
+        if (f == '"' or f == '\'') and v.byte_at(v.len() - 1) == f { return v[1..v.len() - 1] }
+    }
+    return v
+}
+
+// Reads INI text. Err("line N: ...") for a line that is neither a comment, a [section] nor key = value.
+fn ini_parse(text: str) -> Result<IniDoc, str> {
+    var d = ini_new()
+    var section = ""
+    var n = 0
+    for raw in text.lines() {
+        n += 1
+        var line = raw.trim()
+        if n == 1 and line.starts_with("\xef\xbb\xbf") { line = line[3..].trim() }
+        if line == "" or line.starts_with(";") or line.starts_with("#") { continue }
+        if line.starts_with("[") {
+            if not line.ends_with("]") { return Result.Err("line {n}: the section is missing its ]") }
+            section = line[1..line.len() - 1].trim()
+            if section == "" { return Result.Err("line {n}: the section has no name") }
+            if not (section in d.sections) {
+                d.sections[section] = {}
+                d.order.push(section)
+            }
+            continue
+        }
+        var eq = line.find("=")
+        let colon = line.find(":")
+        if eq < 0 or (colon >= 0 and colon < eq) { eq = colon }
+        if eq < 0 { return Result.Err("line {n}: expected key = value") }
+        let key = line[..eq].trim()
+        if key == "" { return Result.Err("line {n}: the key has no name") }
+        d.sections[section][key] = ini_unquote(line[eq + 1..].trim())
+    }
+    return Result.Ok(d)
+}
+
+// Writes the document as INI text. A value with spaces at its ends is put in quotes.
+fn ini_stringify(d: IniDoc) -> str {
+    var sb = str_builder()
+    var first = true
+    for name in d.order {
+        let s = d.sections[name]
+        if name == "" and s.len() == 0 { continue }
+        if name != "" {
+            if not first { sb.add("\n") }
+            sb.add("[" + name + "]\n")
+        }
+        first = false
+        for k, v in s {
+            var out = v
+            if v != v.trim() { out = "\"" + v + "\"" }
+            sb.add(k + " = " + out + "\n")
+        }
+    }
+    return sb.finish()
+}
+
+// Reads an INI file. Err when the file cannot be read or has a bad line.
+fn ini_read_file(path: str) -> Result<IniDoc, str> {
+    if let text = read_file(path) { return ini_parse(text) }
+    return Result.Err("cannot read " + path)
+}
+
+fn ini_write_file(path: str, d: IniDoc) -> bool { return write_file(path, ini_stringify(d)) }

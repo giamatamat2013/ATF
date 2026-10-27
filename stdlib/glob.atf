@@ -1,0 +1,149 @@
+// std/glob - matching file names against patterns like *.txt, and finding the files that match.
+//
+//   import "std/glob"
+//
+//   glob_match("*.atf", "main.atf")            // true
+//   glob_match("src/**/*.atf", "src/a/b/c.atf") // true  (** crosses folders)
+//   glob_match("file?.[ch]", "file1.c")        // true
+//   for f in glob_find("examples", "**/*.atf") { println(f) }
+//
+// Wildcards: ? is one character, * is any run of characters inside one folder, ** is any run
+// of characters including folder separators, [abc] / [a-z] / [!x] is a set of characters.
+// Both / and \ separate folders; matching is not case-sensitive (this is Windows).
+
+import "std/fs"
+
+fn glob_lower_byte(c: byte) -> byte {
+    if c >= 'A' and c <= 'Z' { return (c + 32) as byte }
+    return c
+}
+
+fn glob_sep(c: byte) -> bool { return c == '/' or c == '\\' }
+
+// a set like [a-cx] starting at p[i] == '['; returns the index after the closing ] (or -1 when there is none)
+fn glob_set_end(p: str, i: int) -> int {
+    var j = i + 1
+    if j < p.len() and (p.byte_at(j) == '!' or p.byte_at(j) == '^') { j += 1 }
+    if j < p.len() and p.byte_at(j) == ']' { j += 1 }
+    while j < p.len() and p.byte_at(j) != ']' { j += 1 }
+    if j >= p.len() { return -1 }
+    return j + 1
+}
+
+fn glob_set_has(p: str, i: int, end: int, c: byte) -> bool {
+    var j = i + 1
+    var negate = false
+    if p.byte_at(j) == '!' or p.byte_at(j) == '^' {
+        negate = true
+        j += 1
+    }
+    var found = false
+    let want = glob_lower_byte(c)
+    while j < end - 1 {
+        let lo = glob_lower_byte(p.byte_at(j))
+        if j + 2 < end - 1 and p.byte_at(j + 1) == '-' {
+            let hi = glob_lower_byte(p.byte_at(j + 2))
+            if want >= lo and want <= hi { found = true }
+            j += 3
+        } else {
+            if want == lo { found = true }
+            j += 1
+        }
+    }
+    return found != negate
+}
+
+fn glob_match_at(p: str, pi: int, t: str, ti: int) -> bool {
+    var i = pi
+    var k = ti
+    while i < p.len() {
+        let c = p.byte_at(i)
+        if c == '*' {
+            var deep = false
+            if i + 1 < p.len() and p.byte_at(i + 1) == '*' {
+                deep = true
+                while i < p.len() and p.byte_at(i) == '*' { i += 1 }
+                // "**/" also matches no folder at all
+                if i < p.len() and glob_sep(p.byte_at(i)) and glob_match_at(p, i + 1, t, k) { return true }
+            } else {
+                i += 1
+            }
+            if i >= p.len() {
+                if deep { return true }
+                var m = k
+                while m < t.len() {
+                    if glob_sep(t.byte_at(m)) { return false }
+                    m += 1
+                }
+                return true
+            }
+            var m = k
+            while m <= t.len() {
+                if glob_match_at(p, i, t, m) { return true }
+                if m < t.len() and not deep and glob_sep(t.byte_at(m)) { return false }
+                m += 1
+            }
+            return false
+        }
+        if k >= t.len() { return false }
+        let tc = t.byte_at(k)
+        if c == '?' {
+            if glob_sep(tc) { return false }
+            i += 1
+            k += 1
+        } else if c == '[' {
+            let end = glob_set_end(p, i)
+            if end < 0 {
+                if tc != '[' { return false }
+                i += 1
+                k += 1
+            } else {
+                if glob_sep(tc) or not glob_set_has(p, i, end, tc) { return false }
+                i = end
+                k += 1
+            }
+        } else {
+            if glob_sep(c) {
+                if not glob_sep(tc) { return false }
+            } else if glob_lower_byte(c) != glob_lower_byte(tc) {
+                return false
+            }
+            i += 1
+            k += 1
+        }
+    }
+    return k == t.len()
+}
+
+// does the whole text match the pattern?
+fn glob_match(pattern: str, text: str) -> bool {
+    return glob_match_at(pattern, 0, text, 0)
+}
+
+fn glob_walk(root: str, rel: str, pattern: str, deep: bool, out: [str]) {
+    var dir = root
+    if rel != "" { dir = root + "\\" + rel }
+    let names = fs_list_dir(dir) ?? []
+    for name in names {
+        var r = name
+        if rel != "" { r = rel + "/" + name }
+        if fs_is_dir(root + "\\" + r) {
+            if deep { glob_walk(root, r, pattern, deep, out) }
+            // a folder itself can match too (for patterns like "src/*")
+            if glob_match(pattern, r) { out.push(r) }
+        } else if glob_match(pattern, r) {
+            out.push(r)
+        }
+    }
+}
+
+// The files and folders under root whose path (relative to root, with / separators) matches the pattern,
+// sorted. Folders are searched only when the pattern contains a separator or **, so "*.atf" looks in root
+// itself and "**/*.atf" looks everywhere. Returns an empty array when root cannot be read.
+fn glob_find(root: str, pattern: str) -> [str] {
+    var out: [str] = []
+    let deep = pattern.contains("/") or pattern.contains("\\") or pattern.contains("**")
+    glob_walk(root, "", pattern, deep, out)
+    out.sort()
+    return out
+}

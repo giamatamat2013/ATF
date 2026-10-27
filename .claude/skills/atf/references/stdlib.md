@@ -31,9 +31,12 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/csv](#stdcsv)
   - [std/datetime](#stddatetime)
   - [std/fs](#stdfs)
+  - [std/glob](#stdglob)
   - [std/hash](#stdhash)
   - [std/hex](#stdhex)
   - [std/http](#stdhttp)
+  - [std/httpd](#stdhttpd)
+  - [std/ini](#stdini)
   - [std/json](#stdjson)
   - [std/log](#stdlog)
   - [std/math](#stdmath)
@@ -46,6 +49,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/text](#stdtext)
   - [std/toml](#stdtoml)
   - [std/ui](#stdui)
+  - [std/url](#stdurl)
   - [std/xml](#stdxml)
 
 ## Built-in functions
@@ -1129,6 +1133,34 @@ Failures are reported with false or nil, like the prelude functions.
 - `fn fs_absolute(path: str) -> str` - the absolute form of a path (relative to the current folder); the file does not have to exist
 - `fn fs_walk(root: str) -> [str]` - every file below a folder (not the folders), as paths that start with root; sorted
 
+## std/glob
+
+Matching file names against patterns like *.txt, and finding the files that match.
+
+```text
+import "std/glob"
+
+glob_match("*.atf", "main.atf")            // true
+glob_match("src/**/*.atf", "src/a/b/c.atf") // true  (** crosses folders)
+glob_match("file?.[ch]", "file1.c")        // true
+for f in glob_find("examples", "**/*.atf") { println(f) }
+```
+
+Wildcards: ? is one character, * is any run of characters inside one folder, ** is any run
+of characters including folder separators, [abc] / [a-z] / [!x] is a set of characters.
+Both / and \ separate folders; matching is not case-sensitive (this is Windows).
+
+**Functions**
+
+- `fn glob_lower_byte(c: byte) -> byte`
+- `fn glob_sep(c: byte) -> bool`
+- `fn glob_set_end(p: str, i: int) -> int` - a set like [a-cx] starting at p[i] == '['; returns the index after the closing ] (or -1 when there is none)
+- `fn glob_set_has(p: str, i: int, end: int, c: byte) -> bool`
+- `fn glob_match_at(p: str, pi: int, t: str, ti: int) -> bool`
+- `fn glob_match(pattern: str, text: str) -> bool` - does the whole text match the pattern?
+- `fn glob_walk(root: str, rel: str, pattern: str, deep: bool, out: [str])`
+- `fn glob_find(root: str, pattern: str) -> [str]` - The files and folders under root whose path (relative to root, with / separators) matches the pattern, sorted. Folders are searched only when the pattern contains a separator or **, so "*.atf" looks in root itself and "**/*.atf" looks everywhere. Returns an empty array when root cannot be read.
+
 ## std/hash
 
 Checksums and cryptographic hash functions.
@@ -1268,6 +1300,170 @@ struct HttpUrl {
 
 - `.ok() -> bool` - true for the statuses 200 to 299
 - `.header(name: str) -> str?` - the value of a response header (the name is not case-sensitive), nil when it is missing
+
+## std/httpd
+
+A small HTTP server: routes, replies, static files.
+
+```text
+import "std/httpd"
+
+fn main() {
+    var app = router_new()
+    app.get("/", |req| http_html("<h1>Hello</h1>"))
+    app.get("/users/:id", |req| http_text("user " + (req.params["id"])))
+    app.post("/echo", |req| http_text(req.body))
+    let server = http_listen(8080).unwrap()
+    println("listening on http://127.0.0.1:{server.port}/")
+    server.serve(|req| app.handle(req))        // runs until the program is stopped
+}
+```
+
+A handler is a function from HttpRequest to HttpReply. The server answers one connection at a time and
+closes it after the reply (Connection: close), which is enough for tools, small sites and tests.
+`serve_one` answers a single request, so a program (or a test) can drive the server by hand.
+Header names in a request are lower case: req.header("content-type").
+
+**Types**
+
+```text
+struct HttpRequest {
+    method: str = "GET"
+    target: str = "/"                    // the path and query exactly as the client sent them
+    path: str = "/"                      // the decoded path, without the query
+    query: str = ""                      // the raw query text, without the ?
+    version: str = "HTTP/1.1"
+    headers: {str: str} = {}             // names in lower case
+    body: str = ""
+    params: {str: str} = {}              // the :name parts of the matching route
+}
+```
+
+```text
+struct HttpReply {
+    status: int = 200
+    body: str = ""
+    headers: [str] = []                  // "Name: value", without Content-Length (the server adds it)
+}
+```
+
+```text
+struct Route {
+    method: str
+    pattern: str
+    handler: fn(HttpRequest) -> HttpReply
+}
+```
+
+```text
+struct Router {
+    routes: [Route]
+}
+```
+
+```text
+struct HttpServer {
+    tcp: TcpServer
+    port: int
+}
+```
+
+
+**Functions**
+
+- `fn http_reply(status: int, body: str, content_type: str = "text/plain; charset=utf-8") -> HttpReply`
+- `fn http_text(body: str) -> HttpReply` - a 200 reply with plain text
+- `fn http_html(body: str) -> HttpReply` - a 200 reply with an HTML page
+- `fn http_json_reply(json_text: str) -> HttpReply` - a 200 reply with text that is already JSON (build it with std/json's json_stringify)
+- `fn http_redirect(to: str, status: int = 302) -> HttpReply` - a redirect (302 unless another status is given)
+- `fn http_not_found() -> HttpReply`
+- `fn http_status_text(status: int) -> str`
+- `fn http_mime(path: str) -> str` - the content type for a file name, by its ending
+- `fn http_file(path: str) -> HttpReply` - A file as a reply (404 when it cannot be read).
+- `fn http_static(req: HttpRequest, root: str) -> HttpReply` - Answers a request with a file from the folder root: "/a/b.txt" gives root\a\b.txt, "/" gives index.html. Paths that try to leave the folder (..) get 403. Returns 404 when there is no such file.
+- `fn router_new() -> Router`
+- `fn route_match(pattern: str, path: str, params: {str: str}) -> bool` - Does the path match the pattern? A pattern part that starts with : matches any one part ("/users/:id"), and a last part * matches the rest of the path. Fills params with the captured parts.
+- `fn http_listen(port: int, host: str = "127.0.0.1") -> Result<HttpServer, str>` - Starts listening (port 0 picks a free port, see server.port). By default only this computer can connect; pass host "0.0.0.0" to accept other computers too.
+- `fn http_read_request(c: TcpConn) -> Result<HttpRequest, str>` - Reads one request from a connection: Err when it is not valid HTTP.
+- `fn http_write_reply(c: TcpConn, reply: HttpReply, head_only: bool = false)` - Sends a reply on a connection.
+
+**Methods of `HttpRequest`**
+
+- `.header(name: str) -> str?` - a request header (the name is not case-sensitive), nil when it is missing
+- `.param(name: str) -> str?` - a query parameter, nil when it is missing
+- `.query_params() -> {str: str}` - all query parameters
+- `.form() -> {str: str}` - the fields of a form body (application/x-www-form-urlencoded)
+
+**Methods of `HttpReply`**
+
+- `.with_header(name: str, value: str) -> HttpReply` - the same reply with one more header
+- `.with_status(status: int) -> HttpReply` - the same reply with another status
+
+**Methods of `Router`**
+
+- `.add(method: str, pattern: str, handler: fn(HttpRequest) -> HttpReply)`
+- `.get(pattern: str, handler: fn(HttpRequest) -> HttpReply)`
+- `.post(pattern: str, handler: fn(HttpRequest) -> HttpReply)`
+- `.put(pattern: str, handler: fn(HttpRequest) -> HttpReply)`
+- `.delete(pattern: str, handler: fn(HttpRequest) -> HttpReply)`
+- `.any(pattern: str, handler: fn(HttpRequest) -> HttpReply)` - a route for every method
+- `.handle(req: HttpRequest) -> HttpReply` - Finds the first route that fits and calls its handler. 404 when no path fits, 405 when the path fits but not the method. HEAD is answered like GET.
+
+**Methods of `HttpServer`**
+
+- `.serve_one(handler: fn(HttpRequest) -> HttpReply) -> Result<str, str>` - Waits for one client, reads its request, calls the handler and sends the reply. Returns Err for a connection that broke or sent something that is not HTTP (a 400 is sent in that case).
+- `.serve(handler: fn(HttpRequest) -> HttpReply)` - Answers requests one after another, forever. A broken connection is skipped.
+- `.close()`
+
+## std/ini
+
+Reading and writing INI files (the simple [section] / key = value settings format).
+
+```text
+import "std/ini"
+
+let doc = ini_parse("name = app\n[server]\nport = 8080\nhost = \"localhost\"\n").unwrap()
+println(doc.get("", "name") ?? "?")               // app            (keys before any [section] have section "")
+println(doc.get_int("server", "port", 80))        // 8080
+println(doc.get_or("server", "host", "-"))        // localhost      (matching quotes are removed)
+doc.set("server", "port", "9090")
+print(ini_stringify(doc))
+```
+
+Comments start with ; or # at the beginning of a line. Section and key names keep their case.
+A repeated key keeps the last value. Values are always text; get_int, get_float and get_bool convert.
+
+**Types**
+
+```text
+struct IniDoc {
+    sections: {str: {str: str}}      // section name -> key -> value; the section "" holds keys before any [section]
+    order: [str]                     // section names in the order they first appear
+}
+```
+
+
+**Functions**
+
+- `fn ini_new() -> IniDoc`
+- `fn ini_unquote(v: str) -> str`
+- `fn ini_parse(text: str) -> Result<IniDoc, str>` - Reads INI text. Err("line N: ...") for a line that is neither a comment, a [section] nor key = value.
+- `fn ini_stringify(d: IniDoc) -> str` - Writes the document as INI text. A value with spaces at its ends is put in quotes.
+- `fn ini_read_file(path: str) -> Result<IniDoc, str>` - Reads an INI file. Err when the file cannot be read or has a bad line.
+- `fn ini_write_file(path: str, d: IniDoc) -> bool`
+
+**Methods of `IniDoc`**
+
+- `.has_section(section: str) -> bool`
+- `.get(section: str, key: str) -> str?` - the value of a key, nil when the section or key is missing
+- `.get_or(section: str, key: str, default: str) -> str`
+- `.get_int(section: str, key: str, default: int) -> int`
+- `.get_float(section: str, key: str, default: float) -> float`
+- `.get_bool(section: str, key: str, default: bool) -> bool` - true / yes / on / 1 are true; false / no / off / 0 are false; anything else (or missing) gives the default
+- `.set(section: str, key: str, value: str)` - sets a value; the section is created when needed
+- `.remove(section: str, key: str)`
+- `.section_names() -> [str]` - the section names, in file order, without the unnamed first section
+- `.keys(section: str) -> [str]` - the keys of a section in file order (empty when the section does not exist)
 
 ## std/json
 
@@ -2064,6 +2260,63 @@ struct Canvas {
 - `.text(x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false)` - one line of text with its top left corner at (x, y)
 - `.text_width(s: str, size: int = 15, bold: bool = false) -> int` - the width text would take
 - `.pixels(x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int)` - Draw a picture from an array of 0xRRGGBB ints (pw * ph pixels, row by row), stretched to w x h pixels with the nearest pixel. Much faster than one rect per pixel: use it for software rendered scenes.
+
+## std/url
+
+Web addresses: taking them apart, building them, and percent-encoding text.
+
+```text
+import "std/url"
+
+let u = url_parse("https://ada@example.com:8080/a/b.html?x=1&y=two#top").unwrap()
+println(u.scheme, u.host, u.port, u.path)       // https example.com 8080 /a/b.html
+println(u.param("y") ?? "none")                  // two
+println(url_encode("a b&c"))                     // a%20b%26c
+println(url_query_build({"q": "x y", "n": "1"})) // q=x%20y&n=1
+```
+
+`port` is -1 when the address has none. `query` and `fragment` are kept without the ? and #.
+Text is bytes in a str, so non-ASCII letters are encoded as UTF-8 bytes (%D7%A9 and so on).
+
+**Constants**
+
+- `URL_HEX_DIGITS = "0123456789ABCDEF"`
+
+**Types**
+
+```text
+struct Url {
+    scheme: str = ""
+    user: str = ""
+    host: str = ""
+    port: int = -1
+    path: str = ""
+    query: str = ""
+    fragment: str = ""
+}
+```
+
+
+**Functions**
+
+- `fn url_is_unreserved(c: byte) -> bool`
+- `fn url_encode(s: str, plus: bool = false) -> str` - Percent-encodes s: letters, digits and - _ . ~ stay, every other byte becomes %XX. With plus: true a space becomes + (the form of a query string) instead of %20.
+- `fn url_hex_value(c: byte) -> int`
+- `fn url_decode(s: str, plus: bool = false) -> Result<str, str>` - Undoes url_encode. With plus: true a + becomes a space. A bad %XX gives an Err.
+- `fn url_query_parse(q: str) -> {str: str}` - "a=1&b=two" -> {"a": "1", "b": "two"}. Names and values are decoded; a name without = gets "". When a name repeats, the last value wins.
+- `fn url_query_build(m: {str: str}) -> str` - {"a": "1", "b": "x y"} -> "a=1&b=x%20y" (in the map's order)
+- `fn url_valid_scheme(s: str) -> bool`
+- `fn url_parse(text: str) -> Result<Url, str>` - Takes an address apart. A relative reference ("/a/b?x=1", "b.html") parses too, with an empty scheme and host.
+- `fn url_path_normalize(path: str) -> str`
+- `fn url_join(base: str, reference: str) -> Result<str, str>` - Resolves a reference against a base address, the way a browser follows a link: url_join("http://a.com/x/y.html", "../z") == "http://a.com/z"
+
+**Methods of `Url`**
+
+- `.param(name: str) -> str?` - the value of one query parameter, or nil
+- `.params() -> {str: str}` - all query parameters as a map
+- `.to_str() -> str` - the address as text again
+- `.request_target() -> str` - the part to put after GET in a request: path and query ("/" when the path is empty)
+- `.effective_port() -> int` - the port to connect to: the written one, or the default of the scheme (80, 443, 21, 22)
 
 ## std/xml
 

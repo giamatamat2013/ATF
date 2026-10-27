@@ -1,0 +1,84 @@
+// tests for std/url
+import "std/url"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn show(r: Result<str, str>) -> str {
+    return match r {
+        Result.Ok(v) => "Ok(" + v + ")"
+        Result.Err(e) => "Err(" + e + ")"
+    }
+}
+
+fn main() -> int {
+    check("encode", url_encode("a b&c/d?é"), "a%20b%26c%2Fd%3F%C3%A9")
+    check("encode plus", url_encode("a b", plus: true), "a+b")
+    check("decode", show(url_decode("a%20b%26c%C3%A9")), "Ok(a b&cé)")
+    check("decode plus", show(url_decode("a+b", plus: true)), "Ok(a b)")
+    check("decode plus off", show(url_decode("a+b")), "Ok(a+b)")
+    check("decode bad", show(url_decode("50%zz")), "Err(bad %-escape at position 2)")
+    check("decode short", show(url_decode("50%")), "Err(incomplete %-escape at position 2)")
+
+    let u = url_parse("HTTPS://ada@Example.com:8080/a/b.html?x=1&y=two%20words#top").unwrap()
+    check("scheme", u.scheme, "https")
+    check("user", u.user, "ada")
+    check("host", u.host, "example.com")
+    check("port", str(u.port), "8080")
+    check("path", u.path, "/a/b.html")
+    check("query", u.query, "x=1&y=two%20words")
+    check("fragment", u.fragment, "top")
+    check("param y", u.param("y") ?? "none", "two words")
+    check("param z", u.param("z") ?? "none", "none")
+    check("to_str", u.to_str(), "https://ada@example.com:8080/a/b.html?x=1&y=two%20words#top")
+    check("target", u.request_target(), "/a/b.html?x=1&y=two%20words")
+
+    let v = url_parse("http://example.com").unwrap()
+    check("no path port", str(v.port), "-1")
+    check("effective port", str(v.effective_port()), "80")
+    check("target of empty path", v.request_target(), "/")
+    check("https port", str(url_parse("https://x.org/").unwrap().effective_port()), "443")
+
+    let w = url_parse("http://[::1]:3000/x").unwrap()
+    check("ipv6 host", w.host, "[::1]")
+    check("ipv6 port", str(w.port), "3000")
+
+    let rel = url_parse("/a/b?x=1").unwrap()
+    check("relative scheme", rel.scheme, "")
+    check("relative path", rel.path, "/a/b")
+    check("mailto", url_parse("mailto:ada@x.org").unwrap().path, "ada@x.org")
+
+    check("bad port", match url_parse("http://x.org:99999/") {
+        Result.Ok(_) => "Ok"
+        Result.Err(e) => e
+    }, "bad port: 99999")
+    check("no host", match url_parse("http:///x") {
+        Result.Ok(_) => "Ok"
+        Result.Err(e) => e
+    }, "the address has no host")
+
+    let q = url_query_parse("a=1&b=x%20y&c&d=p+q")
+    check("query a", q["a"], "1")
+    check("query b", q["b"], "x y")
+    check("query c", q["c"], "")
+    check("query d", q["d"], "p q")
+    check("query build", url_query_build({"q": "x y", "n": "1&2"}), "q=x%20y&n=1%262")
+
+    check("join relative", show(url_join("http://a.com/x/y.html", "z.html")), "Ok(http://a.com/x/z.html)")
+    check("join up", show(url_join("http://a.com/x/y.html", "../z")), "Ok(http://a.com/z)")
+    check("join root", show(url_join("http://a.com/x/y.html", "/r?k=v")), "Ok(http://a.com/r?k=v)")
+    check("join absolute", show(url_join("http://a.com/x", "https://b.org/y")), "Ok(https://b.org/y)")
+    check("join scheme-relative", show(url_join("https://a.com/x", "//b.org/y")), "Ok(https://b.org/y)")
+    check("join fragment", show(url_join("http://a.com/x?q=1", "#sec")), "Ok(http://a.com/x?q=1#sec)")
+
+    println("failures: {failures}")
+    return failures
+}
