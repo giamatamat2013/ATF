@@ -1,0 +1,24 @@
+// take, skip, chunks, windows, partition, unique, strip_prefix, strip_suffix, lcm
+fn main() {
+    let a = [1, 2, 3, 4, 5]
+    println(a.take(2))
+    println(a.take(10))
+    println(a.take(-1))
+    println(a.skip(3))
+    println(a.skip(9))
+    println(a.chunks(2))
+    println(a.windows(3))
+    println(a.windows(9))
+    let (even, odd) = a.partition(|x| x % 2 == 0)
+    println(even)
+    println(odd)
+    println([3, 1, 3, 2, 1].unique())
+    println(["b", "a", "b"].unique())
+    println("v1.2".strip_prefix("v") ?? "none")
+    println("v1.2".strip_prefix("x") ?? "none")
+    println("a.atf".strip_suffix(".atf") ?? "none")
+    println("a.atf".strip_suffix(".txt") ?? "none")
+    println(lcm(4, 6))
+    println(lcm(0, 5))
+    println(lcm(-4, 6))
+}
