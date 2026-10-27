@@ -2198,6 +2198,194 @@ fn ui_ease(t: float) -> float {
     return 1.0 - u * u * u
 }
 
+// ---------------------------------------------------------------- animation
+// Animations are ordinary numbers that change over time. The view is rebuilt about 60 times a second while
+// one is running, so you just use the number in the view, like CSS animations written as ATF:
+//   let x = animate("ball", if app.right { 300.0 } else { 0.0 }, 600)       // glides whenever the target changes
+//   let glow = anim_wave(2.0)                                               // 0..1..0 every 2 seconds, forever
+//   box([]).size(40, 40).absolute(int(x), 10).opacity(0.4 + glow * 0.6)
+// When nothing is moving the window is idle again and uses no CPU.
+
+struct UiTween {
+    from: float
+    to: float
+    t0: int
+    dur: int
+    cur: float
+}
+
+struct UiColorTween {
+    from: int
+    to: int
+    t0: int
+    dur: int
+    cur: int
+}
+
+var ui_tweens: {str: UiTween} = {}
+var ui_ctweens: {str: UiColorTween} = {}
+var ui_view_anim = false          // an animation is running: rebuild the view on every frame
+var ui_clock_fixed = -1           // >= 0: the animation clock is frozen at this many milliseconds (tests, screenshots)
+var ui_clock_origin = time_ms()
+
+fn ui_now() -> int {
+    if ui_clock_fixed >= 0 { return ui_clock_fixed }
+    return time_ms()
+}
+
+// Freeze the animation clock at ms milliseconds since the start (for tests and screenshots: the animation
+// stops where it is). anim_set_time(-1) gives the real clock back.
+fn anim_set_time(ms: int) {
+    ui_clock_fixed = ms
+    if ms >= 0 { ui_clock_origin = 0 } else { ui_clock_origin = time_ms() }
+}
+
+// Seconds since the program started. Using it in the view keeps the window animating.
+fn anim_time() -> float {
+    ui_view_anim = true
+    return float(ui_now() - ui_clock_origin) / 1000.0
+}
+
+// The position between a and b: lerp(10.0, 20.0, 0.5) == 15.0
+fn lerp(a: float, b: float, t: float) -> float { return a + (b - a) * t }
+
+// Easing functions turn the progress t (0.0 .. 1.0) into a position (0.0 .. 1.0), the way CSS timing functions do.
+fn ease_linear(t: float) -> float { return clamp(t, 0.0, 1.0) }
+
+// slow start
+fn ease_in(t: float) -> float {
+    let u = clamp(t, 0.0, 1.0)
+    return u * u * u
+}
+
+// slow end (the default of animate)
+fn ease_out(t: float) -> float {
+    let u = 1.0 - clamp(t, 0.0, 1.0)
+    return 1.0 - u * u * u
+}
+
+// slow start and slow end
+fn ease_in_out(t: float) -> float {
+    let u = clamp(t, 0.0, 1.0)
+    if u < 0.5 { return 4.0 * u * u * u }
+    let v = 2.0 - 2.0 * u
+    return 1.0 - v * v * v / 2.0
+}
+
+// goes a little past the end and settles back
+fn ease_out_back(t: float) -> float {
+    let u = clamp(t, 0.0, 1.0) - 1.0
+    return 1.0 + 2.70158 * u * u * u + 1.70158 * u * u
+}
+
+// falls and bounces at the end, like a ball
+fn ease_out_bounce(t: float) -> float {
+    var u = clamp(t, 0.0, 1.0)
+    if u < 1.0 / 2.75 { return 7.5625 * u * u }
+    if u < 2.0 / 2.75 {
+        u -= 1.5 / 2.75
+        return 7.5625 * u * u + 0.75
+    }
+    if u < 2.5 / 2.75 {
+        u -= 2.25 / 2.75
+        return 7.5625 * u * u + 0.9375
+    }
+    u -= 2.625 / 2.75
+    return 7.5625 * u * u + 0.984375
+}
+
+// swings back and forth around the end, like a spring
+fn ease_out_elastic(t: float) -> float {
+    let u = clamp(t, 0.0, 1.0)
+    if u <= 0.0 { return 0.0 }
+    if u >= 1.0 { return 1.0 }
+    return 2.0 ** (-10.0 * u) * sin((u * 10.0 - 0.75) * 2.0943951) + 1.0
+}
+
+// Move through several values one after the other, evenly spaced over t (0.0 .. 1.0), like CSS keyframes:
+//   anim_keys(anim_loop(3.0), [0.0, 100.0, 40.0, 100.0, 0.0])
+fn anim_keys(t: float, values: [float]) -> float {
+    if values.len() == 0 { return 0.0 }
+    if values.len() == 1 { return values[0] }
+    let p = clamp(t, 0.0, 1.0) * float(values.len() - 1)
+    let i = min(int(p), values.len() - 2)
+    return lerp(values[i], values[i + 1], p - float(i))
+}
+
+// 0.0 .. 1.0, then again from 0.0, once every `seconds` for as long as the window is open
+fn anim_loop(seconds: float) -> float {
+    let t = anim_time() / max(seconds, 0.001)
+    return t - floor(t)
+}
+
+// 0.0 .. 1.0 .. 0.0 smoothly, once every `seconds`: a pulse, a breathing glow
+fn anim_wave(seconds: float) -> float {
+    return 0.5 - 0.5 * cos(anim_loop(seconds) * 6.2831853)
+}
+
+// The number that glides toward target. Give every animated value its own key. The first time it simply is the
+// target; whenever the target changes it moves there over ms milliseconds, easing out.
+fn animate(key: str, target: float, ms: int = 300) -> float {
+    return ui_tween(key, target, target, ms, ease_out)
+}
+
+// the same with the easing function of your choice: animate_with("ball", y, 800, ease_out_bounce)
+fn animate_with(key: str, target: float, ms: int, ease: fn(float) -> float) -> float {
+    return ui_tween(key, target, target, ms, ease)
+}
+
+// The first time it starts at `start` and moves to target (an entrance: fade in, slide in), then it
+// behaves like animate: animate_from("title", 0.0, 1.0, 600, ease_out)
+fn animate_from(key: str, start: float, target: float, ms: int = 300, ease: fn(float) -> float = ease_out) -> float {
+    return ui_tween(key, start, target, ms, ease)
+}
+
+fn ui_tween(key: str, start: float, target: float, ms: int, ease: fn(float) -> float) -> float {
+    let now = ui_now()
+    let found = ui_tweens.try_get(key)
+    if found == nil {
+        ui_tweens[key] = UiTween(start, target, now, ms, start)
+        if start == target { return target }
+    }
+    let tw = ui_tweens[key]
+    if tw.to != target {
+        tw.from = tw.cur
+        tw.to = target
+        tw.t0 = now
+        tw.dur = ms
+    }
+    let t = float(now - tw.t0) / float(max(tw.dur, 1))
+    if t >= 1.0 {
+        tw.cur = tw.to
+        return tw.to
+    }
+    ui_view_anim = true
+    tw.cur = lerp(tw.from, tw.to, ease(t))
+    return tw.cur
+}
+
+// A color that fades toward target (like animate, for colors): animate_color("bg", if on { GREEN } else { RED }, 400)
+fn animate_color(key: str, target: int, ms: int = 300) -> int {
+    let now = ui_now()
+    let found = ui_ctweens.try_get(key)
+    if found == nil { ui_ctweens[key] = UiColorTween(target, target, now - ms, ms, target) }
+    let tw = ui_ctweens[key]
+    if tw.to != target {
+        tw.from = tw.cur
+        tw.to = target
+        tw.t0 = now
+        tw.dur = ms
+    }
+    let t = float(now - tw.t0) / float(max(tw.dur, 1))
+    if t >= 1.0 {
+        tw.cur = tw.to
+        return tw.to
+    }
+    ui_view_anim = true
+    tw.cur = mix(tw.from, tw.to, ease_out(t))
+    return tw.cur
+}
+
 // colors of an element with a transition, moving toward the style's colors
 fn ui_animate(n: Node, e: Style) -> Style {
     let now = time_ms()
@@ -2738,6 +2926,7 @@ fn ui_place_overlays() {
 
 fn ui_rebuild() {
     if ui_views.len() == 0 { return }
+    ui_view_anim = false
     ui_root = ui_views[0]()
     ui_layout()
     ui_update_hover()
@@ -3571,7 +3760,7 @@ fn ui_paint_window() {
         SetDIBitsToDevice(dc, 0, 0, ui_winw, ui_winh, 0, 0, 0, ui_winh, packed, ui_bmi(ui_winw, -ui_winh), 0)
     }
     EndPaint(ui_hwnd, ps)
-    if ui_animating { SetTimer(ui_hwnd, 1, 16, 0) } else { KillTimer(ui_hwnd, 1) }
+    if ui_animating or ui_view_anim { SetTimer(ui_hwnd, 1, 16, 0) } else { KillTimer(ui_hwnd, 1) }
 }
 
 fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
@@ -3636,6 +3825,7 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
     } else if m == 275 {
         let id = wp
         if id == 1 {
+            if ui_view_anim { ui_rebuild() }
             ui_invalidate()
         } else if id == 2 {
             if ui_focus.len() > 0 {

@@ -149,11 +149,11 @@ const PREFIX_MODULES = [
   [/^(args_parser|ArgParser|ArgSpec|ParsedArgs)$/, "args"], [/^(log_\w+|LOG_\w+)$/, "log"],
   [/^algo_/, "algo"], [/^bits_/, "bits"], [/^random_/, "random"], [/^text_/, "text"], [/^(math_|stats_)/, "math"],
   [/^(regex|regex_\w+|Regex|RxMatch)$/, "regex"], [/^(http_\w+|Http\w+)$/, "http"],
-  [/^(xml_\w+|XmlNode)$/, "xml"], [/^(url_\w+|Url)$/, "url"], [/^(ini_\w+|IniDoc)$/, "ini"], [/^glob_/, "glob"],
+  [/^(html_\w+|css_\w+|HtmlNode|h)$/, "html"], [/^(xml_\w+|XmlNode)$/, "xml"], [/^(url_\w+|Url)$/, "url"], [/^(ini_\w+|IniDoc)$/, "ini"], [/^glob_/, "glob"],
   [/^(http_listen|http_reply|http_text|http_html|http_json_reply|http_redirect|http_not_found|http_status_text|http_mime|http_file|http_static|http_read_request|http_write_reply|router_new|route_match|HttpRequest|HttpReply|HttpServer|Router|Route)$/, "httpd"], [/^(tcp_\w+|net_resolve|TcpConn|TcpServer)$/, "net"],
   [/^(test|test_report|expect|expect_eq|expect_ne|expect_near|expect_panics|test_fail)$/, "test"],
   [/^(Stack|Deque|PriorityQueue|LinkedList|SortedMap|SortedSet|Counter|stack_new|deque_new|deque_from|pq_\w+|linked_list_\w+|sorted_map_\w+|sorted_set_\w+|counter_\w+)$/, "collections"],
-  [/^(ui_\w+|Node|Style|Align|Justify|Cursor|Canvas|style|column|row|stack|grid|scroll|button|textbox|textarea|checkbox|toggle|slider|progress|select|tabs|menu|menu_item|menu_button|menu_bar|dropdown|modal|dialog|icon|canvas|clipboard_get|clipboard_set|message_box|confirm_box|open_file_dialog|save_file_dialog|focus_field|rgb|rgba|hex)$/, "ui"],
+  [/^(ui_\w+|animate\w*|anim_\w+|ease_\w+|lerp|Node|Style|Align|Justify|Cursor|Canvas|style|column|row|stack|grid|scroll|button|textbox|textarea|checkbox|toggle|slider|progress|select|tabs|menu|menu_item|menu_button|menu_bar|dropdown|modal|dialog|icon|canvas|clipboard_get|clipboard_set|message_box|confirm_box|open_file_dialog|save_file_dialog|focus_field|rgb|rgba|hex)$/, "ui"],
   [/^(app_dir|app_path|Settings|settings_open|settings_file|recent_add|recent_list)$/, "app"],
 ];
 

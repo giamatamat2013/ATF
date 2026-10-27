@@ -1,0 +1,44 @@
+// Animations in a window: easing, tweened values, colours and endless loops. Everything is a function of time.
+import "std/ui"
+
+struct Anim { open: bool = false, hot: bool = false, round: int = 0 }
+
+fn view(a: Anim) -> Node {
+    // a ball that bounces each time the button is pressed
+    let drop = animate("ball", float(a.round % 2) * 120.0, 900)
+    // an expanding panel
+    let panel_h = animate("panel", if a.open { 120.0 } else { 0.0 }, 350)
+    // a colour that fades towards the hover state
+    let tint = animate_color("tint", if a.hot { 0xFFEC4899 } else { 0xFF4F46E5 }, 400)
+    // staggered entrance: every card slides in a little later
+    var cards: [Node] = []
+    for i in 0..3 {
+        let k = animate_from("card{i}", 0.0, 1.0, 500 + i * 200, ease_out_back)
+        cards.push(box().bg(WHITE).radius(12).padding(14).opacity(min(k, 1.0)).margin(int((1.0 - k) * 40.0), 0, 0, 0).add(text("Card {i + 1}")))
+    }
+    let spin = anim_loop(2.0)
+    let pulse = 0.6 + 0.4 * anim_wave(1.5)
+    return column([
+        row([
+            button("Drop the ball", || { a.round += 1 }),
+            button(if a.open { "Close" } else { "Open" }, || { a.open = !a.open }),
+            button("Colour", || { a.hot = !a.hot }).style(style().bg(tint).color(WHITE).border(0, TRANSPARENT)),
+        ]).gap(10),
+        canvas(|c| {
+            c.rect(0, 0, 400, 200, hex("#f1f5f9"))
+            c.circle(60, 40 + int(drop), 24, hex("#4f46e5"))
+            c.circle(200, 100, int(14.0 + 10.0 * pulse), fade(hex("#ec4899"), pulse))
+            for i in 0..8 {
+                let ang = (spin + float(i) / 8.0) * 6.2831853
+                c.circle(320 + int(40.0 * cos(ang)), 100 + int(40.0 * sin(ang)), 5, fade(hex("#0ea5e9"), float(i + 1) / 8.0))
+            }
+        }).width(400).height(200),
+        box().bg(hex("#e0e7ff")).radius(10).height(int(panel_h)).clip().padding(8).add(text("An animated panel")),
+        row(cards).gap(10),
+    ]).gap(14).padding(20)
+}
+
+fn main() {
+    let a = Anim()
+    ui_run("ATF animations", 460, 640, || view(a))
+}

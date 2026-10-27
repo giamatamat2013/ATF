@@ -1,0 +1,20 @@
+a &lt; b &amp; &quot;c&quot; &gt; &#39;d&#39;
+<p>1 &lt; 2</p>
+<a href="/x?a=1&amp;b=2" class="link big">go</a>
+<input disabled type="text">
+<ul>
+  <li>one</li>
+  <li>two</li>
+</ul>
+<div style="color: red; margin: 0;" id="box"><b>x</b></div>
+<h1 class="atf-slide-up" style="animation-duration: 1.00s; animation-delay: 0.50s;">Hi</h1>
+<p style="transition-delay: 0.20s;" class="atf-reveal">later</p>
+@keyframes grow {
+  0% { transform: scale(1) }
+  100% { transform: scale(2) }
+}
+animation: grow 2.00s ease-in-out 0.50s infinite both;
+.a { color: red }
+true true true
+true true true
+true true

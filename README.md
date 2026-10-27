@@ -61,7 +61,7 @@ total: 5.25
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
-  XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers (`std/net`), a small web server (`std/httpd`), web addresses (`std/url`), INI files (`std/ini`),
+  XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`),
   file name patterns (`std/glob`), a test framework (`std/test`), and the Python-style tools for whole programs:
   command-line parsing (`std/args`, like argparse), leveled logging (`std/log`), text helpers (`std/text`:
   wrap, title, snake_case, templates, tables), number theory and statistics (`std/math`), and algorithms from
@@ -171,7 +171,7 @@ error: 'abc' is not a number
 - [docs/REFERENCE.md](docs/REFERENCE.md) - the exact rules of the language
 - [docs/STDLIB.md](docs/STDLIB.md) - every library function, method and module
 - [examples/](examples/) - 46 example programs, from `fizzbuzz` to a `bigint` calculator and a text adventure
-- [examples/ui/](examples/ui/) - window programs: a counter, a task list, an analytics dashboard and a complete notes editor (menus, files, shortcuts, saved settings), and look-alikes of familiar programs: a calculator, Minesweeper, Snake, a Paint-style drawing program, Tetris, a spreadsheet with a formula engine and a Wolfenstein-style 3D shooter
+- [examples/ui/](examples/ui/) - window programs: a counter, a task list, an analytics dashboard and a complete notes editor (menus, files, shortcuts, saved settings), and look-alikes of familiar programs: a calculator, Minesweeper, Snake, a Paint-style drawing program, Tetris, a spreadsheet with a formula engine and a Wolfenstein-style 3D shooter, and `animations.atf` (easing, tweened values, loops); [examples/web_animations.atf](examples/web_animations.atf) builds and serves an animated web page with `std/html`
 
 Every code sample in these documents is compiled and run by `python tests/check_docs.py`.
 

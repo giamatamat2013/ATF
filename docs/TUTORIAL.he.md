@@ -2621,6 +2621,32 @@ fn main() {
 }
 ```
 
+* `std/html` בונה דפי אינטרנט. `h("div")` יוצר אלמנט; משרשרים `.cls(..)`, `.id(..)`, `.attr(..)`, `.style(..)`,
+  `.text(..)` (עם escape אוטומטי) ו-`.add(..)`. `.anim("slide-up")` מפעיל אנימציה מוכנה (`fade-in`, `slide-up`,
+  `slide-left`, `slide-right`, `zoom-in`, `bounce`, `pulse`, `spin`, `shake`, `float`), ו-`.reveal()` מפעיל אותה
+  כשהאלמנט נכנס לתצוגה בגלילה. לאנימציות משלכם יש `css_keyframes` ו-`css_animation`. `html_page` עוטף הכול בדף שלם,
+  ו-`http_html(page)` מגיש אותו עם `std/httpd`.
+
+<!-- id: html-basic -->
+```atf
+import "std/html"
+
+fn main() {
+    println(h("h1").text("Hello <ATF>").anim("slide-up").render())
+    println(css_animation("grow", 2.0, "ease-in-out", "infinite"))
+}
+```
+```output
+<h1 class="atf-slide-up" style="animation-duration: 0.60s;">Hello &lt;ATF&gt;</h1>
+animation: grow 2.00s ease-in-out 0.00s infinite both;
+```
+
+* אנימציות בחלונות (`std/ui`): `animate("key", target, ms)` מחזיר ערך שגולש ליעד בכל פעם שהיעד משתנה (לגודל, מיקום,
+  שקיפות); `animate_color` עושה זאת לצבעים, `animate_from` מפעיל כניסה, ו-`anim_loop(seconds)` / `anim_wave(seconds)`
+  נותנים ערכי 0..1 אינסופיים לסְפִינרים ולפעימות. פונקציות האטה (`ease_out`, `ease_in_out`, `ease_out_back`,
+  `ease_out_bounce`, `ease_out_elastic`) משנות את התחושה, למשל `animate_with("k", target, 600, ease_out_bounce)`.
+  החלון מצייר מחדש בכל פריים כל עוד אנימציה רצה, ומפסיק כשכלום לא זז. ראו `examples/ui/animations.atf` ו-`examples/web_animations.atf`.
+
 * `std/test` היא מסגרת בדיקות קטנה: `test(name, || { ... })` עם `expect`, `expect_eq`, `expect_ne`, `expect_near`
   ו-`expect_panics`, ו-`test_report()` לסיכום ולקוד היציאה.
 

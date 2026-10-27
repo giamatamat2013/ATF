@@ -299,6 +299,27 @@
       "defer ${0:println(\"done\")}"
     ]
   },
+  "Web page": {
+    "prefix": "htmlpage",
+    "description": "A web page with std/html and a built-in animation",
+    "body": [
+      "import \"std/html\"",
+      "",
+      "fn main() {",
+      "\tlet page = html_page(\"${1:Title}\", [",
+      "\t\th(\"h1\").text(\"${2:Hello}\").anim(\"slide-up\"),",
+      "\t])",
+      "\twrite_file(\"index.html\", page)",
+      "}"
+    ]
+  },
+  "Animated value": {
+    "prefix": "animate",
+    "description": "A value that glides to its target (std/ui)",
+    "body": [
+      "let ${1:x} = animate(\"${2:key}\", ${3:target}, ${4:300})"
+    ]
+  },
   "Window program": {
     "prefix": "uiapp",
     "description": "A window program with std/ui: data, a view function and ui_run",

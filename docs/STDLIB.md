@@ -34,6 +34,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/glob](#stdglob)
   - [std/hash](#stdhash)
   - [std/hex](#stdhex)
+  - [std/html](#stdhtml)
   - [std/http](#stdhttp)
   - [std/httpd](#stdhttpd)
   - [std/ini](#stdini)
@@ -1240,6 +1241,72 @@ Text (str) is treated as raw bytes. Decoding returns Result<str, str> with a rea
 - `fn hex_decode_bytes(s: str) -> Result<[byte], str>` - like hex_decode, but returns a byte array
 - `fn hex_dump(s: str) -> str` - Classic hex dump: 8-digit offset, 16 bytes in hex (split in two groups of 8), and the printable ASCII characters ('.' for the others). Every line ends with a newline.
 
+## std/html
+
+Build HTML pages in ATF, with ready-made CSS animations.
+
+```text
+import "std/html"
+
+fn main() {
+    let page = html_page("Hello", [
+        h("h1").text("Hello").anim("slide-up"),
+        h("p").text("Made with ATF").anim("fade-in", 1.0, 0.3),      // 1 second, after a 0.3 second delay
+        h("a").attr("href", "/more").text("More").cls("button"),
+    ])
+    write_file("index.html", page)
+}
+```
+
+An element is made with h("div"), then chained: .attr(name, value) .id(..) .cls(..) .style(..) .text(..) .add(..).
+Text is escaped for you (use .raw(..) for HTML you already have). `.anim(name)` plays one of the built-in
+animations (fade-in, slide-up, slide-left, slide-right, zoom-in, bounce, pulse, spin, shake, float), and
+`.reveal()` plays an entrance when the element scrolls into view. For your own animations write @keyframes
+with css_keyframes and pass the result to html_page as css. Serve a page with std/httpd: http_html(page).
+
+**Types**
+
+one HTML element, a piece of text or a piece of ready-made HTML (make them with h, html_text and html_raw)
+
+```text
+struct HtmlNode {
+    tag: str                          // "" for text and raw nodes
+    attrs: [(str, str)] = []
+    kids: [HtmlNode] = []
+    body: str = ""                    // the finished HTML of a text or raw node
+}
+```
+
+
+**Functions**
+
+- `fn html_escape(s: str) -> str` - the text with & < > " ' replaced, so it can be put in a page or in an attribute
+- `fn h(tag: str, kids: [HtmlNode] = []) -> HtmlNode` - an element: h("ul", [h("li").text("one"), h("li").text("two")])
+- `fn html_text(s: str) -> HtmlNode` - a piece of text (escaped)
+- `fn html_raw(s: str) -> HtmlNode` - HTML you already have, put in the page as it is
+- `fn html_is_void(tag: str) -> bool`
+- `fn html_render_into(n: HtmlNode, sb: StrBuilder, depth: int)`
+- `fn css_rule(selector: str, props: str) -> str` - one CSS rule: css_rule(".card", "color: red; padding: 8px")
+- `fn css_keyframes(name: str, steps: [(int, str)]) -> str` - An @keyframes block. Each step is (percent, css): css_keyframes("grow", [(0, "transform: scale(1)"), (100, "transform: scale(2)")]). Use it with css_animation: add the result to the css of html_page and put css_animation("grow", 2.0) in a rule or a style.
+- `fn css_animation(name: str, seconds: float, easing: str = "ease", repeat: str = "1", delay: float = 0.0) -> str` - the `animation` property for a keyframes name: css_animation("grow", 2.0, "ease-in-out", "infinite", 0.5) plays "grow" for 2 seconds each time, easing in and out, forever, after waiting half a second.
+- `fn html_anim_css() -> str` - The CSS of the built-in animations (html_page already contains it).
+- `fn html_reveal_js() -> str` - The script that makes .reveal() work (html_page already contains it).
+- `fn html_page(title: str, body: [HtmlNode], css: str = "", js: str = "", lang: str = "en", dir: str = "ltr") -> str` - A complete page: html_page("Title", [nodes]). css and js are added to the page as they are; lang and dir are the language and the direction of the text (dir "rtl" for Hebrew and Arabic). The built-in animations are included.
+
+**Methods of `HtmlNode`**
+
+- `.attr(name: str, value: str = "") -> HtmlNode` - set an attribute; a value of "" makes a bare one like `disabled`
+- `.id(value: str) -> HtmlNode`
+- `.cls(names: str) -> HtmlNode` - add a CSS class (or several, separated by spaces); calling it again adds more
+- `.style(css: str) -> HtmlNode` - add inline CSS: .style("color: red; margin: 0")
+- `.add(child: HtmlNode) -> HtmlNode` - add a child element or node
+- `.add_all(children: [HtmlNode]) -> HtmlNode` - add several children
+- `.text(s: str) -> HtmlNode` - add a piece of text (escaped)
+- `.raw(s: str) -> HtmlNode` - add HTML you already have
+- `.anim(name: str, seconds: float = 0.6, delay: float = 0.0) -> HtmlNode` - Play a built-in animation: fade-in, slide-up, slide-left, slide-right, zoom-in (entrances, once) or bounce, pulse, spin, float (loops), shake (once). The element starts after `delay` seconds.
+- `.reveal(delay: float = 0.0) -> HtmlNode` - fade the element in when it scrolls into view (page built with html_page)
+- `.render() -> str` - the HTML text of the element and everything in it
+
 ## std/http
 
 An HTTP and HTTPS client (built on the Windows WinInet library, so it uses the system's proxy and certificates).
@@ -2125,6 +2192,26 @@ struct Canvas {
 }
 ```
 
+```text
+struct UiTween {
+    from: float
+    to: float
+    t0: int
+    dur: int
+    cur: float
+}
+```
+
+```text
+struct UiColorTween {
+    from: int
+    to: int
+    t0: int
+    dur: int
+    cur: int
+}
+```
+
 
 **Functions**
 
@@ -2164,6 +2251,23 @@ struct Canvas {
 - `fn modal(content: Node, on_close: fn()) -> Node` - content on a dimmed layer over the whole window; on_close runs when the dimmed area is clicked or Esc is pressed. Add it last: root.add(modal(..)), or put it in the list of a stack.
 - `fn dialog(title: str, body: Node, buttons: [Node], on_close: fn()) -> Node` - a modal card with a title, a body and a row of buttons on the right
 - `fn canvas(draw: fn(Canvas)) -> Node` - an element that you draw with draw(canvas) each time the screen is drawn. Give it a size: .size(300, 200) or .grow()
+- `fn anim_set_time(ms: int)` - Freeze the animation clock at ms milliseconds since the start (for tests and screenshots: the animation stops where it is). anim_set_time(-1) gives the real clock back.
+- `fn anim_time() -> float` - Seconds since the program started. Using it in the view keeps the window animating.
+- `fn lerp(a: float, b: float, t: float) -> float` - The position between a and b: lerp(10.0, 20.0, 0.5) == 15.0
+- `fn ease_linear(t: float) -> float` - Easing functions turn the progress t (0.0 .. 1.0) into a position (0.0 .. 1.0), the way CSS timing functions do.
+- `fn ease_in(t: float) -> float` - slow start
+- `fn ease_out(t: float) -> float` - slow end (the default of animate)
+- `fn ease_in_out(t: float) -> float` - slow start and slow end
+- `fn ease_out_back(t: float) -> float` - goes a little past the end and settles back
+- `fn ease_out_bounce(t: float) -> float` - falls and bounces at the end, like a ball
+- `fn ease_out_elastic(t: float) -> float` - swings back and forth around the end, like a spring
+- `fn anim_keys(t: float, values: [float]) -> float` - Move through several values one after the other, evenly spaced over t (0.0 .. 1.0), like CSS keyframes: anim_keys(anim_loop(3.0), [0.0, 100.0, 40.0, 100.0, 0.0])
+- `fn anim_loop(seconds: float) -> float` - 0.0 .. 1.0, then again from 0.0, once every `seconds` for as long as the window is open
+- `fn anim_wave(seconds: float) -> float` - 0.0 .. 1.0 .. 0.0 smoothly, once every `seconds`: a pulse, a breathing glow
+- `fn animate(key: str, target: float, ms: int = 300) -> float` - The number that glides toward target. Give every animated value its own key. The first time it simply is the target; whenever the target changes it moves there over ms milliseconds, easing out.
+- `fn animate_with(key: str, target: float, ms: int, ease: fn(float) -> float) -> float` - the same with the easing function of your choice: animate_with("ball", y, 800, ease_out_bounce)
+- `fn animate_from(key: str, start: float, target: float, ms: int = 300, ease: fn(float) -> float = ease_out) -> float` - The first time it starts at `start` and moves to target (an entrance: fade in, slide in), then it behaves like animate: animate_from("title", 0.0, 1.0, 600, ease_out)
+- `fn animate_color(key: str, target: int, ms: int = 300) -> int` - A color that fades toward target (like animate, for colors): animate_color("bg", if on { GREEN } else { RED }, 400)
 - `fn focus_field(key: str)` - give the keyboard focus to the text field marked with .key(name) and put the caret at its end; does nothing when there is no such field. Handy in a shortcut: ui_shortcut("ctrl+f", || focus_field("search"))
 - `fn ui_refresh()` - ask for the view to be rebuilt and the window to be redrawn (after changing data outside an event)
 - `fn ui_quit()` - close the window (ui_run returns)

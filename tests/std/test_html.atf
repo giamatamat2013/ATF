@@ -1,0 +1,20 @@
+// std/html: elements, escaping, animations and pages
+import "std/html"
+
+fn main() {
+    println(html_escape("a < b & \"c\" > 'd'"))
+    println(h("p").text("1 < 2").render())
+    println(h("a").attr("href", "/x?a=1&b=2").cls("link").cls("big").text("go").render())
+    println(h("input").attr("disabled").attr("type", "text").render())
+    println(h("ul", [h("li").text("one"), h("li").text("two")]).render())
+    println(h("div").style("color: red").style("margin: 0;").id("box").raw("<b>x</b>").render())
+    println(h("h1").text("Hi").anim("slide-up", 1.0, 0.5).render())
+    println(h("p").text("later").reveal(0.2).render())
+    println(css_keyframes("grow", [(0, "transform: scale(1)"), (100, "transform: scale(2)")]))
+    println(css_animation("grow", 2.0, "ease-in-out", "infinite", 0.5))
+    println(css_rule(".a", "color: red"))
+    let page = html_page("T & T", [h("h1").text("Hello")], ".x \{ color: red }", "console.log(1)", "he", "rtl")
+    println(page.contains("<!DOCTYPE html>"), page.contains("<html lang=\"he\" dir=\"rtl\">"), page.contains("<title>T &amp; T</title>"))
+    println(page.contains("@keyframes atf-fade-in"), page.contains(".x \{ color: red }"), page.contains("IntersectionObserver"))
+    println(page.contains("<h1>Hello</h1>"), page.contains("console.log(1)"))
+}

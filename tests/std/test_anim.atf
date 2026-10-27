@@ -1,0 +1,82 @@
+// animations of std/ui without a window: the animation clock is frozen with anim_set_time
+import "std/ui"
+
+fn f3(x: float) -> str { return "{x:.3f}" }
+
+fn easing() {
+    println("easing")
+    for t in [0.0, 0.25, 0.5, 1.0] {
+        println(f3(t), f3(ease_linear(t)), f3(ease_in(t)), f3(ease_out(t)), f3(ease_in_out(t)))
+    }
+    println(f3(ease_out_back(0.5)), f3(ease_out_bounce(0.5)), f3(ease_out_bounce(1.0)), f3(ease_out_elastic(0.0)), f3(ease_out_elastic(1.0)))
+    println(f3(ease_in(-1.0)), f3(ease_out(2.0)))
+    println(f3(lerp(10.0, 20.0, 0.25)))
+    println(f3(anim_keys(0.0, [0.0, 10.0, 0.0])), f3(anim_keys(0.25, [0.0, 10.0, 0.0])), f3(anim_keys(0.5, [0.0, 10.0, 0.0])), f3(anim_keys(1.0, [0.0, 10.0, 0.0])))
+}
+
+fn tween() {
+    println("animate")
+    anim_set_time(0)
+    println(f3(animate("a", 10.0, 1000)))
+    anim_set_time(100)
+    println(f3(animate("a", 20.0, 1000)))
+    anim_set_time(600)
+    println(f3(animate("a", 20.0, 1000)))
+    anim_set_time(1100)
+    println(f3(animate("a", 20.0, 1000)))
+    // a new target in the middle of a move starts from where the value is now
+    anim_set_time(1600)
+    println(f3(animate("a", 0.0, 1000)))
+    anim_set_time(2100)
+    println(f3(animate("a", 0.0, 1000)))
+    println("entrance")
+    anim_set_time(5000)
+    println(f3(animate_from("b", 0.0, 1.0, 400, ease_linear)))
+    anim_set_time(5200)
+    println(f3(animate_from("b", 0.0, 1.0, 400, ease_linear)))
+    anim_set_time(5400)
+    println(f3(animate_from("b", 0.0, 1.0, 400, ease_linear)))
+    println("with")
+    anim_set_time(6000)
+    println(f3(animate_with("c", 1.0, 1000, ease_in)))
+    anim_set_time(6100)
+    println(f3(animate_with("c", 0.0, 1000, ease_in)))
+    anim_set_time(6600)
+    println(f3(animate_with("c", 0.0, 1000, ease_in)))
+}
+
+fn colors() {
+    println("colors")
+    anim_set_time(0)
+    println(animate_color("col", 0xFF000000, 1000) == 0xFF000000)
+    anim_set_time(10)
+    println(animate_color("col", 0xFFFFFFFF, 1000) == 0xFF000000)
+    anim_set_time(2000)
+    println(animate_color("col", 0xFFFFFFFF, 1000) == 0xFFFFFFFF)
+    anim_set_time(2500)
+    println(animate_color("col", 0xFF000000, 1000) == 0xFFFFFFFF)
+    anim_set_time(3000)
+    let mid = animate_color("col", 0xFF000000, 1000)
+    println(mid != 0xFFFFFFFF and mid != 0xFF000000)
+}
+
+fn loops() {
+    println("loops")
+    anim_set_time(0)
+    println(f3(anim_time()), f3(anim_loop(2.0)), f3(anim_wave(2.0)))
+    anim_set_time(500)
+    println(f3(anim_time()), f3(anim_loop(2.0)), f3(anim_wave(2.0)))
+    anim_set_time(1000)
+    println(f3(anim_loop(2.0)), f3(anim_wave(2.0)))
+    anim_set_time(2500)
+    println(f3(anim_loop(2.0)), f3(anim_wave(2.0)))
+    anim_set_time(-1)
+    println(anim_time() >= 0.0)
+}
+
+fn main() {
+    easing()
+    tween()
+    colors()
+    loops()
+}

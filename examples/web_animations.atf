@@ -1,0 +1,39 @@
+// A small animated website made with std/html. `atf run examples/web_animations.atf` writes the page and
+// prints a summary; `atf run examples/web_animations.atf serve` also serves it on http://127.0.0.1:8080/.
+import "std/html"
+import "std/httpd"
+
+fn build_page() -> str {
+    let css = css_keyframes("shine", [(0, "background-position: 0% 50%"), (50, "background-position: 100% 50%"), (100, "background-position: 0% 50%")]) + "\n" +
+        css_rule(".hero", "padding: 72px 24px; text-align: center; color: white; background: linear-gradient(120deg, #4f46e5, #ec4899, #f59e0b); background-size: 300% 300%; " + css_animation("shine", 8.0, "ease", "infinite")) + "\n" +
+        css_rule(".cards", "display: flex; gap: 16px; padding: 32px; flex-wrap: wrap; justify-content: center") + "\n" +
+        css_rule(".card", "background: white; border-radius: 16px; padding: 24px; width: 220px; box-shadow: 0 8px 24px rgba(15,23,42,.12)") + "\n" +
+        css_rule(".card:hover", "transform: translateY(-6px) rotate(-1deg); transition: transform .2s")
+
+    var cards: [HtmlNode] = []
+    let names = ["Fast", "Typed", "Native"]
+    let texts = ["Compiles to machine code.", "Errors found before you run.", "One small .exe, no runtime."]
+    for i in 0..names.len() {
+        cards.push(h("div").cls("card").reveal(float(i) * 0.15).add(h("h3").text(names[i])).add(h("p").text(texts[i])))
+    }
+    return html_page("ATF on the web", [
+        h("div").cls("hero").add_all([
+            h("h1").text("ATF can build websites").anim("slide-up"),
+            h("p").text("Pages, animations and a server, all in ATF.").anim("fade-in", 1.0, 0.4),
+            h("div").text("\u{1F680}").style("font-size: 48px").anim("bounce"),
+        ]),
+        h("div").cls("cards").add_all(cards),
+    ], css)
+}
+
+fn main(args: [str]) {
+    let page = build_page()
+    println("page bytes > 2000:", page.len() > 2000)
+    println("has hero:", page.contains("class=\"hero\""))
+    println("has 3 cards:", page.count("class=\"card atf-reveal\"") == 3)
+    if args.len() > 0 and args[0] == "serve" {
+        let server = http_listen(8080).unwrap()
+        println("serving on http://127.0.0.1:{server.port}/")
+        server.serve(|req| http_html(page))
+    }
+}

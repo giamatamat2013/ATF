@@ -1,0 +1,251 @@
+// std/html - build HTML pages in ATF, with ready-made CSS animations.
+//
+//   import "std/html"
+//
+//   fn main() {
+//       let page = html_page("Hello", [
+//           h("h1").text("Hello").anim("slide-up"),
+//           h("p").text("Made with ATF").anim("fade-in", 1.0, 0.3),      // 1 second, after a 0.3 second delay
+//           h("a").attr("href", "/more").text("More").cls("button"),
+//       ])
+//       write_file("index.html", page)
+//   }
+//
+// An element is made with h("div"), then chained: .attr(name, value) .id(..) .cls(..) .style(..) .text(..) .add(..).
+// Text is escaped for you (use .raw(..) for HTML you already have). `.anim(name)` plays one of the built-in
+// animations (fade-in, slide-up, slide-left, slide-right, zoom-in, bounce, pulse, spin, shake, float), and
+// `.reveal()` plays an entrance when the element scrolls into view. For your own animations write @keyframes
+// with css_keyframes and pass the result to html_page as css. Serve a page with std/httpd: http_html(page).
+
+// the text with & < > " ' replaced, so it can be put in a page or in an attribute
+fn html_escape(s: str) -> str {
+    var sb = str_builder()
+    for b in s.bytes() {
+        if b == '&' { sb.add("&amp;") }
+        else if b == '<' { sb.add("&lt;") }
+        else if b == '>' { sb.add("&gt;") }
+        else if b == '"' { sb.add("&quot;") }
+        else if b == '\'' { sb.add("&#39;") }
+        else { sb.add_byte(b) }
+    }
+    return sb.finish()
+}
+
+// one HTML element, a piece of text or a piece of ready-made HTML (make them with h, html_text and html_raw)
+struct HtmlNode {
+    tag: str                          // "" for text and raw nodes
+    attrs: [(str, str)] = []
+    kids: [HtmlNode] = []
+    body: str = ""                    // the finished HTML of a text or raw node
+}
+
+// an element: h("ul", [h("li").text("one"), h("li").text("two")])
+fn h(tag: str, kids: [HtmlNode] = []) -> HtmlNode {
+    return HtmlNode{ tag: tag, kids: kids }
+}
+
+// a piece of text (escaped)
+fn html_text(s: str) -> HtmlNode {
+    return HtmlNode{ tag: "", body: html_escape(s) }
+}
+
+// HTML you already have, put in the page as it is
+fn html_raw(s: str) -> HtmlNode {
+    return HtmlNode{ tag: "", body: s }
+}
+
+fn html_is_void(tag: str) -> bool {
+    return tag in ["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]
+}
+
+impl HtmlNode {
+    // set an attribute; a value of "" makes a bare one like `disabled`
+    fn attr(self, name: str, value: str = "") -> HtmlNode {
+        self.attrs.push((name, value))
+        return self
+    }
+
+    fn id(self, value: str) -> HtmlNode { return self.attr("id", value) }
+
+    // add a CSS class (or several, separated by spaces); calling it again adds more
+    fn cls(self, names: str) -> HtmlNode {
+        for i in 0..self.attrs.len() {
+            let (k, v) = self.attrs[i]
+            if k == "class" {
+                self.attrs[i] = (k, v + " " + names)
+                return self
+            }
+        }
+        return self.attr("class", names)
+    }
+
+    // add inline CSS: .style("color: red; margin: 0")
+    fn style(self, css: str) -> HtmlNode {
+        for i in 0..self.attrs.len() {
+            let (k, v) = self.attrs[i]
+            if k == "style" {
+                var sep = ""
+                if not v.trim().ends_with(";") { sep = ";" }
+                self.attrs[i] = (k, v + sep + " " + css)
+                return self
+            }
+        }
+        return self.attr("style", css)
+    }
+
+    // add a child element or node
+    fn add(self, child: HtmlNode) -> HtmlNode {
+        self.kids.push(child)
+        return self
+    }
+
+    // add several children
+    fn add_all(self, children: [HtmlNode]) -> HtmlNode {
+        for c in children { self.kids.push(c) }
+        return self
+    }
+
+    // add a piece of text (escaped)
+    fn text(self, s: str) -> HtmlNode {
+        self.kids.push(html_text(s))
+        return self
+    }
+
+    // add HTML you already have
+    fn raw(self, s: str) -> HtmlNode {
+        self.kids.push(html_raw(s))
+        return self
+    }
+
+    // Play a built-in animation: fade-in, slide-up, slide-left, slide-right, zoom-in (entrances, once) or
+    // bounce, pulse, spin, float (loops), shake (once). The element starts after `delay` seconds.
+    fn anim(self, name: str, seconds: float = 0.6, delay: float = 0.0) -> HtmlNode {
+        var css = "animation-duration: {seconds:.2f}s;"
+        if delay > 0.0 { css = css + " animation-delay: {delay:.2f}s;" }
+        return self.cls("atf-" + name).style(css)
+    }
+
+    // fade the element in when it scrolls into view (page built with html_page)
+    fn reveal(self, delay: float = 0.0) -> HtmlNode {
+        if delay > 0.0 { self.style("transition-delay: {delay:.2f}s;") }
+        return self.cls("atf-reveal")
+    }
+
+    // the HTML text of the element and everything in it
+    fn render(self) -> str {
+        var sb = str_builder()
+        html_render_into(self, sb, 0)
+        return sb.finish()
+    }
+}
+
+fn html_render_into(n: HtmlNode, sb: StrBuilder, depth: int) {
+    let pad = "  " * depth
+    if n.tag == "" {
+        sb.add(pad + n.body)
+        return
+    }
+    sb.add(pad + "<" + n.tag)
+    for (k, v) in n.attrs {
+        if v == "" { sb.add(" " + k) } else { sb.add(" " + k + "=\"" + html_escape(v) + "\"") }
+    }
+    sb.add(">")
+    if html_is_void(n.tag) { return }
+    var only_text = true
+    for c in n.kids {
+        if c.tag != "" { only_text = false }
+    }
+    if only_text or n.tag == "script" or n.tag == "style" or n.tag == "pre" or n.tag == "textarea" {
+        for c in n.kids { sb.add(c.body) }
+    } else {
+        for c in n.kids {
+            sb.add("\n")
+            html_render_into(c, sb, depth + 1)
+        }
+        sb.add("\n" + pad)
+    }
+    sb.add("</" + n.tag + ">")
+}
+
+// ---------------------------------------------------------------- CSS
+
+// one CSS rule: css_rule(".card", "color: red; padding: 8px")
+fn css_rule(selector: str, props: str) -> str {
+    return selector + " \{ " + props + " }"
+}
+
+// An @keyframes block. Each step is (percent, css): css_keyframes("grow", [(0, "transform: scale(1)"), (100, "transform: scale(2)")]).
+// Use it with css_animation: add the result to the css of html_page and put css_animation("grow", 2.0) in a rule or a style.
+fn css_keyframes(name: str, steps: [(int, str)]) -> str {
+    var sb = str_builder()
+    sb.add("@keyframes " + name + " \{\n")
+    for (pct, props) in steps {
+        sb.add("  " + str(pct) + "% \{ " + props + " }\n")
+    }
+    sb.add("}")
+    return sb.finish()
+}
+
+// the `animation` property for a keyframes name: css_animation("grow", 2.0, "ease-in-out", "infinite", 0.5)
+// plays "grow" for 2 seconds each time, easing in and out, forever, after waiting half a second.
+fn css_animation(name: str, seconds: float, easing: str = "ease", repeat: str = "1", delay: float = 0.0) -> str {
+    return "animation: {name} {seconds:.2f}s {easing} {delay:.2f}s {repeat} both;"
+}
+
+// The CSS of the built-in animations (html_page already contains it).
+fn html_anim_css() -> str {
+    var lines: [str] = []
+    let enter = [("fade-in", "opacity: 0", ""), ("slide-up", "opacity: 0; transform: translateY(24px)", ""),
+                 ("slide-left", "opacity: 0; transform: translateX(32px)", ""), ("slide-right", "opacity: 0; transform: translateX(-32px)", ""),
+                 ("zoom-in", "opacity: 0; transform: scale(0.85)", "")]
+    for (name, from, _) in enter {
+        lines.push(css_keyframes("atf-" + name, [(0, from), (100, "opacity: 1; transform: none")]))
+        lines.push(css_rule(".atf-" + name, "animation: atf-" + name + " 0.6s ease-out both"))
+    }
+    lines.push(css_keyframes("atf-bounce", [(0, "transform: translateY(0)"), (50, "transform: translateY(-18px)"), (100, "transform: translateY(0)")]))
+    lines.push(css_rule(".atf-bounce", "animation: atf-bounce 1s ease-in-out infinite"))
+    lines.push(css_keyframes("atf-pulse", [(0, "transform: scale(1)"), (50, "transform: scale(1.08)"), (100, "transform: scale(1)")]))
+    lines.push(css_rule(".atf-pulse", "animation: atf-pulse 1.4s ease-in-out infinite"))
+    lines.push(css_keyframes("atf-spin", [(0, "transform: rotate(0deg)"), (100, "transform: rotate(360deg)")]))
+    lines.push(css_rule(".atf-spin", "animation: atf-spin 1s linear infinite"))
+    lines.push(css_keyframes("atf-shake", [(0, "transform: translateX(0)"), (20, "transform: translateX(-8px)"), (40, "transform: translateX(8px)"),
+                                           (60, "transform: translateX(-6px)"), (80, "transform: translateX(6px)"), (100, "transform: translateX(0)")]))
+    lines.push(css_rule(".atf-shake", "animation: atf-shake 0.5s ease-in-out both"))
+    lines.push(css_keyframes("atf-float", [(0, "transform: translateY(0)"), (50, "transform: translateY(-10px)"), (100, "transform: translateY(0)")]))
+    lines.push(css_rule(".atf-float", "animation: atf-float 3s ease-in-out infinite"))
+    lines.push(css_rule(".atf-reveal", "opacity: 0; transform: translateY(24px); transition: opacity 0.7s ease, transform 0.7s ease"))
+    lines.push(css_rule(".atf-reveal.atf-visible", "opacity: 1; transform: none"))
+    lines.push(r"@media (prefers-reduced-motion: reduce) { [class*='atf-'] { animation: none !important; transition: none !important; opacity: 1 !important; transform: none !important } }")
+    return "\n".join(lines)
+}
+
+// The script that makes .reveal() work (html_page already contains it).
+fn html_reveal_js() -> str {
+    return r"const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('atf-visible'); io.unobserve(e.target) } }), { threshold: 0.15 }); document.querySelectorAll('.atf-reveal').forEach(el => io.observe(el));"
+}
+
+// ---------------------------------------------------------------- pages
+
+// A complete page: html_page("Title", [nodes]). css and js are added to the page as they are; lang and dir are
+// the language and the direction of the text (dir "rtl" for Hebrew and Arabic). The built-in animations are included.
+fn html_page(title: str, body: [HtmlNode], css: str = "", js: str = "", lang: str = "en", dir: str = "ltr") -> str {
+    var sb = str_builder()
+    sb.add("<!DOCTYPE html>\n")
+    sb.add("<html lang=\"" + html_escape(lang) + "\" dir=\"" + html_escape(dir) + "\">\n<head>\n")
+    sb.add("<meta charset=\"utf-8\">\n")
+    sb.add("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+    sb.add("<title>" + html_escape(title) + "</title>\n")
+    sb.add("<style>\n")
+    sb.add(r"body { margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; line-height: 1.5 }")
+    sb.add("\n" + html_anim_css() + "\n")
+    if css != "" { sb.add(css + "\n") }
+    sb.add("</style>\n</head>\n<body>\n")
+    for n in body {
+        html_render_into(n, sb, 0)
+        sb.add("\n")
+    }
+    sb.add("<script>\n" + html_reveal_js() + "\n")
+    if js != "" { sb.add(js + "\n") }
+    sb.add("</script>\n</body>\n</html>\n")
+    return sb.finish()
+}

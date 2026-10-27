@@ -2617,6 +2617,33 @@ fn main() {
 }
 ```
 
+* `std/html` builds web pages. `h("div")` makes an element; chain `.cls(..)`, `.id(..)`, `.attr(..)`, `.style(..)`,
+  `.text(..)` (escaped) and `.add(..)`. `.anim("slide-up")` plays a ready-made animation (`fade-in`, `slide-up`,
+  `slide-left`, `slide-right`, `zoom-in`, `bounce`, `pulse`, `spin`, `shake`, `float`), and `.reveal()` plays it when the
+  element scrolls into view. For your own animations use `css_keyframes` and `css_animation`. `html_page` wraps everything
+  into a full page, and `http_html(page)` serves it with `std/httpd`.
+
+<!-- id: html-basic -->
+```atf
+import "std/html"
+
+fn main() {
+    println(h("h1").text("Hello <ATF>").anim("slide-up").render())
+    println(css_animation("grow", 2.0, "ease-in-out", "infinite"))
+}
+```
+```output
+<h1 class="atf-slide-up" style="animation-duration: 0.60s;">Hello &lt;ATF&gt;</h1>
+animation: grow 2.00s ease-in-out 0.00s infinite both;
+```
+
+* Animations in windows (`std/ui`): `animate("key", target, ms)` returns a value that glides to `target` whenever the
+  target changes (use it for sizes, positions, opacity); `animate_color` does the same for colours, `animate_from`
+  plays an entrance, and `anim_loop(seconds)` / `anim_wave(seconds)` give endless 0..1 values for spinners and pulses.
+  Easing functions (`ease_out`, `ease_in_out`, `ease_out_back`, `ease_out_bounce`, `ease_out_elastic`) change the feel,
+  e.g. `animate_with("k", target, 600, ease_out_bounce)`. The window redraws every frame while an animation runs, and
+  stops redrawing when nothing moves. See `examples/ui/animations.atf` and `examples/web_animations.atf`.
+
 * `std/test` is a small test framework: `test(name, || { ... })` with `expect`, `expect_eq`, `expect_ne`, `expect_near`
   and `expect_panics`, and `test_report()` for the summary and exit code.
 
