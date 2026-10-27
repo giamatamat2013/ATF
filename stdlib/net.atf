@@ -1,0 +1,310 @@
+// std/net - TCP connections: a client (tcp_connect) and a server (tcp_listen), built on the Windows socket library.
+//
+//   import "std/net"
+//
+//   match tcp_connect("example.com", 80) {
+//       Result.Ok(c) => {
+//           c.write("HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+//           println(c.read_line() ?? "no answer")      // HTTP/1.0 200 OK
+//           c.close()
+//       }
+//       Result.Err(e) => println("cannot connect: " + e)
+//   }
+//
+//   let server = tcp_listen(0).unwrap()     // port 0 picks a free port: server.port
+//   let client = server.accept().unwrap()   // waits for the next connection
+//
+// Reads wait at most `timeout_ms` (30 seconds unless changed with set_timeout); a read that times out
+// returns nil, the same as a closed connection. Data is bytes in a str.
+
+extern "ws2_32" fn WSAStartup(version: int, data: ptr<int>) -> i32
+extern "ws2_32" fn WSAGetLastError() -> i32
+extern "ws2_32" fn net_getaddrinfo(node: ptr<byte>, service: ptr<byte>, hints: ptr<int>, res: ptr<int>) -> i32 as "getaddrinfo"
+extern "ws2_32" fn net_freeaddrinfo(ai: int) as "freeaddrinfo"
+extern "ws2_32" fn net_socket(family: int, kind: int, proto: int) -> int as "socket"
+extern "ws2_32" fn net_connect(s: int, addr: int, len: int) -> i32 as "connect"
+extern "ws2_32" fn net_bind(s: int, addr: int, len: int) -> i32 as "bind"
+extern "ws2_32" fn net_listen(s: int, backlog: int) -> i32 as "listen"
+extern "ws2_32" fn net_accept(s: int, addr: int, len: int) -> int as "accept"
+extern "ws2_32" fn net_send(s: int, buf: ptr<byte>, len: int, flags: int) -> i32 as "send"
+extern "ws2_32" fn net_recv(s: int, buf: ptr<byte>, len: int, flags: int) -> i32 as "recv"
+extern "ws2_32" fn net_setsockopt(s: int, level: int, opt: int, value: ptr<int>, len: int) -> i32 as "setsockopt"
+extern "ws2_32" fn net_getsockname(s: int, addr: ptr<int>, len: ptr<int>) -> i32 as "getsockname"
+extern "ws2_32" fn net_ioctlsocket(s: int, cmd: int, arg: ptr<int>) -> i32 as "ioctlsocket"
+extern "ws2_32" fn net_select(n: int, r: ptr<int>, w: ptr<int>, e: ptr<int>, timeout: ptr<int>) -> i32 as "select"
+extern "ws2_32" fn net_shutdown(s: int, how: int) -> i32 as "shutdown"
+extern "ws2_32" fn net_closesocket(s: int) -> i32 as "closesocket"
+extern "ws2_32" fn net_inet_ntop(family: int, addr: int, buf: ptr<byte>, size: int) -> int as "inet_ntop"
+
+var net_started = false
+
+fn net_start() {
+    if net_started { return }
+    WSAStartup(0x0202, __alloc(512) as ptr<int>)
+    net_started = true
+}
+
+// a readable message for a Windows socket error code
+fn net_error_text(code: int) -> str {
+    return match code {
+        10060 => "timed out"
+        10061 => "connection refused"
+        10048 => "the address is already in use"
+        10049 => "the address is not valid here"
+        10051 | 10065 => "the network or host is unreachable"
+        10054 => "the connection was reset"
+        11001 => "host not found"
+        11002 | 11003 => "the name server did not answer"
+        _ => "socket error {code}"
+    }
+}
+
+fn net_last_error() -> str { return net_error_text(WSAGetLastError()) }
+
+// looks up a host and port; returns the addrinfo list (free it with net_freeaddrinfo) or an error
+fn net_lookup(host: str, port: int, passive: bool) -> Result<int, str> {
+    net_start()
+    let hints = __alloc(48) as ptr<int>
+    hints[0] = (2 << 32) | (if passive { 1 } else { 0 })     // ai_flags (AI_PASSIVE), ai_family = AF_INET
+    hints[1] = 1 | (6 << 32)                                  // SOCK_STREAM, IPPROTO_TCP
+    let res = __alloc(8) as ptr<int>
+    var node = str_data(host)
+    if host == "" { node = 0 as ptr<byte> }
+    let rc = net_getaddrinfo(node, str_data(str(port)), hints, res)
+    if rc != 0 { return Result.Err(net_error_text(rc) + ": " + host) }
+    return Result.Ok(res[0])
+}
+
+// the IPv4 addresses of a host name, like ["93.184.215.14"]; empty when it cannot be found
+fn net_resolve(host: str) -> [str] {
+    var out: [str] = []
+    let r = net_lookup(host, 0, false)
+    if r.is_err() { return out }
+    let list = r.unwrap()
+    var ai = list
+    let buf = __alloc_atomic(64)
+    while ai != 0 {
+        let p = ai as ptr<int>
+        if net_inet_ntop(2, p[4] + 4, buf, 64) != 0 {
+            var n = 0
+            while buf[n] != 0 { n += 1 }
+            let text = str_from_ptr(buf, n)
+            if not out.contains(text) { out.push(text) }
+        }
+        ai = p[5]
+    }
+    net_freeaddrinfo(list)
+    return out
+}
+
+// a connection to another program
+struct TcpConn {
+    sock: int
+    pending: str        // bytes already received but not yet returned
+}
+
+// connects to host:port; waits at most timeout_ms for the other side to answer
+fn tcp_connect(host: str, port: int, timeout_ms: int = 10000) -> Result<TcpConn, str> {
+    let r = net_lookup(host, port, false)
+    if r.is_err() { return Result.Err(r.err()!) }
+    let list = r.unwrap()
+    var ai = list
+    var last = "cannot connect to {host}:{port}"
+    while ai != 0 {
+        let p = ai as ptr<int>
+        let s = net_socket(2, 1, 6)
+        if s == -1 {
+            last = net_last_error()
+            break
+        }
+        let mode = __alloc(8) as ptr<int>
+        mode[0] = 1
+        net_ioctlsocket(s, 0x8004667E, mode)                 // FIONBIO: do not block while connecting
+        var ok = net_connect(s, p[4], p[2] & 0xFFFFFFFF) == 0
+        if not ok {
+            let code = WSAGetLastError()
+            if code == 10035 {                                // WSAEWOULDBLOCK: wait for the answer
+                let wset = __alloc(16) as ptr<int>
+                wset[0] = 1
+                wset[1] = s
+                let eset = __alloc(16) as ptr<int>
+                eset[0] = 1
+                eset[1] = s
+                let tv = __alloc(8) as ptr<int>
+                tv[0] = (timeout_ms / 1000) | (((timeout_ms % 1000) * 1000) << 32)
+                let n = net_select(0, 0 as ptr<int>, wset, eset, tv)
+                if n > 0 and wset[0] == 1 {
+                    ok = true
+                } else if n == 0 {
+                    last = "timed out connecting to {host}:{port}"
+                } else {
+                    last = "connection refused by {host}:{port}"
+                }
+            } else {
+                last = net_error_text(code)
+            }
+        }
+        if ok {
+            mode[0] = 0
+            net_ioctlsocket(s, 0x8004667E, mode)
+            net_freeaddrinfo(list)
+            let c = TcpConn{ sock: s, pending: "" }
+            c.set_timeout(30000)
+            return Result.Ok(c)
+        }
+        net_closesocket(s)
+        ai = p[5]
+    }
+    net_freeaddrinfo(list)
+    return Result.Err(last)
+}
+
+impl TcpConn {
+    // how long a read (and a write) may wait, in milliseconds; 0 waits forever
+    fn set_timeout(self, ms: int) {
+        let v = __alloc(8) as ptr<int>
+        v[0] = ms
+        net_setsockopt(self.sock, 0xFFFF, 0x1006, v, 4)      // SO_RCVTIMEO
+        net_setsockopt(self.sock, 0xFFFF, 0x1005, v, 4)      // SO_SNDTIMEO
+    }
+
+    // sends all of data; false when the connection is broken
+    fn write(self, data: str) -> bool {
+        var sent = 0
+        while sent < data.len() {
+            let n = net_send(self.sock, str_data(data) + sent, data.len() - sent, 0)
+            if n <= 0 { return false }
+            sent += n
+        }
+        return true
+    }
+
+    // sends data followed by "\r\n"
+    fn write_line(self, line: str) -> bool { return self.write(line + "\r\n") }
+
+    fn raw_read(self, max: int) -> str? {
+        let buf = __alloc_atomic(max)
+        let n = net_recv(self.sock, buf, max, 0)
+        if n <= 0 { return nil }
+        return str_from_ptr(buf, n)
+    }
+
+    // the next bytes that arrive (at most max); nil when the connection is closed or the read timed out
+    fn read(self, max: int = 65536) -> str? {
+        if self.pending != "" {
+            var take = self.pending
+            if take.len() > max {
+                take = self.pending[0..max]
+                self.pending = self.pending[max..]
+            } else {
+                self.pending = ""
+            }
+            return take
+        }
+        return self.raw_read(max)
+    }
+
+    // the next line without its "\n" (or "\r\n"); nil when nothing is left
+    fn read_line(self) -> str? {
+        loop {
+            let i = self.pending.find("\n")
+            if i >= 0 {
+                var line = self.pending[0..i]
+                self.pending = self.pending[i + 1..]
+                if line.ends_with("\r") { line = line[0..line.len() - 1] }
+                return line
+            }
+            if let more = self.raw_read(65536) {
+                self.pending = self.pending + more
+            } else {
+                if self.pending == "" { return nil }
+                let rest = self.pending
+                self.pending = ""
+                return rest
+            }
+        }
+        return nil
+    }
+
+    // exactly n bytes; nil when the connection closes first
+    fn read_exact(self, n: int) -> str? {
+        while self.pending.len() < n {
+            if let more = self.raw_read(65536) { self.pending = self.pending + more } else { return nil }
+        }
+        let out = self.pending[0..n]
+        self.pending = self.pending[n..]
+        return out
+    }
+
+    // everything until the other side closes the connection
+    fn read_all(self) -> str {
+        let sb = str_builder()
+        sb.add(self.pending)
+        self.pending = ""
+        while let more = self.raw_read(65536) { sb.add(more) }
+        return sb.finish()
+    }
+
+    // tells the other side that nothing more will be sent (reading still works)
+    fn close_write(self) { net_shutdown(self.sock, 1) }
+
+    // closes the connection
+    fn close(self) {
+        if self.sock != -1 {
+            net_closesocket(self.sock)
+            self.sock = -1
+        }
+    }
+}
+
+// a server waiting for connections
+struct TcpServer {
+    sock: int
+    port: int           // the port it listens on (useful after tcp_listen(0))
+}
+
+// listens on a port; host "" listens on every network, "127.0.0.1" (the default) only on this computer
+fn tcp_listen(port: int, host: str = "127.0.0.1") -> Result<TcpServer, str> {
+    let r = net_lookup(host, port, true)
+    if r.is_err() { return Result.Err(r.err()!) }
+    let list = r.unwrap()
+    let p = list as ptr<int>
+    let s = net_socket(2, 1, 6)
+    if s == -1 {
+        net_freeaddrinfo(list)
+        return Result.Err(net_last_error())
+    }
+    if net_bind(s, p[4], p[2] & 0xFFFFFFFF) != 0 or net_listen(s, 0x7FFFFFFF) != 0 {
+        let e = net_last_error()
+        net_freeaddrinfo(list)
+        net_closesocket(s)
+        return Result.Err(e + " (port {port})")
+    }
+    net_freeaddrinfo(list)
+    let addr = __alloc(32) as ptr<int>
+    let len = __alloc(8) as ptr<int>
+    len[0] = 32
+    net_getsockname(s, addr, len)
+    let b = addr as ptr<byte>
+    let real_port = int(b[2]) * 256 + int(b[3])
+    return Result.Ok(TcpServer{ sock: s, port: real_port })
+}
+
+impl TcpServer {
+    // waits for the next connection
+    fn accept(self) -> Result<TcpConn, str> {
+        let s = net_accept(self.sock, 0, 0)
+        if s == -1 { return Result.Err(net_last_error()) }
+        let c = TcpConn{ sock: s, pending: "" }
+        c.set_timeout(30000)
+        return Result.Ok(c)
+    }
+
+    // stops listening
+    fn close(self) {
+        if self.sock != -1 {
+            net_closesocket(self.sock)
+            self.sock = -1
+        }
+    }
+}

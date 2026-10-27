@@ -223,7 +223,8 @@ struct ExternDecl {
     name: str,
     params: [Param],
     ret: TypeExpr?,
-    pos: Pos
+    pos: Pos,
+    sym: str           // the DLL's name for the function (as "..."); the same as name when not given
 }
 
 // interface Name { fn method(self, a: T) -> R ... }  - any type with matching methods implements it

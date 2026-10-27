@@ -177,8 +177,9 @@ let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 ## Modules
 
 `import "other"` loads `other.atf` (the path is relative to the importing file, the ending may be left out).
-`import "std/json"` loads a library module: `app`, `base64`, `collections`, `csv`, `datetime`, `hash`, `hex`, `json`
-and `ui`. Everything in an imported file becomes part of the one global namespace. `include_str("f.txt")` embeds a
+`import "std/json"` loads a library module: `algo`, `app`, `args`, `base64`, `bits`, `collections`, `csv`, `datetime`,
+`fs`, `hash`, `hex`, `http`, `json`, `log`, `math`, `net`, `path`, `process`, `random`, `regex`, `test`, `text`, `toml`,
+`ui` and `xml` (all described in [STDLIB.md](STDLIB.md)). Everything in an imported file becomes part of the one global namespace. `include_str("f.txt")` embeds a
 file in the program at compile time.
 
 ## Memory
@@ -186,6 +187,24 @@ file in the program at compile time.
 Memory is managed by a garbage collector. Programs never free memory. `gc()` forces a collection; `gc_runs()` and
 `gc_live_bytes()` report what it did. Unsafe pointer operations (`ptr<T>`, `__alloc`) exist for the standard library and for
 calling Windows functions with `extern`; ordinary programs do not need them.
+
+## Calling Windows functions: `extern`
+
+`extern "dll" fn name(params) -> T` declares a function from a Windows DLL; the program then calls it like any
+other function. Add `as "Symbol"` to give it your own name when the DLL's name is too short or would clash
+with another function (the standard library uses this for names like `send` and `connect`).
+
+<!-- id: extern-as -->
+```atf
+extern "kernel32" fn process_id() -> i32 as "GetCurrentProcessId"
+
+fn main() {
+    println(process_id() > 0)
+}
+```
+```output
+true
+```
 
 ## Command line
 

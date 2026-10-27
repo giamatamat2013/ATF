@@ -1,0 +1,493 @@
+// std/xml - read and write XML.
+//
+//   import "std/xml"
+//
+//   let doc = xml_parse("<list><item id=\"1\">apple</item><item id=\"2\">pear</item></list>").unwrap()
+//   for it in doc.children_named("item") { println(it.attr("id") ?? "?", it.inner_text()) }
+//   let note = xml_element("note").set_attr("lang", "en").add(xml_text("hi & bye"))
+//   println(xml_stringify(note))          // <note lang="en">hi &amp; bye</note>
+//
+// A node is an element (a tag with attributes and children) or a piece of text (tag "").
+// Comments, the <?xml ...?> declaration and <!DOCTYPE ...> are skipped; CDATA becomes text.
+// Text made only of white space between elements is dropped; other text is kept as it is.
+
+struct XmlNode {
+    tag: str                 // "" for a text node
+    attrs: {str: str}
+    children: [XmlNode]
+    text: str                // the text of a text node
+}
+
+// a new element with no attributes and no children
+fn xml_element(tag: str) -> XmlNode {
+    var attrs: {str: str} = {}
+    var kids: [XmlNode] = []
+    return XmlNode{ tag: tag, attrs: attrs, children: kids, text: "" }
+}
+
+// a new text node
+fn xml_text(text: str) -> XmlNode {
+    var attrs: {str: str} = {}
+    var kids: [XmlNode] = []
+    return XmlNode{ tag: "", attrs: attrs, children: kids, text: text }
+}
+
+impl XmlNode {
+    // true for a text node
+    fn is_text(self) -> bool { return self.tag == "" }
+
+    // the value of an attribute, nil when it is missing
+    fn attr(self, name: str) -> str? { return self.attrs.try_get(name) }
+
+    // the value of an attribute, or the default when it is missing
+    fn attr_or(self, name: str, default: str) -> str { return self.attrs.get(name, default) }
+
+    // sets an attribute and returns the node, so calls can be chained
+    fn set_attr(self, name: str, value: str) -> XmlNode {
+        self.attrs[name] = value
+        return self
+    }
+
+    // adds a child and returns this node, so calls can be chained
+    fn add(self, child: XmlNode) -> XmlNode {
+        self.children.push(child)
+        return self
+    }
+
+    // adds the child <tag>text</tag> and returns this node
+    fn add_text(self, tag: str, text: str) -> XmlNode {
+        self.children.push(xml_element(tag).add(xml_text(text)))
+        return self
+    }
+
+    // the child elements (text nodes left out)
+    fn elements(self) -> [XmlNode] { return self.children.filter(|c| not c.is_text()) }
+
+    // the first child element with this tag, nil when there is none
+    fn child(self, tag: str) -> XmlNode? {
+        for c in self.children {
+            if c.tag == tag { return c }
+        }
+        return nil
+    }
+
+    // the child elements with this tag
+    fn children_named(self, tag: str) -> [XmlNode] { return self.children.filter(|c| c.tag == tag) }
+
+    // every element below this one (at any depth) with this tag, in document order
+    fn find_all(self, tag: str) -> [XmlNode] {
+        var out: [XmlNode] = []
+        xml_collect(self, tag, out)
+        return out
+    }
+
+    // follows a path of child tags, like "server/port"; nil when a step is missing
+    fn query(self, path: str) -> XmlNode? {
+        var cur = self
+        for part in path.split("/") {
+            if part == "" { continue }
+            if let c = cur.child(part) { cur = c } else { return nil }
+        }
+        return cur
+    }
+
+    // all the text inside this node, joined
+    fn inner_text(self) -> str {
+        if self.is_text() { return self.text }
+        let sb = str_builder()
+        xml_text_into(self, sb)
+        return sb.finish()
+    }
+
+    fn to_str(self) -> str { return xml_stringify(self) }
+}
+
+fn xml_collect(n: XmlNode, tag: str, out: [XmlNode]) {
+    for c in n.children {
+        if c.tag == tag { out.push(c) }
+        if not c.is_text() { xml_collect(c, tag, out) }
+    }
+}
+
+fn xml_text_into(n: XmlNode, sb: StrBuilder) {
+    for c in n.children {
+        if c.is_text() { sb.add(c.text) } else { xml_text_into(c, sb) }
+    }
+}
+
+// ---------------------------------------------------------------- writing
+
+// replaces & < > (and " when quote is true) with entities
+fn xml_escape(s: str, quote: bool = false) -> str {
+    let sb = str_builder()
+    for i in 0..s.len() {
+        let b = s.byte_at(i)
+        if b == '&' {
+            sb.add("&amp;")
+        } else if b == '<' {
+            sb.add("&lt;")
+        } else if b == '>' {
+            sb.add("&gt;")
+        } else if quote and b == '"' {
+            sb.add("&quot;")
+        } else {
+            sb.add_byte(b)
+        }
+    }
+    return sb.finish()
+}
+
+fn xml_write(sb: StrBuilder, n: XmlNode, indent: int, level: int) {
+    if n.is_text() {
+        sb.add(xml_escape(n.text))
+        return
+    }
+    sb.add("<" + n.tag)
+    for k, v in n.attrs { sb.add(" " + k + "=\"" + xml_escape(v, true) + "\"") }
+    if n.children.is_empty() {
+        sb.add("/>")
+        return
+    }
+    sb.add(">")
+    // an element that holds text stays on one line, so indenting never changes its text
+    var has_text = false
+    for c in n.children {
+        if c.is_text() { has_text = true }
+    }
+    if indent == 0 or has_text {
+        for c in n.children { xml_write(sb, c, 0, 0) }
+    } else {
+        for c in n.children {
+            sb.add("\n" + " ".repeat(indent * (level + 1)))
+            xml_write(sb, c, indent, level + 1)
+        }
+        sb.add("\n" + " ".repeat(indent * level))
+    }
+    sb.add("</" + n.tag + ">")
+}
+
+// the XML text of a node; indent > 0 puts each child element on its own line
+fn xml_stringify(n: XmlNode, indent: int = 0, declaration: bool = false) -> str {
+    let sb = str_builder()
+    if declaration { sb.add("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n") }
+    xml_write(sb, n, indent, 0)
+    return sb.finish()
+}
+
+// ---------------------------------------------------------------- reading
+
+struct XmlParser {
+    src: str
+    pos: int
+    err: str
+}
+
+fn xml_is_space(b: byte) -> bool { return b == ' ' or b == '\n' or b == '\r' or b == '\t' }
+
+fn xml_is_name_byte(b: byte) -> bool {
+    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_' or b == ':' or
+        b == '-' or b == '.' or int(b) >= 128
+}
+
+fn xml_add_utf8(sb: StrBuilder, cp: int) {
+    if cp < 0x80 {
+        sb.add_byte(byte(cp))
+    } else if cp < 0x800 {
+        sb.add_byte(byte(0xC0 | (cp >> 6)))
+        sb.add_byte(byte(0x80 | (cp & 0x3F)))
+    } else if cp < 0x10000 {
+        sb.add_byte(byte(0xE0 | (cp >> 12)))
+        sb.add_byte(byte(0x80 | ((cp >> 6) & 0x3F)))
+        sb.add_byte(byte(0x80 | (cp & 0x3F)))
+    } else {
+        sb.add_byte(byte(0xF0 | (cp >> 18)))
+        sb.add_byte(byte(0x80 | ((cp >> 12) & 0x3F)))
+        sb.add_byte(byte(0x80 | ((cp >> 6) & 0x3F)))
+        sb.add_byte(byte(0x80 | (cp & 0x3F)))
+    }
+}
+
+impl XmlParser {
+    fn line(self) -> int {
+        var n = 1
+        for i in 0..min(self.pos, self.src.len()) {
+            if self.src.byte_at(i) == '\n' { n += 1 }
+        }
+        return n
+    }
+
+    fn fail(self, msg: str) {
+        if self.err == "" { self.err = "line {self.line()}: " + msg }
+    }
+
+    fn at_end(self) -> bool { return self.pos >= self.src.len() }
+
+    fn cur(self) -> byte { return self.src.byte_at(self.pos) }
+
+    fn starts(self, s: str) -> bool {
+        if self.pos + s.len() > self.src.len() { return false }
+        for i in 0..s.len() {
+            if self.src.byte_at(self.pos + i) != s.byte_at(i) { return false }
+        }
+        return true
+    }
+
+    fn skip_ws(self) {
+        while not self.at_end() and xml_is_space(self.cur()) { self.pos += 1 }
+    }
+
+    // moves past the next `end`; false when it is missing
+    fn skip_until(self, end: str) -> bool {
+        while not self.at_end() {
+            if self.starts(end) {
+                self.pos += end.len()
+                return true
+            }
+            self.pos += 1
+        }
+        return false
+    }
+
+    // skips white space, comments, <?...?> and <!DOCTYPE ...>; false on an error
+    fn skip_misc(self) -> bool {
+        loop {
+            self.skip_ws()
+            if self.starts("<!--") {
+                if not self.skip_until("-->") {
+                    self.fail("a comment is not closed with -->")
+                    return false
+                }
+            } else if self.starts("<?") {
+                if not self.skip_until("?>") {
+                    self.fail("<? is not closed with ?>")
+                    return false
+                }
+            } else if self.starts("<!") {
+                var depth = 0
+                while not self.at_end() {
+                    let b = self.cur()
+                    self.pos += 1
+                    if b == '[' {
+                        depth += 1
+                    } else if b == ']' {
+                        depth -= 1
+                    } else if b == '>' and depth == 0 {
+                        break
+                    }
+                }
+            } else {
+                return true
+            }
+        }
+        return true
+    }
+
+    fn name(self) -> str {
+        let start = self.pos
+        while not self.at_end() and xml_is_name_byte(self.cur()) { self.pos += 1 }
+        return self.src[start..self.pos]
+    }
+
+    // replaces the entities in raw text
+    fn decode(self, raw: str) -> str {
+        if not raw.contains("&") { return raw }
+        let sb = str_builder()
+        var i = 0
+        while i < raw.len() {
+            let b = raw.byte_at(i)
+            if b != '&' {
+                sb.add_byte(b)
+                i += 1
+                continue
+            }
+            var j = i + 1
+            while j < raw.len() and raw.byte_at(j) != ';' and j - i < 12 { j += 1 }
+            if j >= raw.len() or raw.byte_at(j) != ';' {
+                self.fail("'&' must start an entity like &amp;")
+                return raw
+            }
+            let ent = raw[i + 1..j]
+            if ent == "lt" {
+                sb.add("<")
+            } else if ent == "gt" {
+                sb.add(">")
+            } else if ent == "amp" {
+                sb.add("&")
+            } else if ent == "quot" {
+                sb.add("\"")
+            } else if ent == "apos" {
+                sb.add("'")
+            } else if ent.starts_with("#x") or ent.starts_with("#X") {
+                var cp = 0
+                for k in 2..ent.len() {
+                    let d = ent.byte_at(k)
+                    var v = -1
+                    if d >= '0' and d <= '9' {
+                        v = int(d) - int('0')
+                    } else if d >= 'a' and d <= 'f' {
+                        v = int(d) - int('a') + 10
+                    } else if d >= 'A' and d <= 'F' {
+                        v = int(d) - int('A') + 10
+                    }
+                    if v < 0 {
+                        self.fail("bad character reference &{ent};")
+                        return raw
+                    }
+                    cp = cp * 16 + v
+                }
+                xml_add_utf8(sb, cp)
+            } else if ent.starts_with("#") {
+                let n = ent[1..].parse_int()
+                if n == nil {
+                    self.fail("bad character reference &{ent};")
+                    return raw
+                }
+                xml_add_utf8(sb, n!)
+            } else {
+                self.fail("unknown entity &{ent};")
+                return raw
+            }
+            i = j + 1
+        }
+        return sb.finish()
+    }
+
+    // reads an element; the position is at its '<'
+    fn element(self) -> XmlNode? {
+        self.pos += 1
+        let tag = self.name()
+        if tag == "" {
+            self.fail("expected a tag name after '<'")
+            return nil
+        }
+        let node = xml_element(tag)
+        loop {
+            self.skip_ws()
+            if self.at_end() {
+                self.fail("the tag <{tag}> is not closed with '>'")
+                return nil
+            }
+            if self.starts("/>") {
+                self.pos += 2
+                return node
+            }
+            if self.starts(">") {
+                self.pos += 1
+                break
+            }
+            let an = self.name()
+            if an == "" {
+                self.fail("unexpected character '{self.src[self.pos..self.pos + 1]}' in the tag <{tag}>")
+                return nil
+            }
+            self.skip_ws()
+            if not self.starts("=") {
+                self.fail("expected '=' after the attribute '{an}'")
+                return nil
+            }
+            self.pos += 1
+            self.skip_ws()
+            if self.at_end() or (self.cur() != '"' and self.cur() != '\'') {
+                self.fail("the value of the attribute '{an}' must be in quotes")
+                return nil
+            }
+            let q = self.cur()
+            let start = self.pos + 1
+            var end = start
+            while end < self.src.len() and self.src.byte_at(end) != q { end += 1 }
+            if end >= self.src.len() {
+                self.fail("the value of the attribute '{an}' is not closed")
+                return nil
+            }
+            node.attrs[an] = self.decode(self.src[start..end])
+            self.pos = end + 1
+        }
+        loop {
+            if self.at_end() {
+                self.fail("missing </{tag}>")
+                return nil
+            }
+            if self.starts("</") {
+                self.pos += 2
+                let close = self.name()
+                if close != tag {
+                    self.fail("expected </{tag}> but found </{close}>")
+                    return nil
+                }
+                self.skip_ws()
+                if not self.starts(">") {
+                    self.fail("expected '>' after </{tag}")
+                    return nil
+                }
+                self.pos += 1
+                return node
+            }
+            if self.starts("<!--") {
+                if not self.skip_until("-->") {
+                    self.fail("a comment is not closed with -->")
+                    return nil
+                }
+                continue
+            }
+            if self.starts("<![CDATA[") {
+                self.pos += 9
+                let start = self.pos
+                if not self.skip_until("]]>") {
+                    self.fail("CDATA is not closed with ]]>")
+                    return nil
+                }
+                node.children.push(xml_text(self.src[start..self.pos - 3]))
+                continue
+            }
+            if self.starts("<?") {
+                if not self.skip_until("?>") {
+                    self.fail("<? is not closed with ?>")
+                    return nil
+                }
+                continue
+            }
+            if self.starts("<") {
+                if let c = self.element() {
+                    node.children.push(c)
+                } else {
+                    return nil
+                }
+                continue
+            }
+            let start = self.pos
+            while not self.at_end() and self.cur() != '<' { self.pos += 1 }
+            let raw = self.src[start..self.pos]
+            if raw.trim() != "" {
+                let t = self.decode(raw)
+                if self.err != "" { return nil }
+                node.children.push(xml_text(t))
+            }
+        }
+        return nil
+    }
+}
+
+// reads an XML document and returns its root element; the error says the line
+fn xml_parse(text: str) -> Result<XmlNode, str> {
+    let p = XmlParser{ src: text, pos: 0, err: "" }
+    if p.starts("\xEF\xBB\xBF") { p.pos = 3 }
+    if not p.skip_misc() { return Result.Err(p.err) }
+    if p.at_end() or not p.starts("<") { return Result.Err("line {p.line()}: expected an element") }
+    let root = p.element()
+    if p.err != "" { return Result.Err(p.err) }
+    if not p.skip_misc() { return Result.Err(p.err) }
+    if not p.at_end() { return Result.Err("line {p.line()}: unexpected text after the root element") }
+    return Result.Ok(root!)
+}
+
+// reads and parses an XML file
+fn xml_read_file(path: str) -> Result<XmlNode, str> {
+    let text = read_file(path)
+    if text == nil { return Result.Err("cannot read " + path) }
+    return xml_parse(text!)
+}
+
+// writes a node to a file with the <?xml ...?> declaration; true on success
+fn xml_write_file(path: str, n: XmlNode, indent: int = 2) -> bool {
+    return write_file(path, xml_stringify(n, indent, true) + "\n")
+}

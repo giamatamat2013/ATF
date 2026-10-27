@@ -869,6 +869,6 @@ class ExprMixin:
             ret32 = isinstance(d.ret, S.TName) and d.ret.name == "i32"
             ret = self.resolve_type(d.ret, ts) if d.ret is not None else TVoid
             dll = d.dll if "." in d.dll else d.dll + ".dll"
-            ei.ext = T.Extern(dll, d.name, params, ret, ret32)
+            ei.ext = T.Extern(dll, d.sym, params, ret, ret32)
             self.program.externs.append(ei.ext)
         return ei.ext

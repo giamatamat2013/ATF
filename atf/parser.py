@@ -267,8 +267,14 @@ class Parser:
         ret = None
         if self.eat_op("->"):
             ret = self.parse_type()
+        sym = name
+        if self.eat_kw("as"):
+            if self.tok.kind != "STR":
+                self.error('expected the name the DLL uses in quotes, like  as "send"')
+            sym = b"".join(p for p in self.tok.val if isinstance(p, bytes)).decode()
+            self.i += 1
         self.end_stmt()
-        return S.ExternDecl(dll, name, params, ret, False, pos=pos)
+        return S.ExternDecl(dll, name, params, ret, False, sym, pos=pos)
 
     def parse_struct(self):
         pos = self.pos()

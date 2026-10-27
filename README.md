@@ -61,7 +61,7 @@ total: 5.25
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
-  an HTTP/HTTPS client (`std/http`), a test framework (`std/test`), and the Python-style tools for whole programs:
+  XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers (`std/net`), a test framework (`std/test`), and the Python-style tools for whole programs:
   command-line parsing (`std/args`, like argparse), leveled logging (`std/log`), text helpers (`std/text`:
   wrap, title, snake_case, templates, tables), number theory and statistics (`std/math`), and algorithms from
   C++, itertools and JavaScript (`std/algo`: binary search, permutations, combinations, group_by, flatten, set operations), Python's `random` extras

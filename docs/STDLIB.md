@@ -37,6 +37,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/json](#stdjson)
   - [std/log](#stdlog)
   - [std/math](#stdmath)
+  - [std/net](#stdnet)
   - [std/path](#stdpath)
   - [std/process](#stdprocess)
   - [std/random](#stdrandom)
@@ -45,6 +46,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/text](#stdtext)
   - [std/toml](#stdtoml)
   - [std/ui](#stdui)
+  - [std/xml](#stdxml)
 
 ## Built-in functions
 
@@ -1443,6 +1445,78 @@ The statistics functions take [float] and panic on an empty array (and the sampl
 - `fn stats_percentile(a: [float], p: float) -> float` - the p-th percentile (p from 0 to 100) with linear interpolation between neighbours: stats_percentile(a, 50.0) is the median
 - `fn stats_correlation(a: [float], b: [float]) -> float` - the Pearson correlation of two arrays of the same length (nan when one of them is constant)
 
+## std/net
+
+TCP connections: a client (tcp_connect) and a server (tcp_listen), built on the Windows socket library.
+
+```text
+import "std/net"
+
+match tcp_connect("example.com", 80) {
+    Result.Ok(c) => {
+        c.write("HEAD / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+        println(c.read_line() ?? "no answer")      // HTTP/1.0 200 OK
+        c.close()
+    }
+    Result.Err(e) => println("cannot connect: " + e)
+}
+
+let server = tcp_listen(0).unwrap()     // port 0 picks a free port: server.port
+let client = server.accept().unwrap()   // waits for the next connection
+```
+
+Reads wait at most `timeout_ms` (30 seconds unless changed with set_timeout); a read that times out
+returns nil, the same as a closed connection. Data is bytes in a str.
+
+**Types**
+
+a connection to another program
+
+```text
+struct TcpConn {
+    sock: int
+    pending: str        // bytes already received but not yet returned
+}
+```
+
+a server waiting for connections
+
+```text
+struct TcpServer {
+    sock: int
+    port: int           // the port it listens on (useful after tcp_listen(0))
+}
+```
+
+
+**Functions**
+
+- `fn net_start()`
+- `fn net_error_text(code: int) -> str` - a readable message for a Windows socket error code
+- `fn net_last_error() -> str`
+- `fn net_lookup(host: str, port: int, passive: bool) -> Result<int, str>` - looks up a host and port; returns the addrinfo list (free it with net_freeaddrinfo) or an error
+- `fn net_resolve(host: str) -> [str]` - the IPv4 addresses of a host name, like ["93.184.215.14"]; empty when it cannot be found
+- `fn tcp_connect(host: str, port: int, timeout_ms: int = 10000) -> Result<TcpConn, str>` - connects to host:port; waits at most timeout_ms for the other side to answer
+- `fn tcp_listen(port: int, host: str = "127.0.0.1") -> Result<TcpServer, str>` - listens on a port; host "" listens on every network, "127.0.0.1" (the default) only on this computer
+
+**Methods of `TcpConn`**
+
+- `.set_timeout(ms: int)` - how long a read (and a write) may wait, in milliseconds; 0 waits forever
+- `.write(data: str) -> bool` - sends all of data; false when the connection is broken
+- `.write_line(line: str) -> bool` - sends data followed by "\r\n"
+- `.raw_read(max: int) -> str?`
+- `.read(max: int = 65536) -> str?` - the next bytes that arrive (at most max); nil when the connection is closed or the read timed out
+- `.read_line() -> str?` - the next line without its "\n" (or "\r\n"); nil when nothing is left
+- `.read_exact(n: int) -> str?` - exactly n bytes; nil when the connection closes first
+- `.read_all() -> str` - everything until the other side closes the connection
+- `.close_write()` - tells the other side that nothing more will be sent (reading still works)
+- `.close()` - closes the connection
+
+**Methods of `TcpServer`**
+
+- `.accept() -> Result<TcpConn, str>` - waits for the next connection
+- `.close()` - stops listening
+
 ## std/path
 
 Working with file paths as text (no file system access).
@@ -1989,4 +2063,86 @@ struct Canvas {
 - `.line(x1: int, y1: int, x2: int, y2: int, width: int, c: int)` - a straight line with round ends, width pixels thick
 - `.text(x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false)` - one line of text with its top left corner at (x, y)
 - `.text_width(s: str, size: int = 15, bold: bool = false) -> int` - the width text would take
-- `.pixels(x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int)` - Draw a picture from an array of 0xRRGGBB ints (pw * ph pixels, row by row), stretched to w x h pixels with the nearest pixel. Much faster than one rect per pixel: use it for software rendered scenes.
+
+## std/xml
+
+Read and write XML.
+
+```text
+import "std/xml"
+
+let doc = xml_parse("<list><item id=\"1\">apple</item><item id=\"2\">pear</item></list>").unwrap()
+for it in doc.children_named("item") { println(it.attr("id") ?? "?", it.inner_text()) }
+let note = xml_element("note").set_attr("lang", "en").add(xml_text("hi & bye"))
+println(xml_stringify(note))          // <note lang="en">hi &amp; bye</note>
+```
+
+A node is an element (a tag with attributes and children) or a piece of text (tag "").
+Comments, the <?xml ...?> declaration and <!DOCTYPE ...> are skipped; CDATA becomes text.
+Text made only of white space between elements is dropped; other text is kept as it is.
+
+**Types**
+
+```text
+struct XmlNode {
+    tag: str                 // "" for a text node
+    attrs: {str: str}
+    children: [XmlNode]
+    text: str                // the text of a text node
+}
+```
+
+```text
+struct XmlParser {
+    src: str
+    pos: int
+    err: str
+}
+```
+
+
+**Functions**
+
+- `fn xml_element(tag: str) -> XmlNode` - a new element with no attributes and no children
+- `fn xml_text(text: str) -> XmlNode` - a new text node
+- `fn xml_collect(n: XmlNode, tag: str, out: [XmlNode])`
+- `fn xml_text_into(n: XmlNode, sb: StrBuilder)`
+- `fn xml_escape(s: str, quote: bool = false) -> str` - replaces & < > (and " when quote is true) with entities
+- `fn xml_write(sb: StrBuilder, n: XmlNode, indent: int, level: int)`
+- `fn xml_stringify(n: XmlNode, indent: int = 0, declaration: bool = false) -> str` - the XML text of a node; indent > 0 puts each child element on its own line
+- `fn xml_is_space(b: byte) -> bool`
+- `fn xml_is_name_byte(b: byte) -> bool`
+- `fn xml_add_utf8(sb: StrBuilder, cp: int)`
+- `fn xml_parse(text: str) -> Result<XmlNode, str>` - reads an XML document and returns its root element; the error says the line
+- `fn xml_read_file(path: str) -> Result<XmlNode, str>` - reads and parses an XML file
+- `fn xml_write_file(path: str, n: XmlNode, indent: int = 2) -> bool` - writes a node to a file with the <?xml ...?> declaration; true on success
+
+**Methods of `XmlNode`**
+
+- `.is_text() -> bool` - true for a text node
+- `.attr(name: str) -> str?` - the value of an attribute, nil when it is missing
+- `.attr_or(name: str, default: str) -> str` - the value of an attribute, or the default when it is missing
+- `.set_attr(name: str, value: str) -> XmlNode` - sets an attribute and returns the node, so calls can be chained
+- `.add(child: XmlNode) -> XmlNode` - adds a child and returns this node, so calls can be chained
+- `.add_text(tag: str, text: str) -> XmlNode` - adds the child <tag>text</tag> and returns this node
+- `.elements() -> [XmlNode]` - the child elements (text nodes left out)
+- `.child(tag: str) -> XmlNode?` - the first child element with this tag, nil when there is none
+- `.children_named(tag: str) -> [XmlNode]` - the child elements with this tag
+- `.find_all(tag: str) -> [XmlNode]` - every element below this one (at any depth) with this tag, in document order
+- `.query(path: str) -> XmlNode?` - follows a path of child tags, like "server/port"; nil when a step is missing
+- `.inner_text() -> str` - all the text inside this node, joined
+- `.to_str() -> str`
+
+**Methods of `XmlParser`**
+
+- `.line() -> int`
+- `.fail(msg: str)`
+- `.at_end() -> bool`
+- `.cur() -> byte`
+- `.starts(s: str) -> bool`
+- `.skip_ws()`
+- `.skip_until(end: str) -> bool` - moves past the next `end`; false when it is missing
+- `.skip_misc() -> bool` - skips white space, comments, <?...?> and <!DOCTYPE ...>; false on an error
+- `.name() -> str`
+- `.decode(raw: str) -> str` - replaces the entities in raw text
+- `.element() -> XmlNode?` - reads an element; the position is at its '<'

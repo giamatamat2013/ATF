@@ -367,8 +367,16 @@ impl Parser {
         let params = self.parse_params()
         var ret: TypeExpr? = nil
         if self.eat_op("->") { ret = self.parse_type() }
+        var sym = name
+        if self.eat_kw("as") {
+            if self.tok().kind != TokKind.Str {
+                self.error("expected the name the DLL uses in quotes, like  as \"send\"")
+            }
+            sym = lit_parts_text(self.tok().parts)
+            self.i += 1
+        }
         self.end_stmt()
-        return ExternDecl(dll, name, params, ret, pos)
+        return ExternDecl(dll, name, params, ret, pos, sym)
     }
 
     fn parse_struct(self) -> StructDecl {

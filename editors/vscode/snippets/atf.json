@@ -493,5 +493,37 @@
       "\tResult.Err(e) => println(\"request failed: \" + e)",
       "}"
     ]
+  },
+  "XML read": {
+    "prefix": "xmlread",
+    "description": "Read an XML file with std/xml",
+    "body": [
+      "import \"std/xml\"",
+      "",
+      "match xml_read_file(\"${1:data.xml}\") {",
+      "\tResult.Ok(root) => {",
+      "\t\tfor n in root.find_all(\"${2:item}\") {",
+      "\t\t\tprintln(n.attr_or(\"${3:id}\", \"\"), n.inner_text())",
+      "\t\t}",
+      "\t}",
+      "\tResult.Err(e) => println(\"bad XML: \" + e)",
+      "}"
+    ]
+  },
+  "TCP client": {
+    "prefix": "tcpclient",
+    "description": "Talk to a TCP server with std/net",
+    "body": [
+      "import \"std/net\"",
+      "",
+      "match tcp_connect(\"${1:example.com}\", ${2:80}) {",
+      "\tResult.Ok(conn) => {",
+      "\t\tconn.write_line(\"${3:hello}\")",
+      "\t\tprintln(conn.read_line() ?? \"no answer\")",
+      "\t\tconn.close()",
+      "\t}",
+      "\tResult.Err(e) => println(\"connect failed: \" + e)",
+      "}"
+    ]
   }
 }

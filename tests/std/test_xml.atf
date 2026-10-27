@@ -1,0 +1,86 @@
+import "std/xml"
+
+var failures = 0
+
+fn check(name: str, ok: bool) {
+    if not ok {
+        println("FAIL " + name)
+        failures += 1
+    }
+}
+
+fn err_of(text: str) -> str {
+    match xml_parse(text) {
+        Result.Ok(_) => return "(no error)"
+        Result.Err(e) => return e
+    }
+}
+
+fn main() -> int {
+    let src = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE config [ <!ENTITY x "y"> ]>
+<!-- settings -->
+<config version="2">
+  <server host='localhost' port="8080"/>
+  <users>
+    <user id="1">Ada &amp; Bob</user>
+    <user id="2">Grace &#x263A; &#65;</user>
+  </users>
+  <script><![CDATA[if a < b && c > d]]></script>
+  <mixed>one <b>two</b> three</mixed>
+</config>
+"""
+    let doc = xml_parse(src).unwrap()
+    check("root tag", doc.tag == "config")
+    check("root attr", doc.attr("version")! == "2")
+    check("missing attr", doc.attr("nope") == nil)
+    check("attr_or", doc.attr_or("nope", "d") == "d")
+    check("elements", doc.elements().len() == 4)
+    let server = doc.child("server")!
+    check("single quotes", server.attr("host")! == "localhost")
+    check("self-closing", server.children.is_empty())
+    check("query", doc.query("server")!.attr("port")! == "8080")
+    check("query missing", doc.query("server/none") == nil)
+    let users = doc.query("users")!.children_named("user")
+    check("children_named", users.len() == 2)
+    println(users[0].inner_text())
+    println(users[1].inner_text())
+    check("find_all", doc.find_all("user").len() == 2)
+    check("find_all deep", doc.find_all("b").len() == 1)
+    println(doc.child("script")!.inner_text())
+    println(doc.child("mixed")!.inner_text())
+
+    // building and writing
+    let note = xml_element("note").set_attr("lang", "en").set_attr("q", "a\"b")
+    note.add_text("to", "Tove & Jani")
+    note.add(xml_element("empty"))
+    println(xml_stringify(note))
+    println(xml_stringify(note, 2))
+    println(xml_stringify(xml_element("x").add(xml_text("<hi>")), 0, true))
+    println(note)
+
+    // round trip
+    let again = xml_parse(xml_stringify(doc, 2)).unwrap()
+    check("round trip", xml_stringify(again) == xml_stringify(doc))
+
+    // errors
+    println(err_of(""))
+    println(err_of("<a>"))
+    println(err_of("<a></b>"))
+    println(err_of("<a x=1/>"))
+    println(err_of("<a>\n\n&bogus;</a>"))
+    println(err_of("<a/><b/>"))
+    println(err_of("<a><!-- open</a>"))
+    println(err_of("<a b=\"1\""))
+
+    // files
+    let path = temp_dir() + "atf_test_xml.xml"
+    check("write file", xml_write_file(path, note))
+    let back = xml_read_file(path).unwrap()
+    check("read file", back.child("to")!.inner_text() == "Tove & Jani")
+    delete_file(path)
+    check("read missing", xml_read_file(path).is_err())
+
+    println("failures:", failures)
+    return failures
+}

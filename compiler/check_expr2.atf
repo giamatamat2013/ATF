@@ -482,7 +482,7 @@ impl Checker {
             }
             var dll = d.dll
             if not dll.contains(".") { dll = dll + ".dll" }
-            let ext = Extern(dll, d.name, params, ret, ret32)
+            let ext = Extern(dll, d.sym, params, ret, ret32)
             ei.ext = ext
             self.program.externs.push(ext)
         }

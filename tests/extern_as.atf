@@ -1,0 +1,8 @@
+// extern ... as "Symbol": the ATF name differs from the name the DLL exports
+extern "kernel32" fn current_pid() -> i32 as "GetCurrentProcessId"
+extern "kernel32" fn GetCurrentProcessId() -> i32
+
+fn main() {
+    println(current_pid() > 0)
+    println(current_pid() == GetCurrentProcessId())
+}

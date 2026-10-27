@@ -1,0 +1,62 @@
+import "std/net"
+
+var failures = 0
+
+fn check(name: str, ok: bool) {
+    if not ok {
+        println("FAIL " + name)
+        failures += 1
+    }
+}
+
+fn main() -> int {
+    // a server and a client in one program: the system queues the connection until accept
+    let server = tcp_listen(0).unwrap()
+    check("free port", server.port > 0)
+    let client = tcp_connect("127.0.0.1", server.port).unwrap()
+    let peer = server.accept().unwrap()
+
+    check("write", client.write_line("hello"))
+    client.write("second line\nrest")
+    client.close_write()
+    println(peer.read_line() ?? "nil")
+    println(peer.read_line() ?? "nil")
+    println(peer.read_exact(2) ?? "nil")
+    println(peer.read_all())
+    check("closed", peer.read() == nil)
+
+    peer.write("0123456789")
+    peer.close()
+    println(client.read(4) ?? "nil")
+    println(client.read_all())
+    client.close()
+    server.close()
+
+    // a short read timeout returns nil
+    let s2 = tcp_listen(0).unwrap()
+    let c2 = tcp_connect("localhost", s2.port).unwrap()
+    let p2 = s2.accept().unwrap()
+    p2.set_timeout(200)
+    check("timeout", p2.read() == nil)
+    c2.close()
+    p2.close()
+    s2.close()
+
+    // errors
+    let busy = tcp_listen(0).unwrap()
+    match tcp_listen(busy.port) {
+        Result.Ok(_) => println("second listen worked")
+        Result.Err(e) => println(e.starts_with("the address is already in use"))
+    }
+    busy.close()
+    match tcp_connect("127.0.0.1", 1, 2000) {
+        Result.Ok(_) => println("connected to port 1")
+        Result.Err(e) => println("refused:", e.len() > 0)
+    }
+    check("bad host", tcp_connect("no-such-host.invalid", 80).is_err())
+    check("resolve localhost", net_resolve("localhost").contains("127.0.0.1"))
+    check("resolve bad", net_resolve("no-such-host.invalid").is_empty())
+
+    println("failures:", failures)
+    return failures
+}

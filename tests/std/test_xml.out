@@ -1,0 +1,21 @@
+Ada & Bob
+Grace ☺ A
+if a < b && c > d
+one two three
+<note lang="en" q="a&quot;b"><to>Tove &amp; Jani</to><empty/></note>
+<note lang="en" q="a&quot;b">
+  <to>Tove &amp; Jani</to>
+  <empty/>
+</note>
+<?xml version="1.0" encoding="UTF-8"?>
+<x>&lt;hi&gt;</x>
+<note lang="en" q="a&quot;b"><to>Tove &amp; Jani</to><empty/></note>
+line 1: expected an element
+line 1: missing </a>
+line 1: expected </a> but found </b>
+line 1: the value of the attribute 'x' must be in quotes
+line 3: unknown entity &bogus;
+line 1: unexpected text after the root element
+line 1: a comment is not closed with -->
+line 1: the tag <a> is not closed with '>'
+failures: 0
