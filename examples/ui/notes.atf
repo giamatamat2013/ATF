@@ -1,0 +1,198 @@
+// notes.atf - a complete little program: a notes editor with a menu bar, a searchable list, a text area,
+//             keyboard shortcuts, file dialogs, a confirmation, a dark theme, and everything saved between runs.
+// Shows: menu_bar/menu_button, textarea, ui_shortcut, open_file_dialog/save_file_dialog, confirm_box,
+//        std/json for the data, std/app for the settings and the program's folder.
+// Run:   atf run examples/ui/notes.atf      (Ctrl+N new, Ctrl+S export, Ctrl+O import, Ctrl+F search)
+
+import "std/ui"
+import "std/json"
+import "std/app"
+
+struct Note {
+    body: str = ""
+}
+
+struct Notes {
+    items: [Note] = []
+    current: int = 0
+    search: str = ""
+    dark: bool = false
+    settings: Settings
+    data_path: str
+    status: str = "Ready"
+}
+
+// the title of a note is its first line
+fn title_of(n: Note) -> str {
+    let first = n.body.lines()
+    if first.len() == 0 or first[0].trim().len() == 0 { return "Untitled" }
+    return first[0].trim()
+}
+
+fn word_count(s: str) -> int { return s.split_whitespace().len() }
+
+// ---- saving and loading
+fn save_all(app: Notes) {
+    let arr = json_array()
+    for n in app.items { arr.push(json_str(n.body)) }
+    let doc = json_object()
+    doc.set("notes", arr)
+    json_write_file(app.data_path, doc)
+    app.settings.set_int("current", app.current)
+    app.settings.set_bool("dark", app.dark)
+    app.settings.save()
+}
+
+fn load_all(app: Notes) {
+    match json_read_file(app.data_path) {
+        Result.Ok(doc) => {
+            if let list = doc.get("notes") {
+                for v in list.as_array() ?? [] { app.items.push(Note(v.as_str() ?? "")) }
+            }
+        }
+        Result.Err(e) => {}
+    }
+    if app.items.len() == 0 {
+        app.items.push(Note("Welcome\nThis is a notes program written in ATF.\n\nEverything you type is saved as you go.\nTry Ctrl+N for a new note, or the File menu."))
+    }
+    app.current = min(app.settings.get_int("current", 0), app.items.len() - 1)
+    app.dark = app.settings.get_bool("dark", false)
+}
+
+// ---- actions
+fn new_note(app: Notes) {
+    app.items.push(Note())
+    app.current = app.items.len() - 1
+    app.search = ""
+    app.status = "New note"
+    save_all(app)
+}
+
+fn delete_note(app: Notes) {
+    if not confirm_box("Delete note", "Delete \"{title_of(app.items[app.current])}\"?") { return }
+    app.items.remove(app.current)
+    if app.items.len() == 0 { app.items.push(Note()) }
+    app.current = min(app.current, app.items.len() - 1)
+    app.status = "Note deleted"
+    save_all(app)
+}
+
+fn export_note(app: Notes) {
+    let path = save_file_dialog("Export note", "Text files|*.txt|All files|*.*", "txt") ?? ""
+    if path.len() == 0 { return }
+    if write_file(path, app.items[app.current].body) {
+        app.status = "Exported to {path}"
+        recent_add(app.settings, path)
+    } else {
+        message_box("Export", "Could not write {path}")
+    }
+}
+
+fn import_note(app: Notes) {
+    let path = open_file_dialog("Import a text file", "Text files|*.txt|All files|*.*") ?? ""
+    if path.len() == 0 { return }
+    if let text = read_file(path) {
+        app.items.push(Note(text))
+        app.current = app.items.len() - 1
+        app.status = "Imported {path}"
+        save_all(app)
+    } else {
+        message_box("Import", "Could not read {path}")
+    }
+}
+
+// ---- the view
+struct Theme {
+    bg: int
+    panel: int
+    ink: int
+    muted: int
+    line: int
+    accent: int
+    sel: int
+}
+
+fn theme_of(app: Notes) -> Theme {
+    if app.dark {
+        return Theme(hex("#0f172a"), hex("#1e293b"), hex("#e2e8f0"), hex("#94a3b8"), hex("#334155"), hex("#818cf8"), hex("#312e81"))
+    }
+    return Theme(hex("#f8fafc"), WHITE, hex("#0f172a"), hex("#64748b"), hex("#e2e8f0"), hex("#4f46e5"), hex("#e0e7ff"))
+}
+
+fn list_item(app: Notes, t: Theme, i: int) -> Node {
+    let n = app.items[i]
+    let on = i == app.current
+    let lines = n.body.lines()
+    let preview = if lines.len() > 1 { lines[1].trim() } else { "" }
+    let item = column([
+        text(title_of(n)).weight(600).color(t.ink).nowrap(),
+        text(if preview.len() > 0 { preview } else { "No more text" }).font_size(12).color(t.muted).nowrap(),
+    ]).gap(2).padding(10, 12).radius(8).cursor(Cursor.Pointer).on_click(|| { app.current = i })
+    if on { return item.bg(t.sel) }
+    return item.hover(style().bg(t.line))
+}
+
+fn sidebar(app: Notes, t: Theme) -> Node {
+    let rows: [Node] = []
+    let q = app.search.lower()
+    for i in 0..app.items.len() {
+        if q.len() > 0 and not app.items[i].body.lower().contains(q) { continue }
+        rows.push(list_item(app, t, i))
+    }
+    if rows.len() == 0 { rows.push(text("No matching notes").color(t.muted).padding(12)) }
+    return column([
+        row([
+            icon("search").color(t.muted),
+            textbox(app.search, |s| { app.search = s }).key("search").bg(t.bg).color(t.ink).border_color(t.line).placeholder("Search (Ctrl+F)").grow(),
+        ]).gap(8).align(Align.Center),
+        scroll(rows).grow().gap(2),
+        text(if app.items.len() == 1 { "1 note" } else { "{app.items.len()} notes" }).font_size(12).color(t.muted),
+    ]).width(260).padding(12).gap(10).bg(t.panel)
+}
+
+fn editor(app: Notes, t: Theme) -> Node {
+    let n = app.items[app.current]
+    return column([
+        textarea(n.body, |s| { n.body = s; save_all(app) }).grow().width_pct(100.0).rows(12).bg(t.panel).color(t.ink).border_color(t.line),
+        row([
+            text("{word_count(n.body)} words").font_size(12).color(t.muted),
+            text("{n.body.len()} characters").font_size(12).color(t.muted),
+            spacer(),
+            button("Delete note", || delete_note(app)).bg(t.panel).color(t.ink).border_color(t.line).tooltip("Ctrl+Delete does the same"),
+        ]).gap(14),
+    ]).grow().padding(14).gap(10)
+}
+
+fn view(app: Notes) -> Node {
+    let t = theme_of(app)
+    ui_title("Notes - {title_of(app.items[app.current])}")
+    return column([
+        menu_bar([
+            menu_button("File", [
+                menu_item("New note      Ctrl+N", || new_note(app)),
+                menu_item("Import...      Ctrl+O", || import_note(app)),
+                menu_item("Export...       Ctrl+S", || export_note(app)),
+                menu_item("Exit", || ui_quit()),
+            ]),
+            menu_button("View", [
+                menu_item(if app.dark { "Light theme" } else { "Dark theme" }, || { app.dark = not app.dark; save_all(app) }),
+            ]),
+        ]).bg(t.panel).color(t.ink),
+        row([sidebar(app, t), editor(app, t)]).grow().align(Align.Stretch),
+        row([text(app.status).font_size(12).color(t.muted)]).padding(4, 12).bg(t.panel),
+    ]).bg(t.bg).color(t.ink).grow()
+}
+
+fn main() {
+    var dir = "atf_notes"
+    // under the screenshot test the program must not touch the real settings
+    if (getenv("ATF_UI_SCREENSHOT") ?? "").len() > 0 { dir = "atf_notes_test" }
+    let app = Notes(settings: settings_open(dir), data_path: app_path(dir, "notes.json"))
+    load_all(app)
+    ui_shortcut("ctrl+n", || new_note(app))
+    ui_shortcut("ctrl+o", || import_note(app))
+    ui_shortcut("ctrl+s", || export_note(app))
+    ui_shortcut("ctrl+delete", || delete_note(app))
+    ui_shortcut("ctrl+f", || focus_field("search"))
+    ui_run("Notes", 900, 600, || view(app))
+}

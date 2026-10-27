@@ -1,0 +1,123 @@
+// std/app - where a program keeps its settings and data, and a small settings file.
+//
+//   import "std/app"
+//   let s = settings_open("notes")            // reads %APPDATA%\notes\settings.txt when it exists
+//   let theme = s.get("theme", "dark")
+//   s.set("theme", "light")
+//   s.set_int("width", 900)
+//   s.save()
+//
+//   write_file(app_path("notes", "draft.txt"), text)    // any file in the program's own folder
+//   let recent = recent_add(s, "C:\\a.txt")             // a most-recently-used list kept in the settings
+//
+// The settings file is plain text, one key=value per line, so a person can edit it. Values may hold any
+// text, new lines included. Keys must not contain "=" or a new line.
+
+// the folder where the program named name keeps its files (%APPDATA%\name), created when it is missing.
+// Falls back to the temporary folder when there is no APPDATA.
+fn app_dir(name: str) -> str {
+    var base = getenv("APPDATA") ?? ""
+    if base.len() == 0 { base = temp_dir() }
+    if base.ends_with("\\") { base = base.substr(0, base.len() - 1) }
+    make_dir(base)
+    let dir = base + "\\" + name
+    make_dir(dir)
+    return dir
+}
+
+// the full path of a file inside the program's folder: app_path("notes", "draft.txt")
+fn app_path(name: str, file: str) -> str {
+    return app_dir(name) + "\\" + file
+}
+
+// v with each backslash, new line and carriage return replaced by a two-character escape (the form used in the settings file)
+fn settings_escape(v: str) -> str {
+    return v.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r")
+}
+
+// the reverse of settings_escape
+fn settings_unescape(v: str) -> str {
+    if not v.contains("\\") { return v }
+    let sb = str_builder()
+    var i = 0
+    while i < v.len() {
+        let c = v.substr(i, 1)
+        if c == "\\" and i + 1 < v.len() {
+            let n = v.substr(i + 1, 1)
+            if n == "n" { sb.add("\n") } else if n == "r" { sb.add("\r") } else { sb.add(n) }
+            i += 2
+        } else {
+            sb.add(c)
+            i += 1
+        }
+    }
+    return sb.finish()
+}
+
+// key/value settings stored in a text file
+struct Settings {
+    path: str
+    values: {str: str}
+}
+
+// settings kept in an explicit file (loaded when it exists)
+fn settings_file(path: str) -> Settings {
+    let values: {str: str} = {}
+    let s = Settings{ path: path, values: values }
+    let text = read_file(path) ?? ""
+    for line in text.lines() {
+        let eq = line.find("=")
+        if eq > 0 { values[line.substr(0, eq)] = settings_unescape(line.substr(eq + 1, line.len() - eq - 1)) }
+    }
+    return s
+}
+
+// the settings of the program named name, in %APPDATA%\name\settings.txt
+fn settings_open(name: str) -> Settings {
+    return settings_file(app_path(name, "settings.txt"))
+}
+
+impl Settings {
+    // the value of key, or fallback when it is not set
+    fn get(self, key: str, fallback: str = "") -> str { return self.values.get(key, fallback) }
+    fn get_int(self, key: str, fallback: int = 0) -> int {
+        let v = self.values.try_get(key)
+        if v == nil { return fallback }
+        return v!.parse_int() ?? fallback
+    }
+    fn get_bool(self, key: str, fallback: bool = false) -> bool {
+        let v = self.values.try_get(key)
+        if v == nil { return fallback }
+        return v! == "true"
+    }
+    fn has(self, key: str) -> bool { return self.values.has(key) }
+    fn set(self, key: str, value: str) { self.values[key] = value }
+    fn set_int(self, key: str, value: int) { self.values[key] = "{value}" }
+    fn set_bool(self, key: str, value: bool) { self.values[key] = if value { "true" } else { "false" } }
+    fn remove(self, key: str) { self.values.remove(key) }
+    // writes the file (keys in alphabetical order); false when it cannot be written
+    fn save(self) -> bool {
+        let sb = str_builder()
+        for k in self.values.keys().sorted() { sb.add(k + "=" + settings_escape(self.values[k]) + "\n") }
+        return write_file(self.path, sb.finish())
+    }
+}
+
+// puts path first in the most-recently-used list kept under the key "recent" (at most max entries) and returns the list
+fn recent_add(s: Settings, path: str, max: int = 8) -> [str] {
+    var list: [str] = [path]
+    for p in recent_list(s) {
+        if p != path and list.len() < max { list.push(p) }
+    }
+    s.set("recent", list.join("\n"))
+    return list
+}
+
+// the most-recently-used list kept in the settings, newest first
+fn recent_list(s: Settings) -> [str] {
+    var list: [str] = []
+    for p in s.get("recent").split("\n") {
+        if p.len() > 0 { list.push(p) }
+    }
+    return list
+}

@@ -124,7 +124,7 @@ let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 
 ### I/O, modules, misc
 `println print eprintln eprint flush`; `input(prompt)`; `read_line()` -> `str?` (nil at EOF); `read_all_stdin()`; `read_file(p)` -> `str?`; `write_file(p, text)` -> bool; `file_exists delete_file make_dir temp_dir getenv exit run_command run_process`; `rand_seed rand_int(lo,hi) rand_float rand_choice shuffle clock`; math `sqrt abs min max PI E INT_MAX INT_MIN`; `chr ord range range_from zip same copy`; GC: `gc gc_runs gc_live_bytes`.
-Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also base64, collections, csv, datetime, hash, hex, ui). **One global namespace** across all files: give globals specific names; duplicate definitions are compile errors. `include_str("f.txt")` embeds a file at compile time.
+Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also app, base64, collections, csv, datetime, hash, hex, ui). **One global namespace** across all files: give globals specific names; duplicate definitions are compile errors. `include_str("f.txt")` embeds a file at compile time.
 
 ### Windows and design (`import "std/ui"`)
 HTML/CSS ideas written as ATF. A view function returns a `Node` tree. It is rebuilt after every click, key press or timer tick, so handlers only change data.
@@ -155,11 +155,18 @@ fn main() { let app = App(); ui_run("Demo", 420, 300, || view(app)) }
 - **Colors** are ints 0xAARRGGBB: `hex("#4f46e5")`, `hex("#fff")`, `hex("slate")` (Tailwind-like names), `rgb(r,g,b)`, `rgba(r,g,b,0.25)`, `fade(c, a)`, `mix(a, b, t)`, `lighten(c, t)`, `darken(c, t)`, `WHITE BLACK TRANSPARENT`.
 - **App functions**: `ui_run(title, w, h, view)`, `ui_every(ms, fn)` (timer; the view is rebuilt after it), `ui_refresh() ui_quit() ui_title(s)`.
 - **Without a window**: `ui_screenshot(view, w, h, "f.bmp") -> bool`, or run any UI program with the env var `ATF_UI_SCREENSHOT=f.bmp`. Use one of these to check a layout, or to test a UI program without blocking.
+- **Application widgets**: `textarea(value, fn(str))` (+ `.rows(n)`; no soft wrap), `select(value, [options], fn(str))`, `tabs([labels], selected, fn(int))` (you show the content), `menu_bar([menu_button("File", [menu_item("Open", fn())])])`, `dropdown(trigger, content)` (floating popup under the trigger), `dialog(title, body, [buttons], on_close)` / `modal(content, on_close)` (add last: `if open { root.add(dialog(..)) }`), `.tooltip(s)`, `icon("save")` (names in STDLIB.md), `canvas(|c| { c.rect(x,y,w,h,col); c.circle; c.line; c.text })` + `.on_pointer(|x, y| ..)`.
+  - Text fields edit like a normal app (selection, double/triple click, undo/redo, clipboard, Ctrl+arrows). `.key("name")` + `focus_field("name")` moves the focus.
+  - `ui_shortcut("ctrl+s", fn())` (keys like `ctrl+shift+n`, `f5`, `delete`; a key without ctrl/alt is ignored while a text field is focused). Dialogs: `message_box(t, msg)`, `confirm_box(t, q) -> bool`, `open_file_dialog(title, "Text|*.txt|All|*.*") -> str?`, `save_file_dialog(title, filter, "txt") -> str?`. `clipboard_get() clipboard_set(s)`.
+  - Popups, dialogs and tooltips are layers on top; they set their own light colours, so in a dark theme give `menu_bar(..)` and fields `.bg(..).color(..)` explicitly.
+- **Testing a UI program** (no window, no dialogs): `ui_headless(view, w, h)`, then `ui_click(x, y)`, `ui_click_text("Save")`, `ui_type("abc")`, `ui_keypress("ctrl+z")`, `ui_drag(..)`, `ui_mouse_move(x, y)`, `ui_answers(yes, path)` for the dialogs, `ui_last_dialog()`; check your own data afterwards. Keep the program's data in variables or structs the test can read.
+- **Saving settings and data** (`import "std/app"`): `settings_open("myapp")` -> `Settings` with `get(k, fallback) get_int get_bool set set_int set_bool remove save()`; `app_dir("myapp")` / `app_path("myapp", "data.json")` is the program's folder in APPDATA; `recent_add(s, path)`. Use `std/json` (`json_read_file`, `json_write_file`) for bigger data.
 - **Pitfalls**:
-  - Names starting with `ui_` / `UI_` are taken by the library, and so are `Node`, `Style`, `Align`, `Justify`, `Cursor`.
+  - Names starting with `ui_` / `UI_` are taken by the library, and so are `Node`, `Style`, `Align`, `Justify`, `Cursor`, `Canvas`.
   - In a reassigned chain use `var n = text(..)` then `n = n.style(..)`.
   - Typed closure params need annotations when inferred types are unclear: `|label: str, c: Node| -> Node { ... }`.
-- **Examples**: `examples/ui/counter.atf`, `todo.atf`, `dashboard.atf`.
+  - Build the view from data every time; never keep a `Node` between calls. A `ui_shortcut` registered again with the same keys replaces the old one.
+- **Examples**: `examples/ui/counter.atf`, `todo.atf`, `dashboard.atf`, and `notes.atf` (a complete program: menus, shortcuts, file dialogs, settings, dark theme).
 
 ## Traps (things that commonly go wrong)
 

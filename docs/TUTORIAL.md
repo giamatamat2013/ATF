@@ -2404,6 +2404,133 @@ fn main() {
 true
 ```
 
+#### A complete program: menus, text, dialogs, files
+
+Beyond the basics, `std/ui` has what a whole application needs:
+
+| You want | Use |
+|---|---|
+| a multi-line text field | `textarea(value, on_input)`, `.rows(n)` sets its height |
+| a choice from a list | `select(value, ["a", "b"], on_change)` |
+| tabs | `tabs(["One", "Two"], selected, on_select)`, then show the chosen content yourself |
+| a menu bar | `menu_bar([menu_button("File", [menu_item("Open", open), ...])])` |
+| any popup | `dropdown(trigger, content)`: `content` floats under `trigger` until a click elsewhere or Esc |
+| a dialog | `dialog("Title", body, [buttons], on_close)`, or `modal(content, on_close)` for your own card |
+| a hint on hover | `.tooltip("text")` |
+| small symbols | `icon("save")`, `icon("search")`, ... (a list is in [STDLIB.md](STDLIB.md#stdui)) |
+| drawing | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, with `.on_pointer(\|x, y\| ..)` |
+| shortcuts | `ui_shortcut("ctrl+s", save)` |
+| standard dialogs | `message_box`, `confirm_box`, `open_file_dialog`, `save_file_dialog` |
+| the clipboard | `clipboard_get()`, `clipboard_set(text)` |
+
+Text fields (`textbox` and `textarea`) edit the way people expect: the mouse and the arrow keys with Shift to select,
+double click for a word, triple click for a line, Ctrl+A / C / X / V, Ctrl+Z / Ctrl+Y (undo and redo), Ctrl with the
+arrows to jump by words, Home / End, and Tab inserts spaces in a text area. A text area scrolls and does not wrap lines.
+
+Popups, dialogs and tooltips are drawn on a layer above the rest of the window. Put a `dialog(...)` last in the
+list of children, shown only while your data says so (`if asking { root.add(dialog(...)) }`). `.key("name")` gives an
+element a fixed name; `focus_field("name")` moves the keyboard focus to the text field that has it.
+
+A shortcut without Ctrl or Alt is ignored while a text field has the focus, so typing does not trigger it.
+The standard dialogs return `nil` or `false` when the user cancels:
+
+```atf nocheck
+fn export(text: str) {
+    let path = save_file_dialog("Export", "Text files|*.txt|All files|*.*", "txt") ?? ""
+    if path.len() > 0 { write_file(path, text) }
+}
+
+fn main() {
+    ui_shortcut("ctrl+s", || export("hello"))
+    ui_run("Exporter", 300, 200, || column([text("Press Ctrl+S")]).center().grow())
+}
+```
+
+#### Testing a program without a window
+
+`ui_headless(view, width, height)` runs the interface without a window, and `ui_click(x, y)`, `ui_click_text("label")`,
+`ui_type("text")`, `ui_keypress("ctrl+z")` and `ui_drag(...)` act like a user. The clipboard and the standard dialogs
+are replaced by fakes (`ui_answers(ok, path)` chooses what the dialogs return), so a test never waits for a person.
+Your program's data tells you what happened:
+
+<!-- id: ui-headless -->
+```atf
+import "std/ui"
+
+var name = ""
+var color = "red"
+var log = ""
+var asking = false
+
+fn view() -> Node {
+    let root = column([
+        textbox(name, |s| { name = s }).placeholder("Your name"),
+        select(color, ["red", "green", "blue"], |c| { color = c }),
+        menu_button("File", [
+            menu_item("Save", || { log = "saved" }),
+            menu_item("Quit", || { asking = true }),
+        ]),
+    ]).padding(16).gap(10).grow()
+    if asking {
+        root.add(dialog("Quit", text("Really quit?"), [button("No", || { asking = false })], || { asking = false }))
+    }
+    return root
+}
+
+fn main() {
+    ui_headless(view, 320, 240)
+    ui_click(50, 30)                // the text box
+    ui_type("Ada")
+    ui_keypress("ctrl+a")
+    ui_keypress("ctrl+c")
+    ui_click_text("red")            // opens the list
+    ui_click_text("blue")
+    ui_click_text("File")
+    ui_click_text("Save")
+    println(name, color, log, clipboard_get())
+    ui_click_text("File")
+    ui_click_text("Quit")
+    println("asking:", asking)
+    ui_keypress("esc")              // closes the dialog
+    println("asking:", asking)
+}
+```
+```output
+Ada blue saved Ada
+asking: true
+asking: false
+```
+
+#### Remembering things between runs: `std/app`
+
+`import "std/app"` gives a program its own folder (`app_dir("name")` is `%APPDATA%\name`) and a small settings file of
+`key=value` lines. `settings_open("name")` loads it, `get`, `get_int`, `get_bool` read with a fallback, `set`, `set_int`,
+`set_bool` change values and `save()` writes the file. `recent_add(settings, path)` keeps a most-recently-used list.
+For bigger data, write a file in `app_path("name", "data.json")` with `std/json`.
+
+<!-- id: app-settings -->
+```atf
+import "std/app"
+
+fn main() {
+    let file = temp_dir() + "demo_settings.txt"
+    let s = settings_file(file)
+    s.set("theme", "dark")
+    s.set_int("width", 900)
+    s.save()
+
+    let again = settings_file(file)
+    println(again.get("theme", "light"), again.get_int("width", 640), again.get_bool("maximized"))
+    delete_file(file)
+}
+```
+```output
+dark 900 false
+```
+
+A whole program that uses all of this, a notes editor with a menu bar, a search box, a text area, shortcuts, file
+dialogs, a dark theme and automatic saving, is in `examples/ui/notes.atf`.
+
 The complete reference is in [STDLIB.md](STDLIB.md#stdui). Larger programs are in `examples/ui/`: `counter.atf`, `todo.atf` (a
 task list with a text box, check boxes and filters) and `dashboard.atf` (a sidebar, gradient cards, a bar chart, settings and
 a light and dark theme).

@@ -348,5 +348,95 @@
       "\t$0",
       "]).gap(${1:8})"
     ]
+  },
+  "Menu bar": {
+    "prefix": "uimenu",
+    "description": "A std/ui menu bar with a File menu",
+    "body": [
+      "menu_bar([",
+      "\tmenu_button(\"File\", [",
+      "\t\tmenu_item(\"${1:New}\", || ${2:new_file}()),",
+      "\t\tmenu_item(\"Exit\", || ui_quit()),",
+      "\t]),",
+      "\t$0",
+      "])"
+    ]
+  },
+  "Text area": {
+    "prefix": "uitextarea",
+    "description": "A multi-line text field",
+    "body": [
+      "textarea(${1:app.text}, |s| { ${1:app.text} = s }).grow().rows(${2:10})"
+    ]
+  },
+  "Select list": {
+    "prefix": "uiselect",
+    "description": "A choice from a list (a drop-down)",
+    "body": [
+      "select(${1:app.choice}, [${2:\"one\", \"two\", \"three\"}], |v| { ${1:app.choice} = v })"
+    ]
+  },
+  "Dialog": {
+    "prefix": "uidialog",
+    "description": "A modal dialog shown while a flag is set (add it last in the root)",
+    "body": [
+      "if ${1:app.asking} {",
+      "\troot.add(dialog(\"${2:Title}\", text(\"${3:Are you sure?}\"), [",
+      "\t\tbutton(\"OK\", || { ${1:app.asking} = false }),",
+      "\t], || { ${1:app.asking} = false }))",
+      "}"
+    ]
+  },
+  "Canvas": {
+    "prefix": "uicanvas",
+    "description": "A canvas you draw yourself",
+    "body": [
+      "canvas(|c| {",
+      "\tc.rect(0, 0, c.w, c.h, ${1:WHITE})",
+      "\t$0",
+      "}).size(${2:300}, ${3:200})"
+    ]
+  },
+  "Keyboard shortcut": {
+    "prefix": "uishortcut",
+    "description": "A keyboard shortcut for a window program",
+    "body": [
+      "ui_shortcut(\"${1:ctrl+s}\", || ${2:save}(${3:app}))"
+    ]
+  },
+  "File dialogs": {
+    "prefix": "uifile",
+    "description": "Ask the user for a file to open or a place to save",
+    "body": [
+      "let ${1:path} = ${2|open_file_dialog,save_file_dialog|}(\"${3:Title}\", \"Text files|*.txt|All files|*.*\") ?? \"\"",
+      "if ${1:path}.len() == 0 { return }",
+      "$0"
+    ]
+  },
+  "UI test": {
+    "prefix": "uitest",
+    "description": "Test a std/ui program without a window",
+    "body": [
+      "import \"std/ui\"",
+      "",
+      "fn main() {",
+      "\tlet app = ${1:App}()",
+      "\tui_headless(|| view(app), ${2:480}, ${3:320})",
+      "\tui_click_text(\"${4:Click me}\")",
+      "\tprintln(${5:app.count})",
+      "}"
+    ]
+  },
+  "Settings": {
+    "prefix": "uisettings",
+    "description": "Load and save program settings with std/app",
+    "body": [
+      "import \"std/app\"",
+      "",
+      "let settings = settings_open(\"${1:myapp}\")",
+      "let ${2:theme} = settings.get(\"${2:theme}\", \"${3:light}\")",
+      "settings.set(\"${2:theme}\", ${2:theme})",
+      "settings.save()"
+    ]
   }
 }

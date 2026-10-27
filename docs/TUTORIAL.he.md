@@ -2234,6 +2234,7 @@ fn main() {
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
 * `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
+* `std/app` - תיקייה והגדרות לתוכנית שנשמרות בין הרצות (ראו בהמשך הפרק).
 
 ```atf
 import "std/json"
@@ -2421,6 +2422,133 @@ fn main() {
 ```output
 true
 ```
+
+#### תוכנית שלמה: תפריטים, טקסט, דיאלוגים וקבצים
+
+מעבר ליסודות, ב-`std/ui` יש כל מה שיישום שלם צריך:
+
+| מה רוצים | מה משתמשים |
+|---|---|
+| שדה טקסט מרובה שורות | `textarea(value, on_input)`, והגובה נקבע עם `.rows(n)` |
+| בחירה מתוך רשימה | `select(value, ["a", "b"], on_change)` |
+| לשוניות | `tabs(["One", "Two"], selected, on_select)`, ואת התוכן של הלשונית הנבחרת מציגים בעצמכם |
+| שורת תפריטים | `menu_bar([menu_button("File", [menu_item("Open", open), ...])])` |
+| כל חלון צף | `dropdown(trigger, content)`: ה-`content` צף מתחת ל-`trigger` עד ללחיצה במקום אחר או Esc |
+| דיאלוג | `dialog("Title", body, [buttons], on_close)`, או `modal(content, on_close)` לכרטיס משלכם |
+| הסבר בהצבעה | `.tooltip("text")` |
+| סמלים קטנים | `icon("save")`, `icon("search")`, ... (הרשימה ב-[STDLIB.md](STDLIB.md#stdui)) |
+| ציור | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, ועם `.on_pointer(\|x, y\| ..)` |
+| קיצורי מקלדת | `ui_shortcut("ctrl+s", save)` |
+| דיאלוגים סטנדרטיים | `message_box`, `confirm_box`, `open_file_dialog`, `save_file_dialog` |
+| הלוח (clipboard) | `clipboard_get()`, `clipboard_set(text)` |
+
+שדות טקסט (`textbox` ו-`textarea`) נערכים כמו שמצפים: העכבר והחצים עם Shift לבחירה, לחיצה כפולה למילה, לחיצה משולשת
+לשורה, Ctrl+A / C / X / V, Ctrl+Z / Ctrl+Y (ביטול וחזרה), Ctrl עם החצים לקפיצה בין מילים, Home / End, ו-Tab מוסיף
+רווחים באזור טקסט. אזור טקסט גולל ואינו עוטף שורות.
+
+חלונות צפים, דיאלוגים והסברים מצוירים בשכבה מעל שאר החלון. שמים את ה-`dialog(...)` אחרון ברשימת הילדים, ומציגים אותו
+רק כשהנתונים אומרים כך (`if asking { root.add(dialog(...)) }`). `.key("name")` נותן לאלמנט שם קבוע, ו-`focus_field("name")`
+מעביר את מוקד המקלדת לשדה הטקסט שיש לו אותו.
+
+קיצור בלי Ctrl או Alt מתעלמים ממנו כשבשדה טקסט יש מוקד, כדי שהקלדה לא תפעיל אותו. הדיאלוגים הסטנדרטיים מחזירים `nil`
+או `false` כשהמשתמש מבטל:
+
+```atf nocheck
+fn export(text: str) {
+    let path = save_file_dialog("Export", "Text files|*.txt|All files|*.*", "txt") ?? ""
+    if path.len() > 0 { write_file(path, text) }
+}
+
+fn main() {
+    ui_shortcut("ctrl+s", || export("hello"))
+    ui_run("Exporter", 300, 200, || column([text("Press Ctrl+S")]).center().grow())
+}
+```
+
+#### בדיקת תוכנית בלי חלון
+
+`ui_headless(view, width, height)` מריץ את הממשק בלי חלון, ו-`ui_click(x, y)`, `ui_click_text("label")`,
+`ui_type("text")`, `ui_keypress("ctrl+z")` ו-`ui_drag(...)` פועלים כמו משתמש. הלוח והדיאלוגים הסטנדרטיים מוחלפים
+בגרסאות מדומות (`ui_answers(ok, path)` קובע מה הדיאלוגים מחזירים), כך שבדיקה לעולם לא מחכה לאדם. הנתונים של התוכנית
+מספרים מה קרה:
+
+<!-- id: ui-headless -->
+```atf
+import "std/ui"
+
+var name = ""
+var color = "red"
+var log = ""
+var asking = false
+
+fn view() -> Node {
+    let root = column([
+        textbox(name, |s| { name = s }).placeholder("Your name"),
+        select(color, ["red", "green", "blue"], |c| { color = c }),
+        menu_button("File", [
+            menu_item("Save", || { log = "saved" }),
+            menu_item("Quit", || { asking = true }),
+        ]),
+    ]).padding(16).gap(10).grow()
+    if asking {
+        root.add(dialog("Quit", text("Really quit?"), [button("No", || { asking = false })], || { asking = false }))
+    }
+    return root
+}
+
+fn main() {
+    ui_headless(view, 320, 240)
+    ui_click(50, 30)                // תיבת הטקסט
+    ui_type("Ada")
+    ui_keypress("ctrl+a")
+    ui_keypress("ctrl+c")
+    ui_click_text("red")            // פותח את הרשימה
+    ui_click_text("blue")
+    ui_click_text("File")
+    ui_click_text("Save")
+    println(name, color, log, clipboard_get())
+    ui_click_text("File")
+    ui_click_text("Quit")
+    println("asking:", asking)
+    ui_keypress("esc")              // סוגר את הדיאלוג
+    println("asking:", asking)
+}
+```
+```output
+Ada blue saved Ada
+asking: true
+asking: false
+```
+
+#### לזכור דברים בין הרצות: `std/app`
+
+`import "std/app"` נותן לתוכנית תיקייה משלה (`app_dir("name")` היא `%APPDATA%\name`) וקובץ הגדרות קטן של שורות
+`key=value`. `settings_open("name")` טוען אותו, `get`, `get_int`, `get_bool` קוראים עם ערך ברירת מחדל, `set`, `set_int`,
+`set_bool` משנים ערכים ו-`save()` כותב את הקובץ. `recent_add(settings, path)` שומר רשימת קבצים אחרונים.
+לנתונים גדולים יותר כותבים קובץ ב-`app_path("name", "data.json")` עם `std/json`.
+
+<!-- id: app-settings -->
+```atf
+import "std/app"
+
+fn main() {
+    let file = temp_dir() + "demo_settings.txt"
+    let s = settings_file(file)
+    s.set("theme", "dark")
+    s.set_int("width", 900)
+    s.save()
+
+    let again = settings_file(file)
+    println(again.get("theme", "light"), again.get_int("width", 640), again.get_bool("maximized"))
+    delete_file(file)
+}
+```
+```output
+dark 900 false
+```
+
+תוכנית שלמה שמשתמשת בכל זה, עורך הערות עם שורת תפריטים, תיבת חיפוש, אזור טקסט, קיצורי מקלדת, דיאלוגי קבצים, ערכת
+נושא כהה ושמירה אוטומטית, נמצאת ב-`examples/ui/notes.atf`.
 
 כל הפונקציות מתוארות ב-[STDLIB.md](STDLIB.md#stdui). תוכניות גדולות יותר נמצאות ב-`examples/ui/`: `counter.atf`,
 `todo.atf` (רשימת משימות עם תיבת טקסט, תיבות סימון וסינון) ו-`dashboard.atf` (תפריט צד, כרטיסים עם מעברי צבע, גרף

@@ -22,6 +22,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [Sets](#sets)
   - [Files, time, random](#files-time-random)
 - Modules
+  - [std/app](#stdapp)
   - [std/base64](#stdbase64)
   - [std/collections](#stdcollections)
   - [std/csv](#stdcsv)
@@ -359,6 +360,60 @@ These are part of the language itself (they accept values of any printable type 
 - `fn rand_float() -> float` - random float in [0, 1)
 - `fn rand_choice<T>(a: [T]) -> T` - a random element of a; panics when a is empty
 - `fn shuffle<T>(a: [T])` - puts the elements of a in random order, in place
+
+## std/app
+
+Where a program keeps its settings and data, and a small settings file.
+
+```text
+import "std/app"
+let s = settings_open("notes")            // reads %APPDATA%\notes\settings.txt when it exists
+let theme = s.get("theme", "dark")
+s.set("theme", "light")
+s.set_int("width", 900)
+s.save()
+
+write_file(app_path("notes", "draft.txt"), text)    // any file in the program's own folder
+let recent = recent_add(s, "C:\\a.txt")             // a most-recently-used list kept in the settings
+```
+
+The settings file is plain text, one key=value per line, so a person can edit it. Values may hold any
+text, new lines included. Keys must not contain "=" or a new line.
+
+**Types**
+
+key/value settings stored in a text file
+
+```text
+struct Settings {
+    path: str
+    values: {str: str}
+}
+```
+
+
+**Functions**
+
+- `fn app_dir(name: str) -> str` - the folder where the program named name keeps its files (%APPDATA%\name), created when it is missing. Falls back to the temporary folder when there is no APPDATA.
+- `fn app_path(name: str, file: str) -> str` - the full path of a file inside the program's folder: app_path("notes", "draft.txt")
+- `fn settings_escape(v: str) -> str` - v with each backslash, new line and carriage return replaced by a two-character escape (the form used in the settings file)
+- `fn settings_unescape(v: str) -> str` - the reverse of settings_escape
+- `fn settings_file(path: str) -> Settings` - settings kept in an explicit file (loaded when it exists)
+- `fn settings_open(name: str) -> Settings` - the settings of the program named name, in %APPDATA%\name\settings.txt
+- `fn recent_add(s: Settings, path: str, max: int = 8) -> [str]` - puts path first in the most-recently-used list kept under the key "recent" (at most max entries) and returns the list
+- `fn recent_list(s: Settings) -> [str]` - the most-recently-used list kept in the settings, newest first
+
+**Methods of `Settings`**
+
+- `.get(key: str, fallback: str = "") -> str` - the value of key, or fallback when it is not set
+- `.get_int(key: str, fallback: int = 0) -> int`
+- `.get_bool(key: str, fallback: bool = false) -> bool`
+- `.has(key: str) -> bool`
+- `.set(key: str, value: str)`
+- `.set_int(key: str, value: int)`
+- `.set_bool(key: str, value: bool)`
+- `.remove(key: str)`
+- `.save() -> bool` - writes the file (keys in alphabetical order); false when it cannot be written
 
 ## std/base64
 
@@ -1087,6 +1142,17 @@ enum Justify { Start, Center, End, Between, Around, Evenly }
 enum Cursor { Default, Pointer, Text, Move, NotAllowed, ResizeH, ResizeV }
 ```
 
+A rectangle you draw yourself. Coordinates are pixels (at 100% scale) from its top left corner. canvas(|c| { c.rect(0, 0, c.w, c.h, WHITE); c.circle(50, 50, 20, RED) }).size(200, 120)
+
+```text
+struct Canvas {
+    ox: int
+    oy: int
+    w: int
+    h: int
+}
+```
+
 
 **Functions**
 
@@ -1114,11 +1180,40 @@ enum Cursor { Default, Pointer, Text, Move, NotAllowed, ResizeH, ResizeV }
 - `fn slider(value: float, on_change: fn(float)) -> Node` - a horizontal slider for a value from 0.0 to 1.0; on_change gets the new value while dragging
 - `fn progress(value: float) -> Node` - a progress bar for a value from 0.0 to 1.0
 - `fn image(path: str) -> Node` - a picture from a file (PNG, JPG, BMP, GIF); without a size it shows at its natural size. The picture fills the box and is cut to keep its proportions (CSS object-fit: cover).
+- `fn textarea(value: str, on_input: fn(str)) -> Node` - a multi-line text field: shows value, calls on_input(new value) when the user types. Enter starts a new line, Tab inserts spaces; the arrow keys, Home/End, PageUp/PageDown, the mouse (click, drag, double click), Ctrl+A/C/X/V and Ctrl+Z/Y work. It is 5 lines tall unless .rows(n) or .height(..) say otherwise.
+- `fn icon(name: str) -> Node` - a small picture from the symbol font that comes with Windows; give it a color and size like text: icon("save").font_size(20).color(hex("#2563eb")). A name that is not in the list is shown as it is, so icon("\u{E81E}") shows that symbol.
+- `fn tabs(labels: [str], selected: int, on_select: fn(int)) -> Node` - a row of tab headers; selected is the number of the chosen tab, on_select(i) runs when one is clicked. The program shows the content of the chosen tab itself, below this row.
+- `fn menu(items: [Node]) -> Node` - the list of choices in a menu; use it as the second argument of dropdown
+- `fn menu_item(label: str, on_click: fn()) -> Node` - one line of a menu; the menu closes after it is clicked
+- `fn dropdown(trigger: Node, content: Node) -> Node` - shows content (usually a menu) in a floating layer under trigger while the trigger has been clicked. A click anywhere else, or Esc, closes it. The result takes the place of trigger in the layout.
+- `fn menu_button(label: str, items: [Node]) -> Node` - a text button that opens a menu: menu_button("File", [menu_item("Open", open), menu_item("Save", save)])
+- `fn menu_bar(menus: [Node]) -> Node` - a bar of menu buttons across the top of a window; it is white, change that with .bg(..) and .color(..)
+- `fn select(value: str, options: [str], on_change: fn(str)) -> Node` - a choice from a list: shows the chosen value; on_change(option) runs when another one is clicked
+- `fn modal(content: Node, on_close: fn()) -> Node` - content on a dimmed layer over the whole window; on_close runs when the dimmed area is clicked or Esc is pressed. Add it last: root.add(modal(..)), or put it in the list of a stack.
+- `fn dialog(title: str, body: Node, buttons: [Node], on_close: fn()) -> Node` - a modal card with a title, a body and a row of buttons on the right
+- `fn canvas(draw: fn(Canvas)) -> Node` - an element that you draw with draw(canvas) each time the screen is drawn. Give it a size: .size(300, 200) or .grow()
+- `fn focus_field(key: str)` - give the keyboard focus to the text field marked with .key(name) and put the caret at its end; does nothing when there is no such field. Handy in a shortcut: ui_shortcut("ctrl+f", || focus_field("search"))
 - `fn ui_refresh()` - ask for the view to be rebuilt and the window to be redrawn (after changing data outside an event)
 - `fn ui_quit()` - close the window (ui_run returns)
 - `fn ui_title(title: str)` - change the window title
 - `fn ui_every(ms: int, f: fn())` - run f every ms milliseconds while the window is open; the view is rebuilt after each call
+- `fn ui_mouse_move(x: int, y: int)` - move the mouse pointer to (x, y) without clicking: hover styles and tooltips react (use it in tests)
+- `fn ui_shortcut(combo: str, f: fn())` - Run f when the key combination is pressed anywhere in the window: ui_shortcut("ctrl+s", save). Modifiers: ctrl, shift, alt. Keys: a-z, 0-9, f1-f12, enter, esc, tab, space, delete, backspace, home, end, pageup, pagedown, left, right, up, down. A key without ctrl or alt (like "delete") does nothing while the user is typing in a text field. Registering the same combination again replaces the first one, so it can be called from the view function.
+- `fn clipboard_get() -> str` - text on the Windows clipboard
+- `fn clipboard_set(s: str)`
+- `fn message_box(title: str, message: str)` - show a message and wait for OK
+- `fn confirm_box(title: str, question: str) -> bool` - ask a yes/no question; true when the user answered Yes
+- `fn open_file_dialog(title: str = "Open", filter: str = "All files|*.*") -> str?` - The Windows "Open" dialog. filter is pairs of name|pattern: "Text files|*.txt|All files|*.*". Returns the chosen path, or nil when the user cancelled.
+- `fn save_file_dialog(title: str = "Save as", filter: str = "All files|*.*", ext: str = "") -> str?` - The Windows "Save as" dialog; ext (like "txt") is added when the user types a name without one. Returns the chosen path, or nil when the user cancelled.
 - `fn ui_run(title: str, width: int, height: int, view: fn() -> Node)` - Open a window and show view() in it until the window is closed. width and height are the size of the inside of the window. view runs again after every click, key press and timer, so it should build the screen from the program's data each time. With the environment variable ATF_UI_SCREENSHOT=picture.bmp set, no window opens: the first frame is saved to that file instead (for tests and documentation of any UI program).
+- `fn ui_headless(view: fn() -> Node, width: int, height: int)` - Start view() in a width x height area without opening a window and forget all earlier state (focus, open menus, scroll positions, undo). Then send events with ui_click, ui_type and ui_keypress, check the program's own data, and draw the result with ui_screenshot. Dialogs do not open while testing: message_box does nothing, confirm_box answers ui_answers' yes, the file dialogs return its path (nil when it is empty), and the clipboard is private to the program.
+- `fn ui_answers(yes: bool, path: str)` - what the dialogs answer while testing: yes for confirm_box, and the path the file dialogs return ("" = cancel)
+- `fn ui_last_dialog() -> str` - the text of the last message_box or confirm_box
+- `fn ui_click(x: int, y: int)` - move the mouse to (x, y), press and release the left button
+- `fn ui_drag(x1: int, y1: int, x2: int, y2: int)` - press the left button at (x1, y1), move to (x2, y2) and release it (selecting text, dragging a slider)
+- `fn ui_type(s: str)` - type text into the focused field
+- `fn ui_keypress(combo: str) -> bool` - press a key or combination: ui_keypress("enter"), ui_keypress("ctrl+a"), ui_keypress("shift+left"). Returns false when the key name is not known.
+- `fn ui_click_text(s: str) -> bool` - click the middle of the first element that shows exactly this text (a button's label, for example); false when none is on the screen. Open menus and dialogs are searched first.
 - `fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1) -> bool` - Draw view() into a picture file (.bmp) of width x height pixels without opening a window (for tests, documentation and thumbnails). hover_x, hover_y: optional mouse position to show hover styles.
 
 **Methods of `Style`**
@@ -1177,3 +1272,18 @@ enum Cursor { Default, Pointer, Text, Move, NotAllowed, ResizeH, ResizeV }
 - `.password() -> Node` - text box: show dots instead of the letters
 - `.key(k: str) -> Node` - a stable name, so the element keeps its state (focus, scroll) when the list around it changes
 - `.add(c: Node) -> Node` - add one more child
+- `.rows(k: int) -> Node` - text area: how many lines tall it is at first (default 5)
+- `.on_pointer(f: fn(int, int)) -> Node` - canvas: f(x, y) runs when the mouse is pressed on the element and while it moves with the button down; x and y are measured from the top left corner of the element
+- `.tooltip(s: str) -> Node` - show a small note under the element while the mouse is over it
+
+**Methods of `Canvas`**
+
+- `.clear(c: int)` - fill the whole canvas with a color
+- `.rect(x: int, y: int, w: int, h: int, c: int)`
+- `.rrect(x: int, y: int, w: int, h: int, r: int, c: int)` - rectangle with rounded corners
+- `.outline(x: int, y: int, w: int, h: int, r: int, bw: int, c: int)` - only the border of a rectangle (bw pixels wide)
+- `.circle(cx: int, cy: int, r: int, c: int)`
+- `.ring(cx: int, cy: int, r: int, bw: int, c: int)` - only the border of a circle
+- `.line(x1: int, y1: int, x2: int, y2: int, width: int, c: int)` - a straight line with round ends, width pixels thick
+- `.text(x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false)` - one line of text with its top left corner at (x, y)
+- `.text_width(s: str, size: int = 15, bold: bool = false) -> int` - the width text would take

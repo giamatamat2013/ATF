@@ -1,0 +1,14 @@
+# Text files are stored and checked out with LF, so the sources, the expected outputs of the tests
+# and the generated docs are byte-for-byte the same on every machine.
+* text=auto eol=lf
+
+# Windows batch files need CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Never touched
+*.exe binary
+*.bmp binary
+*.png binary
+*.ico binary
+*.vsix binary

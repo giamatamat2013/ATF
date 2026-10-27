@@ -11,3 +11,45 @@ styles
 #ff0000 #0000ff
 #ffffff #ffffff
 #ff0000 #ffffff
+typing
+typed | name=[hello world] notes=[] selection=11..11
+word right | name=[hello world] notes=[] selection=5..5
+replaced selection | name=[hellothere] notes=[] selection=10..10
+undo | name=[hello world] notes=[] selection=11..11
+redo | name=[hellothere] notes=[] selection=10..10
+pasted | name=[hellotherehellothere] notes=[] selection=20..20
+deleted | name=[] notes=[] selection=0..0
+one char | name=[ba] notes=[] selection=1..1
+focus moved true 0 0
+text area
+lines (a new line keeps the indent) | name=[ba] notes=[ab/  cd/  ef] selection=12..12
+up up end | name=[ba] notes=[ab/  cd/  ef] selection=2..2
+down keeps the column | name=[ba] notes=[ab/  cd/  ef] selection=6..6
+selected | name=[ba] notes=[ab/  cd/  ef] selection=0..8
+deleted | name=[ba] notes=[  ef] selection=0..0
+undo | name=[ba] notes=[ab/  cd/  ef] selection=8..8
+tab inserts spaces | name=[ba] notes=[ab/  cd/      ef] selection=12..12
+double click picks a word | name=[ba] notes=[ab/  cd/      ef] selection=5..7
+triple click picks the line | name=[ba] notes=[ab/  cd/      ef] selection=0..3
+layers
+true 1 1
+true 0 new 
+esc closes the menu 0
+a click outside closes it 0 new 
+select open 1
+select picked c 0
+tab 1
+canvas pointer 5,7
+tooltip shown 1
+tooltip gone 0
+dialog true 1
+dialog closed by the backdrop false
+dialog closed by Esc false
+dialog closed by its button false
+canvas
+#ff0000 #ffffff #0000ff #ffffff
+shortcuts and dialogs
+save2 run del  false
+false Sure? true
+true C:\x\y.txt C:\x\y.txt
+copied

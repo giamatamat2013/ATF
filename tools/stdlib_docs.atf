@@ -6,7 +6,7 @@
 // comment written directly above it (or at the end of a one-line function).
 
 let PRELUDE = "atf/stdlib/prelude.atf"
-let MODULES = ["base64", "collections", "csv", "datetime", "hash", "hex", "json", "ui"]
+let MODULES = ["app", "base64", "collections", "csv", "datetime", "hash", "hex", "json", "ui"]
 let OUT = "docs/STDLIB.md"
 
 // top-level prelude functions that only the runtime and the compiler use
@@ -29,7 +29,10 @@ let OPAQUE_TYPES: {str: bool} = make_set(["Style", "Node"])
 // methods of a type that are already listed under another type are left out (Node has every Style method)
 let SAME_METHODS_AS: {str: str} = {"Node": "Style"}
 // in std/ui the names that start with ui_ / UI_ are internal, except these
-let PUBLIC_UI: {str: bool} = make_set(["ui_run", "ui_screenshot", "ui_refresh", "ui_quit", "ui_title", "ui_every"])
+let PUBLIC_UI: {str: bool} = make_set([
+    "ui_run", "ui_screenshot", "ui_refresh", "ui_quit", "ui_title", "ui_every", "ui_shortcut", "ui_headless", "ui_answers",
+    "ui_last_dialog", "ui_click", "ui_drag", "ui_type", "ui_keypress", "ui_click_text", "ui_mouse_move",
+])
 
 fn mentions_internal_type(s: str) -> bool {
     for t in INTERNAL_TYPES {

@@ -73,9 +73,180 @@ fn styles() {
     println(px(s, 100, 100, 95, 5), px(s, 100, 100, 5, 5))
 }
 
+
+// ---- events without a window: ui_headless, ui_click, ui_type, ui_keypress
+var name = ""
+var notes = ""
+var log = ""
+var choice = "b"
+var showing = false
+var tabsel = 0
+var ptr = ""
+
+fn app() -> Node {
+    let root = column([
+        textbox(name, |s| { name = s }).placeholder("name").width(200),
+        textarea(notes, |s| { notes = s }).width(240).rows(3),
+        select(choice, ["a", "b", "c"], |s| { choice = s }),
+        menu_button("File", [menu_item("New", || { log = log + "new " }), menu_item("Exit", || { log = log + "exit " })]),
+        button("Details", || { showing = true }).tooltip("show details"),
+        tabs(["One", "Two"], tabsel, |i| { tabsel = i }),
+        canvas(|c| { c.rect(0, 0, 50, 20, RED); c.circle(80, 20, 10, BLUE) }).size(100, 40).on_pointer(|x, y| { ptr = "{x},{y}" }),
+    ]).padding(10).gap(8).bg(WHITE).grow()
+    if showing {
+        root.add(dialog("Details", text("some body"), [button("Close", || { showing = false })], || { showing = false }))
+    }
+    return root
+}
+
+fn state(label: str) {
+    let flat = notes.replace("\n", "/")
+    println(label, "| name=[{name}] notes=[{flat}] selection={ui_anchor}..{ui_caret}")
+}
+
+fn typing() {
+    println("typing")
+    ui_headless(app, 400, 520)
+    ui_click(30, 25)
+    ui_type("hello world")
+    state("typed")
+    ui_keypress("home")
+    ui_keypress("ctrl+right")
+    state("word right")
+    ui_keypress("shift+end")
+    ui_type("there")
+    state("replaced selection")
+    ui_keypress("ctrl+z")
+    state("undo")
+    ui_keypress("ctrl+y")
+    state("redo")
+    ui_keypress("ctrl+a")
+    ui_keypress("ctrl+c")
+    ui_keypress("end")
+    ui_keypress("ctrl+v")
+    state("pasted")
+    ui_keypress("backspace")
+    ui_keypress("ctrl+backspace")
+    state("deleted")
+    ui_type("a")
+    ui_keypress("left")
+    ui_keypress("shift+left")
+    ui_type("b")
+    state("one char")
+    // the text field is the first in the tab order, the text area the second
+    ui_keypress("tab")
+    println("focus moved", ui_focus.len() > 0, ui_anchor, ui_caret)
+}
+
+fn area() {
+    println("text area")
+    ui_headless(app, 400, 520)
+    ui_click(40, 90)
+    ui_type("ab")
+    ui_keypress("enter")
+    ui_type("  cd")
+    ui_keypress("enter")
+    ui_type("ef")
+    state("lines (a new line keeps the indent)")
+    ui_keypress("up")
+    ui_keypress("up")
+    ui_keypress("end")
+    state("up up end")
+    ui_keypress("down")
+    state("down keeps the column")
+    ui_keypress("ctrl+home")
+    ui_keypress("shift+down")
+    ui_keypress("shift+down")
+    state("selected")
+    ui_keypress("delete")
+    state("deleted")
+    ui_keypress("ctrl+z")
+    state("undo")
+    ui_keypress("tab")
+    state("tab inserts spaces")
+    ui_click(60, 90)
+    ui_click(60, 90)
+    state("double click picks a word")
+    ui_click(15, 62)
+    ui_click(15, 62)
+    ui_click(15, 62)
+    state("triple click picks the line")
+}
+
+fn layers() {
+    println("layers")
+    ui_headless(app, 400, 520)
+    log = ""
+    println(ui_click_text("File"), ui_open.len(), ui_overlays.len())
+    println(ui_click_text("New"), ui_open.len(), log)
+    ui_click_text("File")
+    ui_keypress("esc")
+    println("esc closes the menu", ui_open.len())
+    ui_click_text("File")
+    ui_click(380, 500)
+    println("a click outside closes it", ui_open.len(), log)
+    ui_click_text("b")
+    println("select open", ui_open.len())
+    ui_click_text("c")
+    println("select picked", choice, ui_open.len())
+    ui_click_text("Two")
+    println("tab", tabsel)
+    ui_click(15, 330)
+    println("canvas pointer", ptr)
+    ui_mouse_move(20, 240)
+    println("tooltip shown", ui_overlays.len())
+    ui_mouse_move(300, 5)
+    println("tooltip gone", ui_overlays.len())
+    ui_click_text("Details")
+    println("dialog", showing, ui_overlays.len())
+    ui_click(5, 5)
+    println("dialog closed by the backdrop", showing)
+    ui_click_text("Details")
+    ui_keypress("esc")
+    println("dialog closed by Esc", showing)
+    ui_click_text("Details")
+    ui_click_text("Close")
+    println("dialog closed by its button", showing)
+}
+
+fn canvas_pixels() {
+    println("canvas")
+    ui_headless(app, 400, 520)
+    let pic = render(app, 400, 520)
+    // the canvas starts at (10, 323)
+    println(px(pic, 400, 520, 20, 330), px(pic, 400, 520, 70, 330), px(pic, 400, 520, 90, 343), px(pic, 400, 520, 150, 343))
+}
+
+fn shortcuts_and_dialogs() {
+    println("shortcuts and dialogs")
+    ui_headless(app, 400, 520)
+    log = ""
+    ui_shortcut("ctrl+s", || { log = log + "save " })
+    ui_shortcut("Ctrl+S", || { log = log + "save2 " })
+    ui_shortcut("f5", || { log = log + "run " })
+    ui_shortcut("delete", || { log = log + "del " })
+    ui_keypress("ctrl+s")
+    ui_keypress("f5")
+    ui_keypress("delete")
+    ui_click(30, 25)
+    ui_keypress("delete")
+    println(log, ui_keypress("nonsense"))
+    ui_answers(false, "")
+    println(confirm_box("Quit", "Sure?"), ui_last_dialog(), open_file_dialog() == nil)
+    ui_answers(true, "C:\\x\\y.txt")
+    println(confirm_box("Quit", "Sure?"), open_file_dialog()!, save_file_dialog("Save", "Text|*.txt", "txt")!)
+    clipboard_set("copied")
+    println(clipboard_get())
+}
+
 fn main() {
     colors()
     layout()
     styles()
+    typing()
+    area()
+    layers()
+    canvas_pixels()
+    shortcuts_and_dialogs()
     delete_file(SHOT)
 }

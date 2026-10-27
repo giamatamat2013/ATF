@@ -65,7 +65,11 @@ extern "user32" fn EmptyClipboard() -> i32
 extern "user32" fn GetClipboardData(fmt: int) -> int
 extern "user32" fn SetClipboardData(fmt: int, h: int) -> int
 extern "user32" fn GetSystemMetricsForDpi(i: int, dpi: int) -> i32
+extern "user32" fn MessageBoxW(h: int, text: ptr<byte>, caption: ptr<byte>, flags: int) -> i32
+extern "comdlg32" fn GetOpenFileNameW(ofn: ptr<int>) -> i32
+extern "comdlg32" fn GetSaveFileNameW(ofn: ptr<int>) -> i32
 extern "kernel32" fn GetModuleHandleW(name: int) -> int
+extern "kernel32" fn GetTickCount64() -> int
 extern "kernel32" fn MultiByteToWideChar(cp: int, flags: int, s: ptr<byte>, n: int, w: ptr<byte>, wn: int) -> i32
 extern "kernel32" fn WideCharToMultiByte(cp: int, flags: int, w: ptr<byte>, wn: int, s: ptr<byte>, n: int, d: int, u: int) -> i32
 extern "kernel32" fn GlobalLock(h: int) -> int
@@ -511,6 +515,12 @@ const UI_K_TEXTBOX = 3
 const UI_K_IMAGE = 4
 const UI_K_GRID = 5
 const UI_K_STACK = 6
+const UI_K_TEXTAREA = 7
+
+// kinds of floating layers (Node.ovl)
+const UI_O_POPUP = 1
+const UI_O_MODAL = 2
+const UI_O_TIP = 3
 
 struct UiFont {
     key: str
@@ -548,8 +558,15 @@ struct Node {
     input_f: fn(str)? = nil
     submit_f: fn()? = nil
     drag_f: fn(float)? = nil
+    draw_f: fn(Canvas)? = nil
+    ptr_f: fn(int, int)? = nil
+    ovl: int = 0
+    opens: bool = false
+    blocks: bool = false
+    nrows: int = 5
     // layout results
     path: str = ""
+    ppath: str = ""
     bs: Style
     tp: UiText
     rf: UiFont? = nil
@@ -637,6 +654,19 @@ impl Node {
     fn key(self, k: str) -> Node { self.keyname = k; return self }
     // add one more child
     fn add(self, c: Node) -> Node { self.children.push(c); return self }
+    // text area: how many lines tall it is at first (default 5)
+    fn rows(self, k: int) -> Node { self.nrows = max(k, 1); return self }
+    // canvas: f(x, y) runs when the mouse is pressed on the element and while it moves with the button down;
+    // x and y are measured from the top left corner of the element
+    fn on_pointer(self, f: fn(int, int)) -> Node { self.ptr_f = f; return self }
+    // show a small note under the element while the mouse is over it
+    fn tooltip(self, s: str) -> Node {
+        let tip = ui_node(UI_K_COL, [text(s)])
+        tip.ovl = UI_O_TIP
+        tip.th = style().padding(5, 9).radius(6).bg(0xFF1E293B).color(WHITE).font_size(12)
+        self.children.push(tip)
+        return self
+    }
 }
 
 // ---------------------------------------------------------------- elements
@@ -762,6 +792,230 @@ fn image(path: str) -> Node {
     let n = ui_node(UI_K_IMAGE, [])
     n.content = path
     return n
+}
+
+// a multi-line text field: shows value, calls on_input(new value) when the user types.
+// Enter starts a new line, Tab inserts spaces; the arrow keys, Home/End, PageUp/PageDown, the mouse
+// (click, drag, double click), Ctrl+A/C/X/V and Ctrl+Z/Y work. It is 5 lines tall unless .rows(n) or .height(..) say otherwise.
+fn textarea(value: str, on_input: fn(str)) -> Node {
+    let n = ui_node(UI_K_TEXTAREA, [])
+    n.content = value
+    n.input_f = on_input
+    n.th = style().padding(8, 12).radius(8).bg(WHITE).border(1, 0xFFCBD5E1).color(UI_INK)
+        .cursor(Cursor.Text).transition(120).width(320)
+        .focused(style().border_color(UI_ACCENT).shadow(0, 0, 0, fade(UI_ACCENT, 0.25), 3))
+    return n
+}
+
+// ---------------------------------------------------------------- icons
+// icon names: search add delete edit save settings close check menu home back forward up down left right
+// chevron_down chevron_up folder file copy paste refresh star heart user info warning play pause cut undo redo
+let UI_ICONS: {str: str} = {
+    "search": "\u{E721}", "add": "\u{E710}", "delete": "\u{E74D}", "edit": "\u{E70F}", "save": "\u{E74E}",
+    "settings": "\u{E713}", "close": "\u{E711}", "check": "\u{E73E}", "menu": "\u{E700}", "home": "\u{E80F}",
+    "back": "\u{E72B}", "forward": "\u{E72A}", "up": "\u{E74A}", "down": "\u{E74B}", "left": "\u{E76B}", "right": "\u{E76C}",
+    "chevron_down": "\u{E70D}", "chevron_up": "\u{E70E}", "folder": "\u{E8B7}", "file": "\u{E7C3}",
+    "copy": "\u{E8C8}", "paste": "\u{E77F}", "refresh": "\u{E72C}", "star": "\u{E734}", "heart": "\u{EB51}",
+    "user": "\u{E77B}", "info": "\u{E946}", "warning": "\u{E7BA}", "play": "\u{E768}", "pause": "\u{E769}",
+    "cut": "\u{E8C6}", "undo": "\u{E7A7}", "redo": "\u{E7A6}"
+}
+
+// a small picture from the symbol font that comes with Windows; give it a color and size like text:
+// icon("save").font_size(20).color(hex("#2563eb")). A name that is not in the list is shown as it is,
+// so icon("\u{E81E}") shows that symbol.
+fn icon(name: str) -> Node {
+    let n = text(UI_ICONS.get(name, name))
+    n.th = style().family("Segoe MDL2 Assets").font_size(16).nowrap()
+    return n
+}
+
+// ---------------------------------------------------------------- tabs
+// a row of tab headers; selected is the number of the chosen tab, on_select(i) runs when one is clicked.
+// The program shows the content of the chosen tab itself, below this row.
+fn tabs(labels: [str], selected: int, on_select: fn(int)) -> Node {
+    let items: [Node] = []
+    for i in 0..labels.len() {
+        let idx = i
+        let on = idx == selected
+        let t = text(labels[i]).padding(9, 16).weight(if on { 600 } else { 400 }).color(if on { UI_ACCENT } else { UI_MUTED }).nowrap()
+        let bar = box([]).height(2).bg(if on { UI_ACCENT } else { TRANSPARENT })
+        let tab = column([t, bar])
+        tab.click_f = || on_select(idx)
+        tab.th = style().cursor(Cursor.Pointer).transition(120)
+        if not on { tab.th = tab.th.hover(style().color(UI_INK)) }
+        items.push(tab)
+    }
+    return column([row(items).align(Align.Stretch), divider()])
+}
+
+// ---------------------------------------------------------------- menus, drop-downs, dialogs
+// the list of choices in a menu; use it as the second argument of dropdown
+fn menu(items: [Node]) -> Node {
+    let n = column(items)
+    n.th = style().padding(4).gap(2).bg(WHITE).color(UI_INK).radius(10).border(1, UI_LINE).min_width(140)
+        .shadow(0, 8, 24, fade(BLACK, 0.16))
+    return n
+}
+
+// one line of a menu; the menu closes after it is clicked
+fn menu_item(label: str, on_click: fn()) -> Node {
+    let n = row([text(label).nowrap()])
+    n.th = style().padding(7, 12).radius(6).cursor(Cursor.Pointer).transition(80)
+        .hover(style().bg(0xFFF1F5F9)).pressed(style().bg(UI_LINE))
+    n.click_f = || { ui_close_popups(); on_click() }
+    return n
+}
+
+// shows content (usually a menu) in a floating layer under trigger while the trigger has been clicked.
+// A click anywhere else, or Esc, closes it. The result takes the place of trigger in the layout.
+fn dropdown(trigger: Node, content: Node) -> Node {
+    trigger.opens = true
+    content.ovl = UI_O_POPUP
+    return column([trigger, content])
+}
+
+// a text button that opens a menu: menu_button("File", [menu_item("Open", open), menu_item("Save", save)])
+fn menu_button(label: str, items: [Node]) -> Node {
+    let trigger = text(label).padding(6, 12).radius(6).nowrap()
+    trigger.th = style().cursor(Cursor.Pointer).hover(style().bg(fade(0xFF64748B, 0.25))).transition(80)
+    return dropdown(trigger, menu(items))
+}
+
+// a bar of menu buttons across the top of a window; it is white, change that with .bg(..) and .color(..)
+fn menu_bar(menus: [Node]) -> Node {
+    let n = column([row(menus).padding(2, 6).gap(2), divider()])
+    n.th = style().bg(WHITE).color(UI_INK)
+    return n
+}
+
+// a choice from a list: shows the chosen value; on_change(option) runs when another one is clicked
+fn select(value: str, options: [str], on_change: fn(str)) -> Node {
+    let items: [Node] = []
+    for o in options {
+        let opt = o
+        let item = menu_item(opt, || on_change(opt))
+        if opt == value {
+            item.th = item.th.bg(fade(UI_ACCENT, 0.1)).color(UI_ACCENT).weight(600)
+        }
+        items.push(item)
+    }
+    let shown = text(value).nowrap().grow(1.0)
+    let trigger = row([shown, icon("chevron_down").font_size(11).color(UI_MUTED)]).gap(8)
+    trigger.th = style().padding(8, 12).radius(8).bg(WHITE).border(1, 0xFFCBD5E1).color(UI_INK).width(220)
+        .cursor(Cursor.Pointer).transition(120).hover(style().border_color(UI_MUTED))
+    return dropdown(trigger, menu(items))
+}
+
+// content on a dimmed layer over the whole window; on_close runs when the dimmed area is clicked or Esc is pressed.
+// Add it last: root.add(modal(..)), or put it in the list of a stack.
+fn modal(content: Node, on_close: fn()) -> Node {
+    content.blocks = true
+    let n = ui_node(UI_K_COL, [content])
+    n.ovl = UI_O_MODAL
+    n.th = style().bg(fade(BLACK, 0.45)).center()
+    n.click_f = on_close
+    return n
+}
+
+// a modal card with a title, a body and a row of buttons on the right
+fn dialog(title: str, body: Node, buttons: [Node], on_close: fn()) -> Node {
+    let card = column([
+        text(title).font_size(18).bold(),
+        body,
+        row(buttons).gap(8).justify(Justify.End),
+    ])
+    card.th = style().gap(16).padding(24).width(380).bg(WHITE).color(UI_INK).radius(14).shadow(0, 16, 48, fade(BLACK, 0.3))
+    return modal(card, on_close)
+}
+
+// ---------------------------------------------------------------- canvas
+// A rectangle you draw yourself. Coordinates are pixels (at 100% scale) from its top left corner.
+//   canvas(|c| { c.rect(0, 0, c.w, c.h, WHITE); c.circle(50, 50, 20, RED) }).size(200, 120)
+struct Canvas {
+    ox: int
+    oy: int
+    w: int
+    h: int
+}
+
+impl Canvas {
+    // fill the whole canvas with a color
+    fn clear(self, c: int) { ui_fill_rect(self.ox, self.oy, ui_sc(self.w), ui_sc(self.h), c) }
+    fn rect(self, x: int, y: int, w: int, h: int, c: int) {
+        ui_fill_rect(self.ox + ui_sc(x), self.oy + ui_sc(y), ui_sc(w), ui_sc(h), c)
+    }
+    // rectangle with rounded corners
+    fn rrect(self, x: int, y: int, w: int, h: int, r: int, c: int) {
+        let rr = ui_sc(r)
+        ui_rrect(self.ox + ui_sc(x), self.oy + ui_sc(y), ui_sc(w), ui_sc(h), rr, rr, rr, rr, 0, c, c, 0.0)
+    }
+    // only the border of a rectangle (bw pixels wide)
+    fn outline(self, x: int, y: int, w: int, h: int, r: int, bw: int, c: int) {
+        let rr = ui_sc(r)
+        ui_rrect(self.ox + ui_sc(x), self.oy + ui_sc(y), ui_sc(w), ui_sc(h), rr, rr, rr, rr, max(ui_sc(bw), 1), c, c, 0.0)
+    }
+    fn circle(self, cx: int, cy: int, r: int, c: int) {
+        let rr = ui_sc(r)
+        ui_rrect(self.ox + ui_sc(cx) - rr, self.oy + ui_sc(cy) - rr, rr * 2, rr * 2, rr, rr, rr, rr, 0, c, c, 0.0)
+    }
+    // only the border of a circle
+    fn ring(self, cx: int, cy: int, r: int, bw: int, c: int) {
+        let rr = ui_sc(r)
+        ui_rrect(self.ox + ui_sc(cx) - rr, self.oy + ui_sc(cy) - rr, rr * 2, rr * 2, rr, rr, rr, rr, max(ui_sc(bw), 1), c, c, 0.0)
+    }
+    // a straight line with round ends, width pixels thick
+    fn line(self, x1: int, y1: int, x2: int, y2: int, width: int, c: int) {
+        ui_line(float(self.ox + ui_sc(x1)) + 0.5, float(self.oy + ui_sc(y1)) + 0.5, float(self.ox + ui_sc(x2)) + 0.5, float(self.oy + ui_sc(y2)) + 0.5, float(max(ui_sc(width), 1)) / 2.0, c)
+    }
+    // one line of text with its top left corner at (x, y)
+    fn text(self, x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false) {
+        let t = UiText()
+        t.size = size
+        t.weight = if bold { 700 } else { 400 }
+        let f = ui_font(t)
+        ui_draw_mask(ui_text_mask(f, s), self.ox + ui_sc(x) - 1, self.oy + ui_sc(y), c)
+    }
+    // the width text would take
+    fn text_width(self, s: str, size: int = 15, bold: bool = false) -> int {
+        let t = UiText()
+        t.size = size
+        t.weight = if bold { 700 } else { 400 }
+        return int(float(ui_text_w(ui_font(t), s)) / ui_scale + 0.5)
+    }
+}
+
+// an element that you draw with draw(canvas) each time the screen is drawn. Give it a size: .size(300, 200) or .grow()
+fn canvas(draw: fn(Canvas)) -> Node {
+    let n = ui_node(UI_K_COL, [])
+    n.draw_f = draw
+    return n
+}
+
+// anti-aliased line from (x1, y1) to (x2, y2) in device pixels; half is half of the thickness
+fn ui_line(x1: float, y1: float, x2: float, y2: float, half: float, c: int) {
+    let a = ui_ca(c)
+    if a <= 0 { return }
+    let fb = ui_fb as ptr<int>
+    let px0 = max(int(min(x1, x2) - half - 1.0), ui_cx0)
+    let px1 = min(int(max(x1, x2) + half + 2.0), ui_cx1)
+    let py0 = max(int(min(y1, y2) - half - 1.0), ui_cy0)
+    let py1 = min(int(max(y1, y2) + half + 2.0), ui_cy1)
+    let dx = x2 - x1
+    let dy = y2 - y1
+    let len2 = dx * dx + dy * dy
+    for py in py0..py1 {
+        for px in px0..px1 {
+            let qx = float(px) + 0.5 - x1
+            let qy = float(py) + 0.5 - y1
+            var t = 0.0
+            if len2 > 0.0 { t = clamp((qx * dx + qy * dy) / len2, 0.0, 1.0) }
+            let ex = qx - t * dx
+            let ey = qy - t * dy
+            let d = sqrt(ex * ex + ey * ey)
+            let cov = clamp(half + 0.5 - d, 0.0, 1.0)
+            if cov > 0.0 { ui_put(fb, py * ui_fbw + px, c, int(float(a) * cov)) }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- strings for Windows (UTF-16)
@@ -1335,11 +1589,12 @@ fn ui_prepare(n: Node, path: str, parent: UiText) {
         if s.has & UI_B_RTL != 0 { t.rtl = s.rtl_v }
         n.tp = t
     }
-    if n.kind == UI_K_TEXT or n.kind == UI_K_TEXTBOX { n.rf = ui_font(n.tp) }
+    if n.kind == UI_K_TEXT or n.kind == UI_K_TEXTBOX or n.kind == UI_K_TEXTAREA { n.rf = ui_font(n.tp) }
     n.clips = s.has & UI_B_CLIP != 0
     for i in 0..n.children.len() {
         let c = n.children[i]
         let name = if c.keyname.len() > 0 { c.keyname } else { int_to_str(i) }
+        c.ppath = path
         ui_prepare(c, path + "/" + name, n.tp)
     }
 }
@@ -1348,7 +1603,7 @@ fn ui_pad_h(s: Style) -> int { return ui_sc(s.pl) + ui_sc(s.pr) + 2 * ui_sc(s.bw
 fn ui_pad_v(s: Style) -> int { return ui_sc(s.pt) + ui_sc(s.pb) + 2 * ui_sc(s.bw) }
 fn ui_mar_h(s: Style) -> int { if s.has & UI_B_MAR == 0 { return 0 }; return ui_sc(s.ml) + ui_sc(s.mr) }
 fn ui_mar_v(s: Style) -> int { if s.has & UI_B_MAR == 0 { return 0 }; return ui_sc(s.mt) + ui_sc(s.mb) }
-fn ui_is_abs(n: Node) -> bool { return n.bs.has & UI_B_ABS != 0 }
+fn ui_is_abs(n: Node) -> bool { return n.ovl != 0 or n.bs.has & UI_B_ABS != 0 }
 
 fn ui_clamp_w(s: Style, w: int) -> int {
     var v = w
@@ -1398,6 +1653,9 @@ fn ui_measure(n: Node, avail_w: int) -> (int, int) {
     } else if n.kind == UI_K_TEXTBOX {
         cw = n.rf!.size * 10
         ch = ui_line_h(n)
+    } else if n.kind == UI_K_TEXTAREA {
+        cw = n.rf!.size * 20
+        ch = ui_line_h(n) * n.nrows
     } else if n.kind == UI_K_IMAGE {
         if let img = ui_load_image(n.content) {
             cw = ui_sc(img.w)
@@ -1462,6 +1720,7 @@ fn ui_measure(n: Node, avail_w: int) -> (int, int) {
             }
         } else if n.kind == UI_K_STACK {
             for c in n.children {
+                if c.ovl != 0 { continue }
                 let (w, h) = ui_measure(c, inner - ui_mar_h(c.bs))
                 cw = max(cw, w + ui_mar_h(c.bs))
                 ch = max(ch, h + ui_mar_v(c.bs))
@@ -1478,7 +1737,7 @@ fn ui_measure(n: Node, avail_w: int) -> (int, int) {
         }
     }
     var w = if fw >= 0 { fw } else { ui_clamp_w(s, min(cw + ph, max(limit, ph))) }
-    if fw < 0 and n.kind != UI_K_TEXT and n.kind != UI_K_TEXTBOX { w = ui_clamp_w(s, cw + ph) }
+    if fw < 0 and n.kind != UI_K_TEXT and n.kind != UI_K_TEXTBOX and n.kind != UI_K_TEXTAREA { w = ui_clamp_w(s, cw + ph) }
     let fh = ui_fixed_h(s, UI_BIG)
     let h = if fh >= 0 { fh } else { ui_clamp_h(s, ch + pv) }
     return (w, h)
@@ -1535,6 +1794,7 @@ fn ui_arrange(n: Node, x: int, y: int, w: int, h: int) {
     }
     let flow: [Node] = []
     for c in n.children {
+        if c.ovl != 0 { continue }
         if ui_is_abs(c) { ui_arrange_abs(c, x + bw, y + bw, w - 2 * bw, h - 2 * bw) } else { flow.push(c) }
     }
     let rtl = n.tp.rtl
@@ -1933,10 +2193,27 @@ fn ui_paint(n: Node, inh_color: int) {
         ui_paint_text(n, color, ix, iy, iw)
     } else if n.kind == UI_K_TEXTBOX {
         ui_paint_textbox(n, color, ix, iy, iw, ih)
+    } else if n.kind == UI_K_TEXTAREA {
+        ui_paint_textarea(n, color, ix, iy, iw, ih)
     } else if n.kind == UI_K_IMAGE {
         if let img = ui_load_image(n.content) {
             if n.w > 0 and n.h > 0 { ui_draw_image(ui_cover(n.content, img, n.w, n.h), n.x, n.y, r0, r1, r2, r3) }
         }
+    }
+    if let d = n.draw_f {
+        let cx0 = ui_cx0
+        let cy0 = ui_cy0
+        let cx1 = ui_cx1
+        let cy1 = ui_cy1
+        ui_cx0 = max(ui_cx0, ix)
+        ui_cy0 = max(ui_cy0, iy)
+        ui_cx1 = min(ui_cx1, ix + iw)
+        ui_cy1 = min(ui_cy1, iy + ih)
+        d(Canvas(ix, iy, ui_unsc(iw), ui_unsc(ih)))
+        ui_cx0 = cx0
+        ui_cy0 = cy0
+        ui_cx1 = cx1
+        ui_cy1 = cy1
     }
     if n.children.len() > 0 {
         let sx0 = ui_cx0
@@ -1951,6 +2228,7 @@ fn ui_paint(n: Node, inh_color: int) {
         }
         if ui_cx0 < ui_cx1 and ui_cy0 < ui_cy1 {
             for c in n.children {
+                if c.ovl != 0 { continue }
                 if c.x < ui_cx1 and c.x + c.w > ui_cx0 and c.y < ui_cy1 and c.y + c.h > ui_cy0 or c.children.len() > 0 {
                     ui_paint(c, color)
                 }
@@ -2042,6 +2320,11 @@ fn ui_paint_textbox(n: Node, color: int, ix: int, iy: int, iw: int, ih: int) {
     } else {
         scroll_x = 0
     }
+    if focus and ui_anchor != ui_caret and shown.len() > 0 {
+        let a = ui_text_w(f, shown[..ui_shown_index(n, min(ui_anchor, n.content.len()))])
+        let x0 = ix - scroll_x + min(a, caret_x)
+        ui_fill_rect(x0, iy + (ih - lh) / 2 + ui_sc(1), max(a, caret_x) - min(a, caret_x), lh - ui_sc(2), fade(UI_ACCENT, 0.28))
+    }
     if shown.len() == 0 {
         if n.hint.len() > 0 { ui_draw_mask(ui_text_mask(f, n.hint), ix - 1, ty, mix(color, WHITE, 0.55) | 0xFF000000) }
     } else {
@@ -2049,6 +2332,231 @@ fn ui_paint_textbox(n: Node, color: int, ix: int, iy: int, iw: int, ih: int) {
     }
     if focus and ui_caret_on {
         ui_fill_rect(ix + caret_x - scroll_x, iy + (ih - lh) / 2 + ui_sc(2), max(ui_sc(1), 1), lh - ui_sc(4), color)
+    }
+    ui_cx0 = sx0
+    ui_cy0 = sy0
+    ui_cx1 = sx1
+    ui_cy1 = sy1
+}
+
+fn ui_unsc(v: int) -> int { return int(float(v) / ui_scale + 0.5) }
+
+// ---------------------------------------------------------------- text editing state and helpers
+var ui_anchor = 0        // the fixed end of the selection; ui_caret is the moving end
+var ui_want_x = -1       // the column kept while moving up and down
+var ui_reveal = false    // scroll to the caret at the next paint
+var ui_undo: [str] = []
+var ui_undo_at: [int] = []
+var ui_redo: [str] = []
+var ui_redo_at: [int] = []
+var ui_last_edit = 0     // 1 typing, 2 deleting: the same kind in a row is one undo step
+var ui_clicks = 0
+var ui_click_t = 0
+var ui_click_x = 0
+var ui_click_y = 0
+var ui_fake_mods = -1
+var ui_is_headless = false
+
+fn ui_b(t: str, i: int) -> int { return int(t.byte_at(i)) }
+
+fn ui_is_word(b: int) -> bool {
+    return b >= 128 or (b >= 48 and b <= 57) or (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
+}
+
+fn ui_word_left(t: str, i: int) -> int {
+    var j = i
+    while j > 0 and not ui_is_word(ui_b(t, j - 1)) { j -= 1 }
+    while j > 0 and ui_is_word(ui_b(t, j - 1)) { j -= 1 }
+    return j
+}
+
+fn ui_word_right(t: str, i: int) -> int {
+    var j = i
+    while j < t.len() and not ui_is_word(ui_b(t, j)) { j += 1 }
+    while j < t.len() and ui_is_word(ui_b(t, j)) { j += 1 }
+    return j
+}
+
+fn ui_line_start(t: str, i: int) -> int {
+    var j = i
+    while j > 0 and ui_b(t, j - 1) != 10 { j -= 1 }
+    return j
+}
+
+fn ui_line_end(t: str, i: int) -> int {
+    var j = i
+    while j < t.len() and ui_b(t, j) != 10 { j += 1 }
+    return j
+}
+
+fn ui_count_nl(t: str, upto: int) -> int {
+    var k = 0
+    for i in 0..upto {
+        if ui_b(t, i) == 10 { k += 1 }
+    }
+    return k
+}
+
+// byte offset in t[ls..le] whose left edge is closest to xr pixels from the start of the line
+fn ui_index_in_line(f: UiFont, t: str, ls: int, le: int, xr: int) -> int {
+    var best = ls
+    var prev = 0
+    var i = ls + 1
+    while i <= le {
+        if i == le or ui_b(t, i) & 0xC0 != 0x80 {
+            // move past a character once the pointer is beyond its middle
+            let w = ui_text_w(f, t[ls..i])
+            if (prev + w) / 2 <= xr { best = i } else { break }
+            prev = w
+        }
+        i += 1
+    }
+    return best
+}
+
+fn ui_mods() -> int {
+    if ui_fake_mods >= 0 { return ui_fake_mods }
+    var m = 0
+    if GetKeyState(17) & 0x8000 != 0 { m = m | 1 }
+    if GetKeyState(16) & 0x8000 != 0 { m = m | 2 }
+    if GetKeyState(18) & 0x8000 != 0 { m = m | 4 }
+    return m
+}
+
+// give the keyboard focus to the field with this path ("" for none); a new field starts a new undo history
+fn ui_set_focus(path: str) {
+    if path != ui_focus { ui_reset_history() }
+    ui_focus = path
+}
+
+fn ui_find_key(n: Node, key: str) -> Node? {
+    if n.keyname == key and (n.kind == UI_K_TEXTBOX or n.kind == UI_K_TEXTAREA) { return n }
+    for c in n.children {
+        let f = ui_find_key(c, key)
+        if f != nil { return f }
+    }
+    return nil
+}
+
+// give the keyboard focus to the text field marked with .key(name) and put the caret at its end;
+// does nothing when there is no such field. Handy in a shortcut: ui_shortcut("ctrl+f", || focus_field("search"))
+fn focus_field(key: str) {
+    if ui_root == nil { return }
+    let f = ui_find_key(ui_root!, key)
+    if f == nil { return }
+    ui_set_focus(f!.path)
+    ui_caret = f!.content.len()
+    ui_anchor = ui_caret
+    ui_reveal = true
+}
+
+fn ui_reset_history() {
+    let a: [str] = []
+    let b: [str] = []
+    let c: [int] = []
+    let d: [int] = []
+    ui_undo = a
+    ui_redo = b
+    ui_undo_at = c
+    ui_redo_at = d
+    ui_last_edit = 0
+    ui_want_x = -1
+}
+
+// the byte offset in a multi-line field under the pixel (x, y)
+fn ui_area_index(n: Node, x: int, y: int) -> int {
+    let f = n.rf!
+    let lh = ui_line_h(n)
+    let t = n.content
+    let s = n.bs
+    let ix = n.x + ui_sc(s.bw) + ui_sc(s.pl)
+    let iy = n.y + ui_sc(s.bw) + ui_sc(s.pt)
+    let sy = ui_scrolls.get(n.path, 0)
+    let sx = ui_tbscroll.get(n.path, 0)
+    let row = max(y - iy + sy, 0) / lh
+    var ls = 0
+    var k = 0
+    while k < row {
+        let le = ui_line_end(t, ls)
+        if le >= t.len() { break }
+        ls = le + 1
+        k += 1
+    }
+    return ui_index_in_line(f, t, ls, ui_line_end(t, ls), x - ix + sx)
+}
+
+fn ui_paint_textarea(n: Node, color: int, ix: int, iy: int, iw: int, ih: int) {
+    let f = n.rf!
+    let lh = ui_line_h(n)
+    let focus = ui_focus == n.path
+    let t = n.content
+    let sx0 = ui_cx0
+    let sy0 = ui_cy0
+    let sx1 = ui_cx1
+    let sy1 = ui_cy1
+    ui_cx0 = max(ui_cx0, ix)
+    ui_cx1 = min(ui_cx1, ix + iw)
+    ui_cy0 = max(ui_cy0, iy)
+    ui_cy1 = min(ui_cy1, iy + ih)
+    let total = (ui_count_nl(t, t.len()) + 1) * lh
+    let c = min(ui_caret, t.len())
+    var sy = ui_scrolls.get(n.path, 0)
+    var sx = 0
+    if focus {
+        sx = ui_tbscroll.get(n.path, 0)
+        if ui_reveal {
+            let cs = ui_line_start(t, c)
+            let cy = ui_count_nl(t, cs) * lh
+            if cy < sy { sy = cy }
+            if cy + lh > sy + ih { sy = cy + lh - ih }
+            let cx = ui_text_w(f, t[cs..c])
+            if cx - sx > iw - ui_sc(4) { sx = cx - iw + ui_sc(4) }
+            if cx - sx < 0 { sx = cx }
+            ui_reveal = false
+        }
+    }
+    sy = clamp(sy, 0, max(total - ih, 0))
+    ui_scrolls[n.path] = sy
+    ui_tbscroll[n.path] = sx
+    var sello = 0
+    var selhi = 0
+    if focus {
+        sello = min(min(ui_anchor, ui_caret), t.len())
+        selhi = min(max(ui_anchor, ui_caret), t.len())
+    }
+    if t.len() == 0 and n.hint.len() > 0 {
+        ui_draw_mask(ui_text_mask(f, n.hint), ix - 1, iy + (lh - f.height) / 2, mix(color, WHITE, 0.55) | 0xFF000000)
+    }
+    var ls = 0
+    var ln = 0
+    while ls <= t.len() {
+        let le = ui_line_end(t, ls)
+        let y = iy + ln * lh - sy
+        if y >= ui_cy1 { break }
+        if y + lh > ui_cy0 {
+            if selhi > sello and selhi > ls and sello <= le {
+                let a = max(sello, ls)
+                let b = min(selhi, le)
+                let x0 = ix - sx + ui_text_w(f, t[ls..a])
+                var x1 = ix - sx + ui_text_w(f, t[ls..b])
+                if selhi > le { x1 += ui_text_w(f, " ") }
+                ui_fill_rect(x0, y, x1 - x0, lh, fade(UI_ACCENT, 0.28))
+            }
+            if le > ls { ui_draw_mask(ui_text_mask(f, t[ls..le]), ix - 1 - sx, y + (lh - f.height) / 2, color) }
+            if focus and ui_caret_on and c >= ls and c <= le {
+                ui_fill_rect(ix - sx + ui_text_w(f, t[ls..c]), y + ui_sc(2), max(ui_sc(1), 1), lh - ui_sc(4), color)
+            }
+        }
+        ls = le + 1
+        ln += 1
+    }
+    if total > ih and ih > 0 {
+        let th = max(ih * ih / total, ui_sc(24))
+        let ty = iy + (ih - th) * sy / max(total - ih, 1)
+        let sw = ui_sc(5)
+        let cc = fade(BLACK, 0.2)
+        ui_cx1 = sx1
+        ui_rrect(ix + iw - sw, ty, sw, th, sw / 2, sw / 2, sw / 2, sw / 2, 0, cc, cc, 0.0)
     }
     ui_cx0 = sx0
     ui_cy0 = sy0
@@ -2067,6 +2575,7 @@ fn ui_render(root: Node, w: int, h: int) {
     ui_animating = false
     ui_fill_rect(0, 0, w, h, UI_PAGE)
     ui_paint(root, UI_INK)
+    for o in ui_overlays { ui_paint(o, UI_INK) }
 }
 
 // ---------------------------------------------------------------- the window
@@ -2088,6 +2597,67 @@ fn ui_layout() {
     let root = ui_root!
     ui_prepare(root, "", UiText())
     ui_arrange(root, 0, 0, ui_winw, ui_winh)
+    ui_place_overlays()
+}
+
+// ---- floating layers: menus, drop-downs, tooltips and dialogs are laid out after the normal tree,
+// painted last and hit first
+var ui_overlays: [Node] = []
+var ui_open: {str: bool} = {}
+var ui_ovl_hit = false
+
+fn ui_close_popups() {
+    let none: {str: bool} = {}
+    ui_open = none
+}
+
+fn ui_ovl_visible(owner: Node, o: Node) -> bool {
+    if o.ovl == UI_O_POPUP { return ui_open.has(owner.path) }
+    if o.ovl == UI_O_TIP { return ui_hov.has(owner.path) and ui_press == "" and ui_open.len() == 0 }
+    return true
+}
+
+fn ui_place_overlay(owner: Node, o: Node) {
+    if o.ovl == UI_O_MODAL {
+        ui_arrange(o, 0, 0, ui_winw, ui_winh)
+        return
+    }
+    let (mw, mh) = ui_measure(o, ui_winw)
+    var w = mw
+    let h = mh
+    if o.ovl == UI_O_POPUP { w = max(w, owner.w) }
+    var x = owner.x
+    var y = owner.y + owner.h + ui_sc(4)
+    if o.ovl == UI_O_TIP {
+        x = owner.x + (owner.w - w) / 2
+        y = owner.y + owner.h + ui_sc(6)
+    }
+    if y + h > ui_winh and owner.y - h - ui_sc(4) >= 0 { y = owner.y - h - ui_sc(4) }
+    x = max(min(x, ui_winw - w), 0)
+    ui_arrange(o, x, y, w, h)
+}
+
+fn ui_collect(n: Node) {
+    var prev = n
+    for c in n.children {
+        if c.ovl != 0 {
+            if ui_ovl_visible(n, c) {
+                // a menu hangs under the element before it (the trigger); a tooltip belongs to its parent
+                ui_place_overlay(if c.ovl == UI_O_POPUP { prev } else { n }, c)
+                ui_overlays.push(c)
+                ui_collect(c)
+            }
+        } else {
+            prev = c
+            ui_collect(c)
+        }
+    }
+}
+
+fn ui_place_overlays() {
+    let none: [Node] = []
+    ui_overlays = none
+    if let r = ui_root { ui_collect(r) }
 }
 
 fn ui_rebuild() {
@@ -2126,7 +2696,7 @@ fn ui_hit(n: Node, x: int, y: int, out: [Node]) -> bool {
     if n.clips and not inside { return false }
     var i = n.children.len() - 1
     while i >= 0 {
-        if ui_hit(n.children[i], x, y, out) {
+        if n.children[i].ovl == 0 and ui_hit(n.children[i], x, y, out) {
             out.push(n)
             return true
         }
@@ -2141,6 +2711,16 @@ fn ui_hit(n: Node, x: int, y: int, out: [Node]) -> bool {
 
 fn ui_chain(x: int, y: int) -> [Node] {
     let out: [Node] = []
+    ui_ovl_hit = false
+    var i = ui_overlays.len() - 1
+    while i >= 0 {
+        let o = ui_overlays[i]
+        if o.ovl != UI_O_TIP and ui_hit(o, x, y, out) {
+            ui_ovl_hit = true
+            return out
+        }
+        i -= 1
+    }
     if let r = ui_root { ui_hit(r, x, y, out) }
     return out
 }
@@ -2184,6 +2764,7 @@ fn ui_update_hover() -> bool {
         }
     }
     ui_cursor_id = cur
+    if changed { ui_place_overlays() }
     return changed
 }
 
@@ -2206,11 +2787,13 @@ fn ui_caret_from_x(n: Node, x: int) -> int {
     let left = n.x + ui_sc(s.bw) + ui_sc(s.pl) - ui_tbscroll.get(n.path, 0)
     let t = n.content
     var best = 0
-    var i = 0
+    var prev = 0
+    var i = 1
     while i <= t.len() {
         if i == t.len() or t.byte_at(i) & 0xC0 != 0x80 {
             let w = ui_text_w(f, ui_shown_text_prefix(n, i))
-            if left + w <= x + ui_text_w(f, "n") / 2 { best = i } else { break }
+            if left + (prev + w) / 2 <= x { best = i } else { break }
+            prev = w
         }
         i += 1
     }
@@ -2222,31 +2805,102 @@ fn ui_shown_text_prefix(n: Node, i: int) -> str {
     return n.content[..i]
 }
 
+fn ui_is_field(n: Node) -> bool { return n.kind == UI_K_TEXTBOX or n.kind == UI_K_TEXTAREA }
+
+// the byte offset under the pixel (x, y) in a text box or text area
+fn ui_field_index(n: Node, x: int, y: int) -> int {
+    if n.kind == UI_K_TEXTAREA { return ui_area_index(n, x, y) }
+    return ui_caret_from_x(n, x)
+}
+
+// call the on_pointer handler of a canvas with the position inside it (in pixels at 100% scale)
+fn ui_call_pointer(n: Node, x: int, y: int) {
+    if let f = n.ptr_f {
+        let s = n.bs
+        f(ui_unsc(x - (n.x + ui_sc(s.bw) + ui_sc(s.pl))), ui_unsc(y - (n.y + ui_sc(s.bw) + ui_sc(s.pt))))
+        ui_rebuild()
+    }
+}
+
+// 1, 2 or 3 for a single, double or triple click
+fn ui_note_click(x: int, y: int) -> int {
+    let now = GetTickCount64()
+    if now - ui_click_t < 450 and max(x - ui_click_x, ui_click_x - x) < 5 and max(y - ui_click_y, ui_click_y - y) < 5 {
+        ui_clicks += 1
+    } else {
+        ui_clicks = 1
+    }
+    if ui_clicks > 3 { ui_clicks = 1 }
+    ui_click_t = now
+    ui_click_x = x
+    ui_click_y = y
+    return ui_clicks
+}
+
+fn ui_toggle_popup(key: str) {
+    let was = ui_open.has(key)
+    ui_close_popups()
+    if not was { ui_open[key] = true }
+}
+
 fn ui_mouse_down(x: int, y: int) {
     ui_mx = x
     ui_my = y
     let chain = ui_chain(x, y)
     ui_press = ""
-    var new_focus = ""
+    if ui_open.len() > 0 and not ui_ovl_hit {
+        // a click outside an open menu only closes it
+        ui_close_popups()
+        ui_rebuild()
+        ui_invalidate()
+        return
+    }
+    var new_focus = ui_focus
+    var set_focus = false
     for c in chain {
-        if c.kind == UI_K_TEXTBOX {
+        if ui_is_field(c) {
             new_focus = c.path
-            ui_focus = c.path
-            ui_caret = ui_caret_from_x(c, x)
+            set_focus = true
+            let idx = ui_field_index(c, x, y)
+            let k = ui_note_click(x, y)
+            ui_caret = idx
             ui_caret_on = true
+            ui_want_x = -1
+            ui_reveal = true
+            if k == 1 {
+                if ui_mods() & 2 == 0 or c.path != ui_focus { ui_anchor = idx }
+            } else if k == 2 {
+                var lo = idx
+                var hi = idx
+                while lo > 0 and ui_is_word(ui_b(c.content, lo - 1)) { lo -= 1 }
+                while hi < c.content.len() and ui_is_word(ui_b(c.content, hi)) { hi += 1 }
+                if hi == lo and hi < c.content.len() { hi = ui_next_char(c.content, hi) }
+                ui_anchor = lo
+                ui_caret = hi
+            } else {
+                if c.kind == UI_K_TEXTAREA {
+                    ui_anchor = ui_line_start(c.content, idx)
+                    ui_caret = min(ui_line_end(c.content, idx) + 1, c.content.len())
+                } else {
+                    ui_anchor = 0
+                    ui_caret = c.content.len()
+                }
+            }
             ui_press = c.path
             break
         }
-        if c.click_f != nil or c.drag_f != nil {
+        if c.click_f != nil or c.drag_f != nil or c.ptr_f != nil or c.opens {
             ui_press = c.path
             if c.drag_f != nil {
                 ui_drag_to(c, x)
                 ui_rebuild()
             }
+            if c.ptr_f != nil { ui_call_pointer(c, x, y) }
             break
         }
+        if c.blocks { break }
     }
-    ui_focus = new_focus
+    if set_focus or ui_focus.len() > 0 { ui_set_focus(if set_focus { new_focus } else { "" }) }
     if ui_hwnd != 0 { SetCapture(ui_hwnd) }
     ui_invalidate()
 }
@@ -2258,6 +2912,10 @@ fn ui_mouse_up(x: int, y: int) {
     if was.len() > 0 {
         for c in ui_chain(x, y) {
             if c.path == was {
+                if c.opens {
+                    ui_toggle_popup(c.ppath)
+                    ui_rebuild()
+                }
                 if let f = c.click_f {
                     f()
                     ui_rebuild()
@@ -2270,6 +2928,7 @@ fn ui_mouse_up(x: int, y: int) {
     ui_invalidate()
 }
 
+// move the mouse pointer to (x, y) without clicking: hover styles and tooltips react (use it in tests)
 fn ui_mouse_move(x: int, y: int) {
     ui_mx = x
     ui_my = y
@@ -2281,6 +2940,22 @@ fn ui_mouse_move(x: int, y: int) {
                 ui_invalidate()
                 return
             }
+            if n.ptr_f != nil {
+                ui_call_pointer(n, x, y)
+                ui_invalidate()
+                return
+            }
+            if ui_is_field(n) {
+                let idx = ui_field_index(n, x, y)
+                if idx != ui_caret {
+                    ui_caret = idx
+                    ui_want_x = -1
+                    ui_reveal = true
+                }
+                ui_caret_on = true
+                ui_invalidate()
+                return
+            }
         }
     }
     if ui_update_hover() { ui_invalidate() }
@@ -2288,10 +2963,10 @@ fn ui_mouse_move(x: int, y: int) {
 
 fn ui_wheel(delta: int) {
     for c in ui_chain(ui_mx, ui_my) {
-        if c.content == "\x01scroll" {
+        if c.content == "\x01scroll" or c.kind == UI_K_TEXTAREA {
             let sy = ui_state_sy(c.path)
             ui_scrolls[c.path] = max(sy - delta * ui_sc(48) / 120, 0)
-            ui_layout()
+            if c.kind != UI_K_TEXTAREA { ui_layout() }
             ui_update_hover()
             ui_invalidate()
             return
@@ -2302,7 +2977,7 @@ fn ui_wheel(delta: int) {
 fn ui_focused_box() -> Node? {
     if ui_focus.len() == 0 or ui_root == nil { return nil }
     let n = ui_find(ui_root!, ui_focus)
-    if n == nil or n!.kind != UI_K_TEXTBOX { return nil }
+    if n == nil or not ui_is_field(n!) { return nil }
     return n
 }
 
@@ -2314,11 +2989,59 @@ fn ui_set_text(n: Node, t: str, caret: int) {
     ui_invalidate()
 }
 
+// replace t[lo..hi] of the field with repl and put the caret after it; kind 1 (typing) and 2 (deleting)
+// in a row make one undo step
+fn ui_edit(n: Node, lo: int, hi: int, repl: str, kind: int) {
+    let t = n.content
+    if kind == 0 or kind != ui_last_edit {
+        ui_undo.push(t)
+        ui_undo_at.push(ui_caret)
+        if ui_undo.len() > 200 {
+            ui_undo.remove(0)
+            ui_undo_at.remove(0)
+        }
+    }
+    ui_last_edit = kind
+    ui_redo.clear()
+    ui_redo_at.clear()
+    let c = lo + repl.len()
+    ui_anchor = c
+    ui_want_x = -1
+    ui_reveal = true
+    ui_set_text(n, t[..lo] + repl + t[hi..], c)
+}
+
+fn ui_undo_step(n: Node) {
+    if ui_undo.len() == 0 { return }
+    let t = ui_undo.pop()
+    let at = ui_undo_at.pop()
+    ui_redo.push(n.content)
+    ui_redo_at.push(ui_caret)
+    ui_last_edit = 0
+    ui_anchor = at
+    ui_reveal = true
+    ui_set_text(n, t, at)
+}
+
+fn ui_redo_step(n: Node) {
+    if ui_redo.len() == 0 { return }
+    let t = ui_redo.pop()
+    let at = ui_redo_at.pop()
+    ui_undo.push(n.content)
+    ui_undo_at.push(ui_caret)
+    ui_last_edit = 0
+    ui_anchor = at
+    ui_reveal = true
+    ui_set_text(n, t, at)
+}
+
+// type s into the focused field in place of the selection
 fn ui_insert(s: str) {
     if let n = ui_focused_box() {
         let t = n.content
         let c = min(ui_caret, t.len())
-        ui_set_text(n, t[..c] + s + t[c..], c + s.len())
+        let a = min(ui_anchor, t.len())
+        ui_edit(n, min(a, c), max(a, c), s, 1)
     }
 }
 
@@ -2335,70 +3058,258 @@ fn ui_next_char(t: str, i: int) -> int {
 }
 
 fn ui_textboxes(n: Node, out: [str]) {
-    if n.kind == UI_K_TEXTBOX { out.push(n.path) }
-    for c in n.children { ui_textboxes(c, out) }
+    if ui_is_field(n) { out.push(n.path) }
+    for c in n.children {
+        if c.ovl == 0 { ui_textboxes(c, out) }
+    }
+}
+
+// the fields Tab visits: those of the top dialog if there is one, otherwise all of them
+fn ui_tab_order() -> [str] {
+    let all: [str] = []
+    var modal: Node? = nil
+    for o in ui_overlays {
+        if o.ovl == UI_O_MODAL { modal = o }
+    }
+    if let m = modal {
+        ui_textboxes(m, all)
+    } else {
+        if let r = ui_root { ui_textboxes(r, all) }
+        for o in ui_overlays { ui_textboxes(o, all) }
+    }
+    return all
+}
+
+// ---------------------------------------------------------------- keyboard shortcuts
+let UI_KEY_NAMES = ["backspace", "tab", "enter", "esc", "space", "pageup", "pagedown", "end", "home", "left", "up", "right", "down", "insert", "delete"]
+let UI_KEY_CODES = [8, 9, 13, 27, 32, 33, 34, 35, 36, 37, 38, 39, 40, 45, 46]
+var ui_sc_keys: [str] = []
+var ui_sc_fns: [fn()] = []
+
+fn ui_key_name(vk: int) -> str {
+    if vk >= 65 and vk <= 90 { return ui_utf8(vk + 32) }
+    if vk >= 48 and vk <= 57 { return ui_utf8(vk) }
+    if vk >= 112 and vk <= 123 { return "f" + int_to_str(vk - 111) }
+    let i = UI_KEY_CODES.index_of(vk)
+    if i >= 0 { return UI_KEY_NAMES[i] }
+    return ""
+}
+
+fn ui_key_code(name: str) -> int {
+    if name.len() == 1 {
+        let b = ui_b(name, 0)
+        if b >= 97 and b <= 122 { return b - 32 }
+        if b >= 48 and b <= 57 { return b }
+    }
+    if name.len() >= 2 and name.len() <= 3 and name.starts_with("f") {
+        let k = name[1..].to_int()
+        if k >= 1 and k <= 12 { return 111 + k }
+    }
+    let i = UI_KEY_NAMES.index_of(name)
+    if i >= 0 { return UI_KEY_CODES[i] }
+    return 0
+}
+
+fn ui_combo(mods: int, name: str) -> str {
+    var s = ""
+    if mods & 1 != 0 { s = s + "ctrl+" }
+    if mods & 4 != 0 { s = s + "alt+" }
+    if mods & 2 != 0 { s = s + "shift+" }
+    return s + name
+}
+
+// "Ctrl+Shift+S" -> (modifier bits, "s")
+fn ui_parse_combo(combo: str) -> (int, str) {
+    var mods = 0
+    var name = ""
+    for part in combo.lower().split("+") {
+        let p = part.trim()
+        if p == "ctrl" or p == "control" { mods = mods | 1 } else if p == "shift" { mods = mods | 2 } else if p == "alt" { mods = mods | 4 } else if p == "escape" { name = "esc" } else if p == "return" { name = "enter" } else if p == "del" { name = "delete" } else if p == "pgup" { name = "pageup" } else if p == "pgdn" { name = "pagedown" } else { name = p }
+    }
+    return (mods, name)
+}
+
+// Run f when the key combination is pressed anywhere in the window: ui_shortcut("ctrl+s", save).
+// Modifiers: ctrl, shift, alt. Keys: a-z, 0-9, f1-f12, enter, esc, tab, space, delete, backspace, home, end,
+// pageup, pagedown, left, right, up, down. A key without ctrl or alt (like "delete") does nothing while the
+// user is typing in a text field. Registering the same combination again replaces the first one,
+// so it can be called from the view function.
+fn ui_shortcut(combo: str, f: fn()) {
+    let (mods, name) = ui_parse_combo(combo)
+    let key = ui_combo(mods, name)
+    let i = ui_sc_keys.index_of(key)
+    if i >= 0 {
+        ui_sc_fns[i] = f
+    } else {
+        ui_sc_keys.push(key)
+        ui_sc_fns.push(f)
+    }
+}
+
+// true when the key press was a registered shortcut (which has been run)
+fn ui_try_shortcut(vk: int, mods: int) -> bool {
+    if ui_sc_keys.len() == 0 { return false }
+    let name = ui_key_name(vk)
+    if name.len() == 0 { return false }
+    let i = ui_sc_keys.index_of(ui_combo(mods, name))
+    if i < 0 { return false }
+    if mods & 5 == 0 and not name.starts_with("f") and name.len() > 0 and ui_focused_box() != nil { return false }
+    let f = ui_sc_fns[i]
+    f()
+    ui_rebuild()
+    ui_invalidate()
+    return true
+}
+
+// the caret one line up (dir -1) or down (1) from c, keeping the column
+fn ui_move_vert(n: Node, t: str, c: int, dir: int) -> int {
+    let f = n.rf!
+    let ls = ui_line_start(t, c)
+    if ui_want_x < 0 { ui_want_x = ui_text_w(f, t[ls..c]) }
+    if dir < 0 {
+        if ls == 0 { return 0 }
+        return ui_index_in_line(f, t, ui_line_start(t, ls - 1), ls - 1, ui_want_x)
+    }
+    let le = ui_line_end(t, c)
+    if le >= t.len() { return t.len() }
+    return ui_index_in_line(f, t, le + 1, ui_line_end(t, le + 1), ui_want_x)
 }
 
 fn ui_key(vk: int) {
-    let ctrl = GetKeyState(17) & 0x8000 != 0
-    let shift = GetKeyState(16) & 0x8000 != 0
-    if vk == 9 and ui_root != nil {
-        // Tab: next (or previous) text box
-        let all: [str] = []
-        ui_textboxes(ui_root!, all)
+    let mods = ui_mods()
+    let ctrl = mods & 1 != 0
+    let shift = mods & 2 != 0
+    if ui_try_shortcut(vk, mods) { return }
+    if vk == 27 {
+        if ui_open.len() > 0 {
+            ui_close_popups()
+            ui_rebuild()
+            ui_invalidate()
+            return
+        }
+        for o in ui_overlays {
+            if o.ovl == UI_O_MODAL {
+                if let f = o.click_f {
+                    f()
+                    ui_rebuild()
+                    ui_invalidate()
+                    return
+                }
+            }
+        }
+    }
+    let found = ui_focused_box()
+    if vk == 9 and (found == nil or found!.kind != UI_K_TEXTAREA or shift) {
+        // Tab: next (or previous) field
+        let all = ui_tab_order()
         if all.len() > 0 {
             var i = all.index_of(ui_focus)
             if shift { i = if i <= 0 { all.len() - 1 } else { i - 1 } } else { i = (i + 1) % all.len() }
-            ui_focus = all[i]
-            if let n = ui_focused_box() { ui_caret = n.content.len() }
+            ui_set_focus(all[i])
+            if let n = ui_focused_box() {
+                ui_anchor = if n.kind == UI_K_TEXTBOX { 0 } else { n.content.len() }
+                ui_caret = n.content.len()
+            }
             ui_caret_on = true
+            ui_reveal = true
             ui_invalidate()
         }
         return
     }
-    let found = ui_focused_box()
     if found == nil { return }
     let n = found!
+    let multi = n.kind == UI_K_TEXTAREA
     let t = n.content
     let c = min(ui_caret, t.len())
+    let a = min(ui_anchor, t.len())
+    let lo = min(a, c)
+    let hi = max(a, c)
+    var target = c
+    var nav = false
     if vk == 8 {
-        if c > 0 {
-            let p = if ctrl { 0 } else { ui_prev_char(t, c) }
-            ui_set_text(n, t[..p] + t[c..], p)
+        if hi > lo {
+            ui_edit(n, lo, hi, "", 0)
+        } else if c > 0 {
+            ui_edit(n, if ctrl { ui_word_left(t, c) } else { ui_prev_char(t, c) }, c, "", 2)
         }
     } else if vk == 46 {
-        if c < t.len() {
-            let q = ui_next_char(t, c)
-            ui_set_text(n, t[..c] + t[q..], c)
+        if hi > lo {
+            ui_edit(n, lo, hi, "", 0)
+        } else if c < t.len() {
+            ui_edit(n, c, if ctrl { ui_word_right(t, c) } else { ui_next_char(t, c) }, "", 2)
         }
     } else if vk == 37 {
-        ui_caret = ui_prev_char(t, c)
+        nav = true
+        if hi > lo and not shift and not ctrl { target = lo } else if ctrl { target = ui_word_left(t, c) } else { target = ui_prev_char(t, c) }
     } else if vk == 39 {
-        ui_caret = if c < t.len() { ui_next_char(t, c) } else { c }
+        nav = true
+        if hi > lo and not shift and not ctrl { target = hi } else if ctrl { target = ui_word_right(t, c) } else if c < t.len() { target = ui_next_char(t, c) }
+    } else if (vk == 38 or vk == 40) and multi {
+        nav = true
+        target = ui_move_vert(n, t, c, if vk == 38 { -1 } else { 1 })
+    } else if (vk == 33 or vk == 34) and multi {
+        nav = true
+        let rows = max((n.h - ui_pad_v(n.bs)) / ui_line_h(n) - 1, 1)
+        for i in 0..rows { target = ui_move_vert(n, t, target, if vk == 33 { -1 } else { 1 }) }
     } else if vk == 36 {
-        ui_caret = 0
+        nav = true
+        target = if multi and not ctrl { ui_line_start(t, c) } else { 0 }
     } else if vk == 35 {
-        ui_caret = t.len()
+        nav = true
+        target = if multi and not ctrl { ui_line_end(t, c) } else { t.len() }
     } else if vk == 13 {
-        if let f = n.submit_f {
-            f()
-            ui_rebuild()
+        if multi {
+            // a new line keeps the indentation of the current one
+            let ls = ui_line_start(t, lo)
+            var k = ls
+            while k < lo and (ui_b(t, k) == 32 or ui_b(t, k) == 9) { k += 1 }
+            ui_edit(n, lo, hi, "\n" + t[ls..k], 0)
+        } else {
+            if let f = n.submit_f {
+                f()
+                ui_rebuild()
+            }
         }
+    } else if vk == 9 {
+        ui_edit(n, lo, hi, "    ", 1)
     } else if vk == 27 {
-        ui_focus = ""
-    } else if ctrl and vk == 86 {
-        let p = ui_clipboard_get()
-        if p.len() > 0 { ui_insert(p.replace("\r\n", " ").replace("\n", " ")) }
+        ui_set_focus("")
+    } else if ctrl and vk == 65 {
+        ui_anchor = 0
+        ui_caret = t.len()
     } else if ctrl and vk == 67 {
-        if not n.secret { ui_clipboard_set(t) }
+        if not n.secret and hi > lo { ui_clipboard_set(t[lo..hi]) }
+    } else if ctrl and vk == 88 {
+        if not n.secret and hi > lo {
+            ui_clipboard_set(t[lo..hi])
+            ui_edit(n, lo, hi, "", 0)
+        }
+    } else if ctrl and vk == 86 {
+        var p = ui_clipboard_get().replace("\r\n", "\n").replace("\r", "\n")
+        if not multi { p = p.replace("\n", " ") }
+        if p.len() > 0 { ui_edit(n, lo, hi, p, 0) }
+    } else if ctrl and vk == 90 {
+        if shift { ui_redo_step(n) } else { ui_undo_step(n) }
+    } else if ctrl and vk == 89 {
+        ui_redo_step(n)
     } else {
         return
+    }
+    if nav {
+        ui_caret = target
+        if not shift { ui_anchor = target }
+        ui_last_edit = 0
+        ui_reveal = true
+        if vk != 38 and vk != 40 and vk != 33 and vk != 34 { ui_want_x = -1 }
     }
     ui_caret_on = true
     ui_invalidate()
 }
 
+var ui_fake_clip = ""
+
 fn ui_clipboard_get() -> str {
+    if ui_is_headless { return ui_fake_clip }
     if OpenClipboard(ui_hwnd) == 0 { return "" }
     var r = ""
     let h = GetClipboardData(13)
@@ -2417,6 +3328,10 @@ fn ui_clipboard_get() -> str {
 }
 
 fn ui_clipboard_set(s: str) {
+    if ui_is_headless {
+        ui_fake_clip = s
+        return
+    }
     if OpenClipboard(ui_hwnd) == 0 { return }
     EmptyClipboard()
     let w = ui_wide(s)
@@ -2429,6 +3344,77 @@ fn ui_clipboard_set(s: str) {
         SetClipboardData(13, h)
     }
     CloseClipboard()
+}
+
+// ---------------------------------------------------------------- clipboard, message boxes, file dialogs
+// text on the Windows clipboard
+fn clipboard_get() -> str { return ui_clipboard_get() }
+fn clipboard_set(s: str) { ui_clipboard_set(s) }
+
+var ui_fake_yes = true
+var ui_fake_path = ""
+var ui_last_message = ""
+var ui_keep_a = 0
+var ui_keep_b = 0
+var ui_keep_c = 0
+
+// show a message and wait for OK
+fn message_box(title: str, message: str) {
+    ui_last_message = message
+    if ui_is_headless { return }
+    MessageBoxW(ui_hwnd, ui_wide(message), ui_wide(title), 0x40)
+}
+
+// ask a yes/no question; true when the user answered Yes
+fn confirm_box(title: str, question: str) -> bool {
+    ui_last_message = question
+    if ui_is_headless { return ui_fake_yes }
+    return MessageBoxW(ui_hwnd, ui_wide(question), ui_wide(title), 0x24) == 6
+}
+
+fn ui_file_dialog(save: bool, title: str, filter: str, ext: str) -> str? {
+    if ui_is_headless {
+        if ui_fake_path.len() == 0 { return nil }
+        return ui_fake_path
+    }
+    let ofn = __alloc_atomic(152) as ptr<int>
+    for i in 0..19 { ofn[i] = 0 }
+    let buf = __alloc_atomic(2048)
+    for i in 0..2048 { buf[i] = 0 }
+    let fw = ui_wide(filter.replace("|", "\x00"))
+    let tw = ui_wide(title)
+    ui_keep_a = fw as int
+    ui_keep_b = tw as int
+    ofn[0] = 152
+    ofn[1] = ui_hwnd
+    ofn[3] = fw as int
+    ofn[5] = 1 << 32
+    ofn[6] = buf as int
+    ofn[7] = 1024
+    ofn[11] = tw as int
+    ofn[12] = if save { 0x802 | 0x8 } else { 0x1000 | 0x800 | 0x8 }
+    if ext.len() > 0 {
+        let ew = ui_wide(ext)
+        ui_keep_c = ew as int
+        ofn[13] = ew as int
+    }
+    let ok = if save { GetSaveFileNameW(ofn) } else { GetOpenFileNameW(ofn) }
+    if ok == 0 { return nil }
+    var n = 0
+    while buf[n * 2] != 0 or buf[n * 2 + 1] != 0 { n += 1 }
+    return ui_from_wide(buf, n)
+}
+
+// The Windows "Open" dialog. filter is pairs of name|pattern: "Text files|*.txt|All files|*.*".
+// Returns the chosen path, or nil when the user cancelled.
+fn open_file_dialog(title: str = "Open", filter: str = "All files|*.*") -> str? {
+    return ui_file_dialog(false, title, filter, "")
+}
+
+// The Windows "Save as" dialog; ext (like "txt") is added when the user types a name without one.
+// Returns the chosen path, or nil when the user cancelled.
+fn save_file_dialog(title: str = "Save as", filter: str = "All files|*.*", ext: str = "") -> str? {
+    return ui_file_dialog(true, title, filter, ext)
 }
 
 fn ui_client_size() {
@@ -2502,6 +3488,9 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
     } else if m == 256 {
         ui_key(wp & 0xFFFF)
         return 0
+    } else if m == 260 {
+        // Alt + key: only the program's own shortcuts; the system keeps Alt+F4 and the rest
+        if ui_try_shortcut(wp & 0xFFFF, ui_mods()) { return 0 }
     } else if m == 258 {
         let ch = wp & 0xFFFF
         if ch >= 0xD800 and ch < 0xDC00 {
@@ -2509,7 +3498,7 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
         } else if ch >= 0xDC00 and ch < 0xE000 {
             if ui_hi_surrogate != 0 { ui_insert(ui_utf8(0x10000 + ((ui_hi_surrogate - 0xD800) << 10) + (ch - 0xDC00))) }
             ui_hi_surrogate = 0
-        } else if ch >= 32 and ch != 127 and GetKeyState(17) & 0x8000 == 0 {
+        } else if ch >= 32 and ch != 127 and (ui_mods() & 1 == 0 or ui_mods() & 4 != 0) {
             ui_insert(ui_utf8(ch))
         }
         return 0
@@ -2599,9 +3588,112 @@ fn ui_run(title: str, width: int, height: int, view: fn() -> Node) {
     ui_hwnd = 0
 }
 
+// ---------------------------------------------------------------- testing without a window
+// Start view() in a width x height area without opening a window and forget all earlier state (focus,
+// open menus, scroll positions, undo). Then send events with ui_click, ui_type and ui_keypress, check the
+// program's own data, and draw the result with ui_screenshot. Dialogs do not open while testing:
+// message_box does nothing, confirm_box answers ui_answers' yes, the file dialogs return its path
+// (nil when it is empty), and the clipboard is private to the program.
+fn ui_headless(view: fn() -> Node, width: int, height: int) {
+    ui_is_headless = true
+    ui_views = [view]
+    ui_scale = 1.0
+    ui_winw = width
+    ui_winh = height
+    ui_mx = -1
+    ui_my = -1
+    ui_press = ""
+    ui_caret = 0
+    ui_anchor = 0
+    ui_clicks = 0
+    ui_click_t = 0
+    ui_fake_mods = -1
+    let hov: {str: bool} = {}
+    let opened: {str: bool} = {}
+    let sc: {str: int} = {}
+    let tb: {str: int} = {}
+    ui_hov = hov
+    ui_open = opened
+    ui_scrolls = sc
+    ui_tbscroll = tb
+    ui_focus = ""
+    ui_reset_history()
+    ui_rebuild()
+}
+
+// what the dialogs answer while testing: yes for confirm_box, and the path the file dialogs return ("" = cancel)
+fn ui_answers(yes: bool, path: str) {
+    ui_fake_yes = yes
+    ui_fake_path = path
+}
+
+// the text of the last message_box or confirm_box
+fn ui_last_dialog() -> str { return ui_last_message }
+
+// move the mouse to (x, y), press and release the left button
+fn ui_click(x: int, y: int) {
+    ui_mouse_move(x, y)
+    ui_mouse_down(x, y)
+    ui_mouse_up(x, y)
+}
+
+// press the left button at (x1, y1), move to (x2, y2) and release it (selecting text, dragging a slider)
+fn ui_drag(x1: int, y1: int, x2: int, y2: int) {
+    ui_mouse_move(x1, y1)
+    ui_mouse_down(x1, y1)
+    ui_mouse_move(x2, y2)
+    ui_mouse_up(x2, y2)
+}
+
+// type text into the focused field
+fn ui_type(s: str) { ui_insert(s) }
+
+// press a key or combination: ui_keypress("enter"), ui_keypress("ctrl+a"), ui_keypress("shift+left").
+// Returns false when the key name is not known.
+fn ui_keypress(combo: str) -> bool {
+    let (mods, name) = ui_parse_combo(combo)
+    let vk = ui_key_code(name)
+    if vk == 0 { return false }
+    ui_fake_mods = mods
+    ui_key(vk)
+    ui_fake_mods = -1
+    return true
+}
+
+fn ui_text_node(n: Node, s: str) -> Node? {
+    if n.kind == UI_K_TEXT and n.content == s { return n }
+    for c in n.children {
+        if c.ovl == 0 {
+            if let f = ui_text_node(c, s) { return f }
+        }
+    }
+    return nil
+}
+
+// click the middle of the first element that shows exactly this text (a button's label, for example);
+// false when none is on the screen. Open menus and dialogs are searched first.
+fn ui_click_text(s: str) -> bool {
+    var i = ui_overlays.len() - 1
+    while i >= 0 {
+        if let f = ui_text_node(ui_overlays[i], s) {
+            ui_click(f.x + f.w / 2, f.y + f.h / 2)
+            return true
+        }
+        i -= 1
+    }
+    if let r = ui_root {
+        if let f = ui_text_node(r, s) {
+            ui_click(f.x + f.w / 2, f.y + f.h / 2)
+            return true
+        }
+    }
+    return false
+}
+
 // Draw view() into a picture file (.bmp) of width x height pixels without opening a window
 // (for tests, documentation and thumbnails). hover_x, hover_y: optional mouse position to show hover styles.
 fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1) -> bool {
+    ui_is_headless = true
     ui_views = [view]
     ui_scale = 1.0
     ui_winw = width

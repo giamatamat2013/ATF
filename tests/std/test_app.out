@@ -1,0 +1,12 @@
+empty: dark 640 false false
+saved: true
+maximized=true|note=two\nlines and a \\ backslash|theme=light|width=900|
+loaded: light 900 true false
+two/lines and a \ backslash
+gone -1
+["a.txt"]
+["b.txt", "a.txt"]
+["a.txt", "b.txt"]
+["c.txt", "a.txt"]
+["c.txt", "a.txt"]
+true hi true

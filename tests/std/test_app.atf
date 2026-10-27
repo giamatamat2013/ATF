@@ -1,0 +1,34 @@
+// std/app: the program's folder and the settings file
+import "std/app"
+
+fn main() {
+    let path = temp_dir() + "atf_test_app_settings.txt"
+    delete_file(path)
+
+    let s = settings_file(path)
+    println("empty:", s.get("theme", "dark"), s.get_int("width", 640), s.get_bool("maximized"), s.has("theme"))
+    s.set("theme", "light")
+    s.set_int("width", 900)
+    s.set_bool("maximized", true)
+    s.set("note", "two\nlines and a \\ backslash")
+    println("saved:", s.save())
+    println(read_file(path)!.replace("\n", "|"))
+
+    let t = settings_file(path)
+    println("loaded:", t.get("theme"), t.get_int("width"), t.get_bool("maximized"), t.has("missing"))
+    println(t.get("note").replace("\n", "/"))
+    t.remove("theme")
+    println(t.get("theme", "gone"), t.get_int("theme", -1))
+
+    println(recent_add(t, "a.txt"))
+    println(recent_add(t, "b.txt"))
+    println(recent_add(t, "a.txt"))
+    println(recent_add(t, "c.txt", 2))
+    println(recent_list(t))
+    delete_file(path)
+
+    // the program's own folder is created on demand
+    let p = app_path("atf_test_app", "x.txt")
+    println(write_file(p, "hi"), read_file(p)!, p.ends_with("atf_test_app\\x.txt"))
+    delete_file(p)
+}

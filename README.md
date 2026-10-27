@@ -58,12 +58,15 @@ total: 5.25
   operator overloading, string interpolation with formatting, list comprehensions, modules, `defer`,
   labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
-  available; modules add JSON, CSV, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times, and
-  collections (deque, priority queue, sorted map and set, counter, linked list).
+  available; modules add JSON, CSV, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
+  collections (deque, priority queue, sorted map and set, counter, linked list), and program settings (`std/app`).
 - **Windows and design.** `std/ui` builds graphical programs the way HTML and CSS do, written as ATF code: a view function
   returns a tree of elements (`column`, `row`, `text`, `button`, `textbox`, ...), styled with chained methods
   (`.padding(8, 16).bg(hex("#4f46e5")).radius(12).shadow(..)`). It supports flexbox and grid layout, gradients, soft shadows,
   hover styles with transitions, reusable styles, images, scrolling, right-to-left text and high-DPI screens.
+  It also has what a whole application needs: multi-line text editing with selection, undo and the clipboard, menus and
+  menu bars, select lists, tabs, dialogs, tooltips, keyboard shortcuts, standard file dialogs, a drawing canvas, and a
+  way to test the interface without a window (`ui_headless`, `ui_click`, `ui_type`). `std/app` keeps settings between runs.
 
   ```atf nocheck
   button("Save", || save(doc)).bg(hex("#4f46e5")).color(WHITE).radius(10).hover(style().bg(hex("#4338ca")))
@@ -161,7 +164,7 @@ error: 'abc' is not a number
 - [docs/REFERENCE.md](docs/REFERENCE.md) - the exact rules of the language
 - [docs/STDLIB.md](docs/STDLIB.md) - every library function, method and module
 - [examples/](examples/) - 45 example programs, from `fizzbuzz` to a `bigint` calculator and a text adventure
-- [examples/ui/](examples/ui/) - window programs: a counter, a task list and an analytics dashboard
+- [examples/ui/](examples/ui/) - window programs: a counter, a task list, an analytics dashboard and a complete notes editor (menus, files, shortcuts, saved settings)
 
 Every code sample in these documents is compiled and run by `python tests/check_docs.py`.
 
@@ -178,7 +181,7 @@ Every code sample in these documents is compiled and run by `python tests/check_
 bin/atf.exe            the compiler (built from compiler/)
 compiler/              the compiler, written in ATF
 atf/                   the bootstrap compiler in Python (stage 0) and the prelude (stdlib/prelude.atf)
-stdlib/                importable modules:  import "std/json", import "std/ui"
+stdlib/                importable modules:  import "std/json", import "std/ui", import "std/app"
 docs/                  tutorial, reference and library documentation
 examples/              example programs with their expected output
 tests/                 test suites (see below)

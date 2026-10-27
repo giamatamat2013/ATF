@@ -7,7 +7,7 @@ Created by **TAMAT2013**.
 ## Features
 
 - **Syntax highlighting** for ATF, including string interpolation, format specs, generics, lambdas and attributes. Also inside ```` ```atf ```` blocks in Markdown.
-- **Snippets** for functions, structs, enums, `impl`, `match`, loops and more. Window programs with `std/ui`: `uiapp` (a whole program), `uistyle`, `uirow`, `uicol`.
+- **Snippets** for functions, structs, enums, `impl`, `match`, loops and more. Window programs with `std/ui`: `uiapp` (a whole program), `uistyle`, `uirow`, `uicol`, `uimenu`, `uitextarea`, `uiselect`, `uidialog`, `uicanvas`, `uishortcut`, `uifile`, `uitest` (a test without a window) and `uisettings` (`std/app`).
 - **Automatic imports.** When you use a standard library name such as `json_parse`, `counter_from` or `button(...)`, the matching `import "std/..."` line is added at the top of the file.
 - **Compiler errors in the editor.** `atf check` runs when an `.atf` file is opened or saved, and the errors show up as red squiggles and in the Problems panel.
 - **Run and build commands** from the Command Palette:
@@ -37,7 +37,7 @@ Opening the ATF repository as the workspace is enough; running `install.cmd` fro
 
 ## Install from source
 
-Copy this folder to `%USERPROFILE%\.vscode\extensions\tamat2013.atf-0.3.0` and reload VS Code, or package it with `npx @vscode/vsce package` and install the `.vsix`.
+Copy this folder to `%USERPROFILE%\.vscode\extensions\tamat2013.atf-0.4.0` and reload VS Code, or package it with `npx @vscode/vsce package` and install the `.vsix`.
 
 ## License
 
