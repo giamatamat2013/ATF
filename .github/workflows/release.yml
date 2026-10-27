@@ -1,0 +1,57 @@
+name: release
+# Started by hand (workflow_dispatch) on master. The tag vX.Y.Z is created here from the VERSION file.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tests:
+    # the same tests as on every push, in parallel with the build: nothing is published unless they pass
+    uses: ./.github/workflows/tests.yml
+
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the version
+        shell: bash
+        run: echo "VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+      - name: Pack the release
+        shell: pwsh
+        run: |
+          $pkg = "atf-$env:VERSION-windows-x64"
+          New-Item -ItemType Directory -Force "pack/$pkg/bin", "pack/$pkg/stdlib", "dist" | Out-Null
+          Copy-Item bin/atf.exe "pack/$pkg/bin/"
+          Copy-Item stdlib/*.atf "pack/$pkg/stdlib/"
+          Copy-Item install.cmd, uninstall.cmd, README.md, LICENSE, VERSION "pack/$pkg/"
+          Copy-Item docs "pack/$pkg/docs" -Recurse
+          Copy-Item examples "pack/$pkg/examples" -Recurse
+          Compress-Archive -Path "pack/$pkg/*" -DestinationPath "dist/$pkg.zip"
+          $hash = (Get-FileHash "dist/$pkg.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $pkg.zip" | Out-File -Encoding ascii dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist
+          if-no-files-found: error
+
+  publish:
+    needs: [tests, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: dist
+      - name: Read the version
+        shell: bash
+        run: echo "VERSION=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_ENV"
+      - name: Create the tag and the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" dist/* --title "$VERSION" --notes-file "docs/release-notes-v$VERSION.md" --target "$GITHUB_SHA"

@@ -1,0 +1,26 @@
+name: tests
+# Runs on every push that changes more than docs, and is reused by the release workflow (workflow_call).
+on:
+  push:
+    branches: [master]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run the tests
+        shell: bash
+        run: |
+          python tests/run_tests.py
+          python tests/run_examples.py
+          python tests/qa/run_qa.py
+          python tests/std/run_std_tests.py
+          python tests/check_docs.py
+          python tests/compare_stages.py
+          python tests/check_version.py
