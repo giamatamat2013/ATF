@@ -1,0 +1,1434 @@
+// emit_py.atf - prints the tree as Python (3.10 or newer: it uses match and dataclasses).
+
+// what the program uses, for the import lines at the top
+var cv_py_uses: {str: bool} = {}
+// enums: name -> true when a variant carries data
+var cv_py_enums: {str: bool} = {}
+// variant name -> enum name, for the enums that carry data (their variants become classes)
+var cv_py_variant_of: {str: str} = {}
+// methods that an impl block adds to a type
+var cv_py_impls: {str: [Stmt]} = {}
+var cv_py_generics: [str] = []
+
+fn cv_py_use(name: str) {
+    cv_py_uses[name] = true
+}
+
+// ---------------------------------------------------------------- types
+
+fn cv_py_type(t: Ty) -> str {
+    let n = t.name
+    if n == "int" or n == "float" or n == "bool" or n == "str" {
+        return n
+    }
+    if n == "byte" {
+        return "int"
+    }
+    if n == "any" or n == "unit" {
+        return ""
+    }
+    if n in cv_py_generics {
+        return ""
+    }
+    if n == "array" and t.args.len() == 1 {
+        let a = cv_py_type(t.args[0])
+        if a == "" {
+            return "list"
+        }
+        return "list[" + a + "]"
+    }
+    if n == "map" and t.args.len() == 2 {
+        let a = cv_py_type(t.args[0])
+        let b = cv_py_type(t.args[1])
+        if a == "" or b == "" {
+            return "dict"
+        }
+        return "dict[" + a + ", " + b + "]"
+    }
+    if n == "tuple" {
+        var parts: [str] = []
+        for a in t.args {
+            let s = cv_py_type(a)
+            if s == "" {
+                return "tuple"
+            }
+            parts.push(s)
+        }
+        return "tuple[" + ", ".join(parts) + "]"
+    }
+    if n == "opt" and t.args.len() == 1 {
+        let a = cv_py_type(t.args[0])
+        if a == "" {
+            return ""
+        }
+        return a + " | None"
+    }
+    if n == "result" and t.args.len() == 2 {
+        return cv_py_type(t.args[0])
+    }
+    if n == "fn" {
+        cv_py_use("Callable")
+        var parts: [str] = []
+        for i in 0..t.args.len() - 1 {
+            let s = cv_py_type(t.args[i])
+            if s == "" {
+                return "Callable"
+            }
+            parts.push(s)
+        }
+        let r = cv_py_type(t.args.last())
+        if r == "" {
+            return "Callable"
+        }
+        return "Callable[[" + ", ".join(parts) + "], " + r + "]"
+    }
+    return n
+}
+
+// ": T" for a declaration, or "" when the type is unknown
+fn cv_py_hint(t: Ty) -> str {
+    let s = cv_py_type(t)
+    if s == "" {
+        return ""
+    }
+    return ": " + s
+}
+
+// ---------------------------------------------------------------- strings
+
+fn cv_py_escape(s: str, q: byte, fstring: bool) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == '\\' {
+            sb.add("\\\\")
+        } else if c == q {
+            sb.add("\\")
+            sb.add_byte(c)
+        } else if c == '\n' {
+            sb.add("\\n")
+        } else if c == '\t' {
+            sb.add("\\t")
+        } else if c == '\r' {
+            sb.add("\\r")
+        } else if c == 0 {
+            sb.add("\\0")
+        } else if c == '{' and fstring {
+            sb.add("\{\{")
+        } else if c == '}' and fstring {
+            sb.add("}}")
+        } else {
+            sb.add_byte(c)
+        }
+    }
+    return sb.finish()
+}
+
+// the quote used by string literals in the expression being printed ('"' at the top, '\'' inside an f-string)
+var cv_py_quote: byte = '"'
+
+fn cv_py_quote_str() -> str {
+    if cv_py_quote == '"' {
+        return "\""
+    }
+    return "'"
+}
+
+// ---------------------------------------------------------------- expressions
+
+fn cv_py_binprec(op: str) -> int {
+    if op == "??" {
+        return 1
+    }
+    if op == "or" {
+        return 2
+    }
+    if op == "and" {
+        return 3
+    }
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "in" or op == "not in" {
+        return 5
+    }
+    if op == "|" {
+        return 6
+    }
+    if op == "^" {
+        return 7
+    }
+    if op == "&" {
+        return 8
+    }
+    if op == "<<" or op == ">>" or op == ">>>" {
+        return 9
+    }
+    if op == "+" or op == "-" {
+        return 10
+    }
+    if op == "*" or op == "/" or op == "%" {
+        return 11
+    }
+    if op == "**" {
+        return 13
+    }
+    return 10
+}
+
+fn cv_py_prec(e: Expr) -> int {
+    if e.kind == "paren" {
+        return cv_py_prec(e.kids[0])
+    }
+    if e.kind == "bin" {
+        return cv_py_binprec(e.text)
+    }
+    if e.kind == "un" {
+        if e.text == "not" {
+            return 4
+        }
+        return 12
+    }
+    if e.kind == "if" or e.kind == "lambda" or e.kind == "range" {
+        return 1
+    }
+    return 20
+}
+
+fn cv_py_expr(e: Expr, min: int) -> str {
+    let s = cv_py_expr_raw(e)
+    if cv_py_prec(e) < min {
+        return "(" + s + ")"
+    }
+    return s
+}
+
+fn cv_py_list(items: [Expr]) -> str {
+    var parts: [str] = []
+    for x in items {
+        parts.push(cv_py_expr(x, 1))
+    }
+    return ", ".join(parts)
+}
+
+fn cv_py_args(e: Expr) -> str {
+    var parts: [str] = []
+    for i in 1..e.kids.len() {
+        var s = cv_py_expr(e.kids[i], 1)
+        if i - 1 < e.names.len() and e.names[i - 1] != "" {
+            s = cv_py_ident(e.names[i - 1]) + "=" + s
+        }
+        parts.push(s)
+    }
+    return ", ".join(parts)
+}
+
+// a Python keyword used as a name in ATF gets a trailing underscore: from -> from_
+fn cv_py_ident(n: str) -> str {
+    for kw in ["from", "class", "def", "del", "pass", "is", "with", "lambda", "global", "nonlocal", "try", "except", "finally", "raise", "yield", "as", "assert", "async", "await", "elif"] {
+        if n == kw {
+            return n + "_"
+        }
+    }
+    return n
+}
+
+fn cv_py_idents(names: [str]) -> str {
+    var parts: [str] = []
+    for n in names {
+        parts.push(cv_py_ident(n))
+    }
+    return ", ".join(parts)
+}
+
+fn cv_py_name(n: str) -> str {
+    if n == "PI" {
+        cv_py_use("math")
+        return "math.pi"
+    }
+    if n == "E" {
+        cv_py_use("math")
+        return "math.e"
+    }
+    if n == "INF" {
+        cv_py_use("math")
+        return "math.inf"
+    }
+    if n == "INT_MAX" {
+        cv_py_use("sys")
+        return "sys.maxsize"
+    }
+    if n == "INT_MIN" {
+        cv_py_use("sys")
+        return "(-sys.maxsize - 1)"
+    }
+    // Shape.Circle -> Circle for enums whose variants are classes
+    let parts = n.split(".")
+    if parts.len() == 2 and parts[0] in cv_py_enums and cv_py_enums[parts[0]] {
+        if parts[1] in cv_py_variant_of {
+            return parts[1]
+        }
+    }
+    if parts.len() == 1 {
+        return cv_py_ident(n)
+    }
+    return n
+}
+
+fn cv_py_is_unit_variant(n: str) -> bool {
+    let parts = n.split(".")
+    if parts.len() == 2 and parts[0] in cv_py_enums and cv_py_enums[parts[0]] {
+        return parts[1] in cv_py_variant_of
+    }
+    return false
+}
+
+fn cv_py_expr_raw(e: Expr) -> str {
+    let k = e.kind
+    if k == "int" {
+        return e.text
+    }
+    if k == "float" {
+        return cv_atf_float(e.text)
+    }
+    if k == "bool" {
+        if e.text == "true" {
+            return "True"
+        }
+        return "False"
+    }
+    if k == "nil" {
+        return "None"
+    }
+    if k == "str" {
+        let q = cv_py_quote_str()
+        return q + cv_py_escape(e.text, cv_py_quote, false) + q
+    }
+    if k == "byte" {
+        return "ord('" + cv_py_escape(e.text, '\'', false) + "')"
+    }
+    if k == "name" {
+        if cv_py_is_unit_variant(e.text) {
+            return cv_py_name(e.text) + "()"
+        }
+        return cv_py_name(e.text)
+    }
+    if k == "paren" {
+        return cv_py_expr_raw(e.kids[0])
+    }
+    if k == "fstr" {
+        let saved = cv_py_quote
+        var outer = "\""
+        if saved == '"' {
+            cv_py_quote = '\''
+        } else {
+            outer = "'"
+            cv_py_quote = '"'
+        }
+        var sb = str_builder()
+        sb.add("f" + outer)
+        for i in 0..e.kids.len() {
+            let p = e.kids[i]
+            if p.kind == "str" {
+                sb.add(cv_py_escape(p.text, byte(outer.byte_at(0)), true))
+            } else {
+                sb.add("\{")
+                sb.add(cv_py_expr(p, 3))
+                if e.names[i] != "" {
+                    sb.add(":" + cv_py_spec(e.names[i]))
+                }
+                sb.add("}")
+            }
+        }
+        sb.add(outer)
+        cv_py_quote = saved
+        return sb.finish()
+    }
+    if k == "bin" {
+        return cv_py_bin(e)
+    }
+    if k == "un" {
+        if e.text == "not" {
+            return "not " + cv_py_expr(e.kids[0], 5)
+        }
+        return e.text + cv_py_expr(e.kids[0], 12)
+    }
+    if k == "call" {
+        return cv_py_call(e)
+    }
+    if k == "method" {
+        return cv_py_method(e)
+    }
+    if k == "field" {
+        if cv_is_int_text(e.text) {
+            return cv_py_expr(e.kids[0], 15) + "[" + e.text + "]"
+        }
+        return cv_py_expr(e.kids[0], 15) + "." + cv_py_ident(e.text)
+    }
+    if k == "index" {
+        return cv_py_expr(e.kids[0], 15) + "[" + cv_py_expr(e.kids[1], 1) + "]"
+    }
+    if k == "slice" {
+        var lo = ""
+        var hi = ""
+        if not cv_is_none(e.kids[1]) {
+            lo = cv_py_expr(e.kids[1], 5)
+        }
+        if not cv_is_none(e.kids[2]) {
+            hi = cv_py_expr(e.kids[2], 5)
+        }
+        return cv_py_expr(e.kids[0], 15) + "[" + lo + ":" + hi + "]"
+    }
+    if k == "range" {
+        return cv_py_range(e)
+    }
+    if k == "array" {
+        return "[" + cv_py_list(e.kids) + "]"
+    }
+    if k == "map" {
+        var parts: [str] = []
+        var i = 0
+        while i + 1 < e.kids.len() {
+            parts.push(cv_py_expr(e.kids[i], 1) + ": " + cv_py_expr(e.kids[i + 1], 1))
+            i += 2
+        }
+        return "\{" + ", ".join(parts) + "}"
+    }
+    if k == "tuple" {
+        if e.kids.len() == 1 {
+            return "(" + cv_py_expr(e.kids[0], 1) + ",)"
+        }
+        return "(" + cv_py_list(e.kids) + ")"
+    }
+    if k == "structlit" {
+        var parts: [str] = []
+        for i in 0..e.kids.len() {
+            parts.push(cv_py_ident(e.names[i]) + "=" + cv_py_expr(e.kids[i], 1))
+        }
+        return cv_py_name(e.text) + "(" + ", ".join(parts) + ")"
+    }
+    if k == "lambda" {
+        var params = cv_py_idents(e.names)
+        if e.body.len() > 0 {
+            cv_note("a closure with a block body became a lambda that returns its last expression")
+            let last = e.body.last()
+            if last.kind == "expr" {
+                return "lambda " + params + ": " + cv_py_expr(last.e, 1)
+            }
+            return "lambda " + params + ": None"
+        }
+        if params == "" {
+            return "lambda: " + cv_py_expr(e.kids[0], 1)
+        }
+        return "lambda " + params + ": " + cv_py_expr(e.kids[0], 1)
+    }
+    if k == "if" {
+        return cv_py_expr(e.kids[1], 2) + " if " + cv_py_expr(e.kids[0], 2) + " else " + cv_py_expr(e.kids[2], 1)
+    }
+    if k == "comp" {
+        var vars = cv_py_idents(e.names)
+        var s = "[" + cv_py_expr(e.kids[0], 1) + " for " + vars + " in " + cv_py_expr(e.kids[1], 2)
+        if not cv_is_none(e.kids[2]) {
+            s = s + " if " + cv_py_expr(e.kids[2], 2)
+        }
+        return s + "]"
+    }
+    if k == "unwrap" {
+        return cv_py_expr(e.kids[0], 15)
+    }
+    if k == "try" {
+        cv_note("the '?' operator has no Python counterpart and was dropped")
+        return cv_py_expr(e.kids[0], 15)
+    }
+    if k == "cast" {
+        let n = e.text
+        if n == "int" or n == "float" or n == "str" {
+            return n + "(" + cv_py_expr(e.kids[0], 1) + ")"
+        }
+        return cv_py_expr(e.kids[0], 1)
+    }
+    if k == "match" {
+        cv_note("a match used inside a larger expression is not supported in Python output")
+        return "None"
+    }
+    return ""
+}
+
+// "{x:.2f}" has the same format spec in Python; ATF's b / x / X are the same too
+fn cv_py_spec(spec: str) -> str {
+    return spec
+}
+
+fn cv_py_range(e: Expr) -> str {
+    var lo = cv_py_expr(e.kids[0], 1)
+    var hi = ""
+    if cv_is_none(e.kids[1]) {
+        return "itertools.count(" + lo + ")"
+    }
+    hi = cv_py_expr(e.kids[1], 1)
+    var by = ""
+    if e.kids.len() > 2 {
+        by = cv_py_expr(e.kids[2], 1)
+    }
+    if e.text == "incl" {
+        let h = e.kids[1]
+        let negative = e.kids.len() > 2 and e.kids[2].kind == "int" and e.kids[2].text.starts_with("-")
+        var adj = "+ 1"
+        if negative {
+            adj = "- 1"
+        }
+        if h.kind == "int" {
+            if negative {
+                hi = "{int(h.text) - 1}"
+            } else {
+                hi = "{int(h.text) + 1}"
+            }
+        } else {
+            hi = cv_py_expr(h, 10) + " " + adj
+        }
+    }
+    if by != "" {
+        return "range(" + lo + ", " + hi + ", " + by + ")"
+    }
+    if lo == "0" {
+        return "range(" + hi + ")"
+    }
+    return "range(" + lo + ", " + hi + ")"
+}
+
+fn cv_py_bin(e: Expr) -> str {
+    let op = e.text
+    let p = cv_py_binprec(op)
+    let a = e.kids[0]
+    let b = e.kids[1]
+    if op == "??" {
+        let l = cv_py_expr(a, 5)
+        return "(" + l + " if " + l + " is not None else " + cv_py_expr(b, 1) + ")"
+    }
+    var lmin = p
+    var rmin = p + 1
+    if op == "**" {
+        lmin = p + 1
+        rmin = p
+    }
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" {
+        lmin = p + 1
+    }
+    // a.byte_at(i) == 'x'  ==>  a[i] == 'x'
+    if (op == "==" or op == "!=") and b.kind == "byte" and a.kind == "method" and a.text == "byte_at" and a.kids.len() == 2 {
+        return cv_py_expr(a.kids[0], 15) + "[" + cv_py_expr(a.kids[1], 1) + "] " + op + " '" + cv_py_escape(b.text, '\'', false) + "'"
+    }
+    var pyop = op
+    if op == ">>>" {
+        pyop = ">>"
+    }
+    if op == "/" {
+        // ATF's / on two ints is an integer division
+        let ta = cv_infer(a)
+        let tb = cv_infer(b)
+        if not e.flag and ta.name != "float" and tb.name != "float" {
+            pyop = "//"
+        }
+    }
+    return cv_py_expr(a, lmin) + " " + pyop + " " + cv_py_expr(b, rmin)
+}
+
+fn cv_py_call(e: Expr) -> str {
+    let callee = e.kids[0]
+    let n = e.kids.len() - 1
+    if callee.kind == "name" {
+        let name = callee.text
+        let first = cv_py_first_arg(e)
+        if name == "println" {
+            if n == 0 {
+                return "print()"
+            }
+            return "print(" + cv_py_args(e) + ")"
+        }
+        if name == "print" {
+            return "print(" + cv_py_args(e) + ", end=\"\")"
+        }
+        if name == "eprintln" or name == "eprint" {
+            cv_py_use("sys")
+            return "print(" + cv_py_args(e) + ", file=sys.stderr)"
+        }
+        if name == "panic" {
+            return "(_ for _ in ()).throw(Exception(" + cv_py_args(e) + "))"
+        }
+        if name == "exit" {
+            cv_py_use("sys")
+            return "sys.exit(" + cv_py_args(e) + ")"
+        }
+        if name == "sqrt" or name == "sin" or name == "cos" or name == "tan" or name == "exp" or name == "floor" or name == "ceil" {
+            cv_py_use("math")
+            return "math." + name + "(" + cv_py_args(e) + ")"
+        }
+        if name == "log" and n == 1 {
+            cv_py_use("math")
+            return "math.log(" + cv_py_args(e) + ")"
+        }
+        if name == "rand_int" {
+            cv_py_use("random")
+            return "random.randint(" + cv_py_args(e) + ")"
+        }
+        if name == "rand_float" {
+            cv_py_use("random")
+            return "random.random()"
+        }
+        if name == "rand_choice" {
+            cv_py_use("random")
+            return "random.choice(" + cv_py_args(e) + ")"
+        }
+        if name == "shuffle" {
+            cv_py_use("random")
+            return "random.shuffle(" + cv_py_args(e) + ")"
+        }
+        if name == "copy" and n == 1 {
+            return cv_py_expr(e.kids[1], 15) + ".copy()"
+        }
+        if name.starts_with("set_new") {
+            return "set()"
+        }
+        if name == "pad_left" and n == 2 {
+            return cv_py_expr(e.kids[1], 15) + ".rjust(" + cv_py_expr(e.kids[2], 1) + ")"
+        }
+        if name == "pad_right" and n == 2 {
+            return cv_py_expr(e.kids[1], 15) + ".ljust(" + cv_py_expr(e.kids[2], 1) + ")"
+        }
+        if name.starts_with("array_make") and n == 1 {
+            var zero = "0"
+            if name.contains("float") {
+                zero = "0.0"
+            } else if name.contains("bool") {
+                zero = "False"
+            } else if name.contains("str") {
+                zero = "\"\""
+            }
+            return "[" + zero + "] * " + cv_py_expr(e.kids[1], 11)
+        }
+        if name == "array_repeat" and n == 2 {
+            return "[" + cv_py_expr(e.kids[1], 1) + "] * " + cv_py_expr(e.kids[2], 11)
+        }
+        if name == "Result.Ok" and n == 1 {
+            return first
+        }
+        if name == "Result.Err" and n == 1 {
+            return "Exception(" + first + ")"
+        }
+        if name == "abs" or name == "min" or name == "max" or name == "str" or name == "float" or name == "len" or name == "chr" or name == "ord" or name == "input" or name == "zip" or name == "sum" {
+            return name + "(" + cv_py_args(e) + ")"
+        }
+        if name == "int" {
+            return "int(" + cv_py_args(e) + ")"
+        }
+        if name == "round" {
+            return "round(" + cv_py_args(e) + ")"
+        }
+        if name == "assert" {
+            return "assert " + cv_py_args(e)
+        }
+        // Shape.Circle(1.0) -> Circle(1.0)
+        return cv_py_name(name) + "(" + cv_py_args(e) + ")"
+    }
+    return cv_py_expr(callee, 15) + "(" + cv_py_args(e) + ")"
+}
+
+fn cv_py_first_arg(e: Expr) -> str {
+    if e.kids.len() > 1 {
+        return cv_py_expr(e.kids[1], 1)
+    }
+    return ""
+}
+
+// ATF methods and their Python spelling
+fn cv_py_method(e: Expr) -> str {
+    let name = e.text
+    let r = e.kids[0]
+    let n = e.kids.len() - 1
+    let rs = cv_py_expr(r, 15)
+    let a0 = cv_py_first_arg(e)
+    var a1 = ""
+    if n >= 2 {
+        a1 = cv_py_expr(e.kids[2], 1)
+    }
+    let rt = cv_infer(r)
+    // Shape.Circle(1.0): a variant that is a class of its own
+    if r.kind == "name" and r.text in cv_py_enums and cv_py_enums[r.text] and name in cv_py_variant_of {
+        return name + "(" + cv_py_args(e) + ")"
+    }
+    if name == "len" and n == 0 {
+        return "len(" + cv_py_expr(r, 1) + ")"
+    }
+    if name == "push" and n == 1 {
+        return rs + ".append(" + a0 + ")"
+    }
+    if name == "swap" and n == 2 {
+        // only valid as a statement
+        return rs + "[" + a0 + "], " + rs + "[" + a1 + "] = " + rs + "[" + a1 + "], " + rs + "[" + a0 + "]"
+    }
+    if name == "to_hex" and n == 0 {
+        return "format(" + cv_py_expr(r, 1) + ", \"x\")"
+    }
+    if name == "to_bin" and n == 0 {
+        return "format(" + cv_py_expr(r, 1) + ", \"b\")"
+    }
+    if name == "contains" and n == 1 {
+        return a0 + " in " + cv_py_expr(r, 6)
+    }
+    if name == "has" and n == 1 {
+        return a0 + " in " + cv_py_expr(r, 6)
+    }
+    if name == "remove" and n == 1 and rt.name != "map" {
+        return rs + ".pop(" + a0 + ")"
+    }
+    if name == "remove" and n == 1 {
+        return rs + ".pop(" + a0 + ", None)"
+    }
+    if name == "trim" and n == 0 {
+        return rs + ".strip()"
+    }
+    if name == "starts_with" {
+        return rs + ".startswith(" + a0 + ")"
+    }
+    if name == "ends_with" {
+        return rs + ".endswith(" + a0 + ")"
+    }
+    if name == "lines" and n == 0 {
+        return rs + ".splitlines()"
+    }
+    if name == "split_whitespace" and n == 0 {
+        return rs + ".split()"
+    }
+    if name == "repeat" and n == 1 {
+        return cv_py_expr(r, 11) + " * " + cv_py_expr(e.kids[1], 12)
+    }
+    if name == "reverse" and n == 0 {
+        if rt.name == "str" {
+            return cv_py_expr(r, 15) + "[::-1]"
+        }
+        return rs + ".reverse()"
+    }
+    if name == "reversed" and n == 0 {
+        return rs + "[::-1]"
+    }
+    if name == "sorted" and n == 0 {
+        return "sorted(" + cv_py_expr(r, 1) + ")"
+    }
+    if name == "sort_by" and n == 1 {
+        cv_py_use("functools")
+        return rs + ".sort(key=functools.cmp_to_key(" + a0 + "))"
+    }
+    if name == "sum" and n == 0 {
+        return "sum(" + cv_py_expr(r, 1) + ")"
+    }
+    if (name == "min" or name == "max") and n == 0 {
+        return name + "(" + cv_py_expr(r, 1) + ")"
+    }
+    if name == "map" and n == 1 {
+        return "list(map(" + a0 + ", " + cv_py_expr(r, 1) + "))"
+    }
+    if name == "filter" and n == 1 {
+        return "list(filter(" + a0 + ", " + cv_py_expr(r, 1) + "))"
+    }
+    if name == "reduce" and n == 2 {
+        cv_py_use("functools")
+        return "functools.reduce(" + a1 + ", " + cv_py_expr(r, 1) + ", " + a0 + ")"
+    }
+    if name == "any" and n == 1 {
+        return "any(map(" + a0 + ", " + cv_py_expr(r, 1) + "))"
+    }
+    if name == "all" and n == 1 {
+        return "all(map(" + a0 + ", " + cv_py_expr(r, 1) + "))"
+    }
+    if name == "first" and n == 0 {
+        return rs + "[0]"
+    }
+    if name == "last" and n == 0 {
+        return rs + "[-1]"
+    }
+    if name == "is_empty" and n == 0 {
+        return "len(" + cv_py_expr(r, 1) + ") == 0"
+    }
+    if name == "index_of" and n == 1 {
+        return rs + ".index(" + a0 + ")"
+    }
+    if name == "to_int" and n == 0 {
+        return "int(" + cv_py_expr(r, 1) + ")"
+    }
+    if name == "to_float" and n == 0 {
+        return "float(" + cv_py_expr(r, 1) + ")"
+    }
+    if name == "parse_int" and n == 0 {
+        return "(int(" + cv_py_expr(r, 1) + ") if " + cv_py_expr(r, 15) + ".lstrip('-').isdigit() else None)"
+    }
+    if name == "to_str" and n == 0 {
+        return "str(" + cv_py_expr(r, 1) + ")"
+    }
+    if name == "keys" and n == 0 {
+        return "list(" + rs + ".keys())"
+    }
+    if name == "values" and n == 0 {
+        return "list(" + rs + ".values())"
+    }
+    if name == "items" and n == 0 {
+        return "list(" + rs + ".items())"
+    }
+    if name == "try_get" and n == 1 {
+        return rs + ".get(" + a0 + ")"
+    }
+    if name == "copy" and n == 0 {
+        return rs + ".copy()"
+    }
+    if name == "take" and n == 1 {
+        return rs + "[:" + a0 + "]"
+    }
+    if name == "skip" and n == 1 {
+        return rs + "[" + a0 + ":]"
+    }
+    if name == "byte_at" and n == 1 {
+        return "ord(" + rs + "[" + a0 + "])"
+    }
+    if name == "pad_left" and n >= 1 {
+        return rs + ".rjust(" + cv_py_args(e) + ")"
+    }
+    if name == "pad_right" and n >= 1 {
+        return rs + ".ljust(" + cv_py_args(e) + ")"
+    }
+    if name == "join" and n == 1 {
+        return rs + ".join(" + a0 + ")"
+    }
+    if name == "is_digits" and n == 0 {
+        return rs + ".isdigit()"
+    }
+    if name == "unwrap_or" and n == 1 {
+        return "(" + cv_py_expr(r, 5) + " if " + cv_py_expr(r, 5) + " is not None else " + a0 + ")"
+    }
+    return rs + "." + name + "(" + cv_py_args(e) + ")"
+}
+
+// ---------------------------------------------------------------- patterns
+
+fn cv_py_pattern(p: Expr) -> str {
+    let k = p.kind
+    if k == "pwild" {
+        return "_"
+    }
+    if k == "pbind" {
+        return p.text
+    }
+    if k == "pvariant" {
+        var name = cv_py_name(p.text)
+        if p.kids.len() == 0 {
+            if cv_py_is_unit_variant(p.text) {
+                return name + "()"
+            }
+            return name
+        }
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_py_pattern(x))
+        }
+        return name + "(" + ", ".join(parts) + ")"
+    }
+    if k == "ptuple" {
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_py_pattern(x))
+        }
+        return "(" + ", ".join(parts) + ")"
+    }
+    if k == "por" {
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_py_pattern(x))
+        }
+        return " | ".join(parts)
+    }
+    return cv_py_expr(p, 6)
+}
+
+fn cv_py_has_range(p: Expr) -> bool {
+    return p.kind == "prange"
+}
+
+// ---------------------------------------------------------------- statements
+
+fn cv_pyw_block(body: [Stmt]) {
+    cv_ind += 1
+    if body.len() == 0 {
+        cv_line("pass")
+    } else {
+        cv_py_stmts(body)
+    }
+    cv_ind -= 1
+}
+
+fn cv_py_stmts(body: [Stmt]) {
+    for s in body {
+        cv_py_stmt(s)
+    }
+}
+
+// emit "value" of kind return / let / assign / expr for e; a match becomes a match statement
+fn cv_py_value(kind: str, target: str, op: str, e: Expr) {
+    if e.kind == "match" {
+        cv_line("match " + cv_py_expr(e.kids[0], 1) + ":")
+        cv_ind += 1
+        cv_py_arms(e.arms, kind, target, op)
+        cv_ind -= 1
+        return
+    }
+    if kind == "return" {
+        if e.kind == "tuple" {
+            cv_line("return " + cv_py_list(e.kids))
+        } else {
+            cv_line("return " + cv_py_expr(e, 1))
+        }
+        return
+    }
+    if kind == "expr" {
+        cv_line(cv_py_expr(e, 1))
+        return
+    }
+    cv_line(target + " " + op + " " + cv_py_expr(e, 1))
+}
+
+fn cv_py_arms(arms: [Arm], kind: str, target: str, op: str) {
+    for a in arms {
+        var head = "case " + cv_py_pattern(a.pat)
+        var guard = ""
+        if a.pat.kind == "prange" {
+            head = "case _v"
+            let lo = cv_py_expr(a.pat.kids[0], 6)
+            let hi = cv_py_expr(a.pat.kids[1], 6)
+            var cmp = " < "
+            if a.pat.text == "incl" {
+                cmp = " <= "
+            }
+            guard = lo + " <= _v" + cmp + hi
+        }
+        if not cv_is_none(a.guard) {
+            if guard != "" {
+                guard = guard + " and " + cv_py_expr(a.guard, 4)
+            } else {
+                guard = cv_py_expr(a.guard, 1)
+            }
+        }
+        if guard != "" {
+            head = head + " if " + guard
+        }
+        cv_line(head + ":")
+        cv_ind += 1
+        if a.body.len() == 0 {
+            cv_line("pass")
+        }
+        for i in 0..a.body.len() {
+            let s = a.body[i]
+            if i == a.body.len() - 1 and s.kind == "expr" and kind != "expr" {
+                cv_py_value(kind, target, op, s.e)
+            } else {
+                cv_py_stmt(s)
+            }
+        }
+        cv_ind -= 1
+    }
+}
+
+fn cv_py_target(s: Stmt) -> str {
+    if s.text != "" {
+        return cv_py_ident(s.text)
+    }
+    return cv_py_idents(s.names)
+}
+
+fn cv_py_stmt(s: Stmt) {
+    let k = s.kind
+    if k == "let" or k == "const" {
+        let target = cv_py_target(s)
+        if cv_is_none(s.e) {
+            if s.has_ty {
+                cv_line(target + cv_py_hint(s.ty) + " = None")
+            }
+            return
+        }
+        if s.e.kind == "match" {
+            cv_py_value("let", target, "=", s.e)
+            return
+        }
+        var hint = ""
+        if s.has_ty and s.text != "" {
+            hint = cv_py_hint(s.ty)
+        }
+        var rhs = cv_py_expr(s.e, 1)
+        if s.e.kind == "tuple" and s.text == "" {
+            rhs = cv_py_list(s.e.kids)
+        }
+        cv_line(target + hint + " = " + rhs)
+        return
+    }
+    if k == "assign" {
+        var op = s.text
+        if op == "/=" {
+            let ta = cv_infer(s.e)
+            if ta.name == "int" and not s.flag {
+                op = "//="
+            }
+        }
+        if op == ">>>=" {
+            op = ">>="
+        }
+        if s.e2.kind == "match" {
+            cv_py_value("assign", cv_py_expr(s.e, 1), op, s.e2)
+            return
+        }
+        var lhs = cv_py_expr(s.e, 1)
+        var rhs = cv_py_expr(s.e2, 1)
+        if s.e.kind == "tuple" {
+            lhs = cv_py_list(s.e.kids)
+        }
+        if s.e2.kind == "tuple" and s.e.kind == "tuple" {
+            rhs = cv_py_list(s.e2.kids)
+        }
+        cv_line(lhs + " " + op + " " + rhs)
+        return
+    }
+    if k == "expr" {
+        if s.e.kind == "match" {
+            cv_py_value("expr", "", "", s.e)
+            return
+        }
+        if s.e.kind == "call" and s.e.kids[0].kind == "name" and s.e.kids[0].text == "panic" {
+            cv_line("raise Exception(" + cv_py_args(s.e) + ")")
+            return
+        }
+        cv_line(cv_py_expr(s.e, 1))
+        return
+    }
+    if k == "if" {
+        cv_line("if " + cv_py_expr(s.e, 1) + ":")
+        cv_pyw_block(s.body)
+        cv_py_else(s)
+        return
+    }
+    if k == "iflet" {
+        cv_py_iflet(s)
+        return
+    }
+    if k == "while" {
+        cv_line("while " + cv_py_expr(s.e, 1) + ":")
+        cv_pyw_block(s.body)
+        return
+    }
+    if k == "loop" {
+        cv_line("while True:")
+        cv_pyw_block(s.body)
+        return
+    }
+    if k == "whilelet" {
+        cv_line("while True:")
+        cv_ind += 1
+        if s.e.kind == "pbind" {
+            cv_line(s.e.text + " = " + cv_py_expr(s.e2, 1))
+            cv_line("if " + s.e.text + " is None:")
+            cv_ind += 1
+            cv_line("break")
+            cv_ind -= 1
+        } else {
+            cv_note("while let with this pattern is not supported in Python output")
+        }
+        cv_py_stmts(s.body)
+        cv_ind -= 1
+        return
+    }
+    if k == "for" {
+        cv_pyw_for(s)
+        return
+    }
+    if k == "break" or k == "continue" {
+        if s.text != "" {
+            cv_note("labelled {k} '{s.text}' has no Python counterpart")
+        }
+        cv_line(k)
+        return
+    }
+    if k == "return" {
+        if cv_is_none(s.e) {
+            cv_line("return")
+        } else {
+            cv_py_value("return", "", "", s.e)
+        }
+        return
+    }
+    if k == "defer" {
+        cv_note("defer has no Python counterpart; the statement is kept as a comment")
+        cv_line("# defer " + cv_py_expr(s.e, 1))
+        return
+    }
+    if k == "import" {
+        cv_line("# import \"" + s.text + "\"")
+        return
+    }
+    if k == "match" {
+        cv_line("match " + cv_py_expr(s.e, 1) + ":")
+        cv_ind += 1
+        cv_py_arms(s.arms, "expr", "", "")
+        cv_ind -= 1
+        return
+    }
+    if k == "fn" {
+        cv_py_fn(s, false)
+        return
+    }
+    if k == "struct" {
+        cv_py_struct(s)
+        return
+    }
+    if k == "enum" {
+        cv_py_enum(s)
+        return
+    }
+    if k == "impl" {
+        // methods are printed with their type
+        return
+    }
+}
+
+fn cv_py_else(s: Stmt) {
+    if s.els.len() == 0 {
+        return
+    }
+    if s.els.len() == 1 and s.els[0].kind == "if" and s.els[0].text == "" {
+        let inner = s.els[0]
+        cv_line("elif " + cv_py_expr(inner.e, 1) + ":")
+        cv_pyw_block(inner.body)
+        cv_py_else(inner)
+        return
+    }
+    cv_line("else:")
+    cv_pyw_block(s.els)
+}
+
+fn cv_py_iflet(s: Stmt) {
+    if s.e.kind == "pbind" {
+        cv_line(s.e.text + " = " + cv_py_expr(s.e2, 1))
+        cv_line("if " + s.e.text + " is not None:")
+        cv_pyw_block(s.body)
+        if s.els.len() > 0 {
+            cv_line("else:")
+            cv_pyw_block(s.els)
+        }
+        return
+    }
+    cv_line("match " + cv_py_expr(s.e2, 1) + ":")
+    cv_ind += 1
+    cv_line("case " + cv_py_pattern(s.e) + ":")
+    cv_pyw_block(s.body)
+    if s.els.len() > 0 {
+        cv_line("case _:")
+        cv_pyw_block(s.els)
+    }
+    cv_ind -= 1
+}
+
+fn cv_pyw_for(s: Stmt) {
+    var vars = cv_py_idents(s.names)
+    var iter = ""
+    let e = s.e
+    if s.names.len() == 2 and not s.flag {
+        if cv_is_map_expr(e) {
+            iter = cv_py_expr(e, 15) + ".items()"
+        } else {
+            iter = "enumerate(" + cv_py_expr(e, 1) + ")"
+        }
+    } else if e.kind == "range" {
+        iter = cv_py_range(e)
+    } else {
+        iter = cv_py_expr(e, 2)
+    }
+    if s.text != "" {
+        cv_note("the loop label '{s.text}' is not used in Python")
+    }
+    cv_line("for " + vars + " in " + iter + ":")
+    cv_pyw_block(s.body)
+}
+
+fn cv_py_params(params: [Param], is_method: bool) -> str {
+    var parts: [str] = []
+    for p in params {
+        var s = cv_py_ident(p.name)
+        if p.has_ty and p.name != "self" {
+            s = s + cv_py_hint(p.ty)
+        }
+        if p.has_def {
+            if p.has_ty and cv_py_hint(p.ty) != "" {
+                s = s + " = " + cv_py_expr(p.def, 1)
+            } else {
+                s = s + "=" + cv_py_expr(p.def, 1)
+            }
+        }
+        parts.push(s)
+    }
+    return ", ".join(parts)
+}
+
+fn cv_py_dunder(n: str) -> str {
+    if n == "to_str" {
+        return "__str__"
+    }
+    if n == "op_add" {
+        return "__add__"
+    }
+    if n == "op_sub" {
+        return "__sub__"
+    }
+    if n == "op_mul" {
+        return "__mul__"
+    }
+    if n == "op_div" {
+        return "__truediv__"
+    }
+    if n == "op_neg" {
+        return "__neg__"
+    }
+    if n == "op_index" {
+        return "__getitem__"
+    }
+    if n == "eq" {
+        return "__eq__"
+    }
+    return n
+}
+
+fn cv_py_fn(s: Stmt, is_method: bool) {
+    let saved_generics = cv_py_generics
+    cv_py_generics = s.generics
+    let saved_env = cv_env
+    cv_env = {}
+    for p in s.params {
+        if p.has_ty {
+            cv_env_set(p.name, p.ty)
+        }
+    }
+    var name = s.text
+    var has_self = false
+    for p in s.params {
+        if p.name == "self" {
+            has_self = true
+        }
+    }
+    if is_method {
+        name = cv_py_dunder(name)
+        if not has_self {
+            cv_line("@staticmethod")
+        }
+    }
+    var head = "def " + name + "(" + cv_py_params(s.params, is_method) + ")"
+    if s.has_ret {
+        let r = cv_py_type(s.ret)
+        if r != "" {
+            head = head + " -> " + r
+        }
+    }
+    cv_line(head + ":")
+    cv_pyw_block(s.body)
+    cv_env = saved_env
+    cv_py_generics = saved_generics
+}
+
+fn cv_py_methods(type_name: str) {
+    if type_name in cv_py_impls {
+        for m in cv_py_impls[type_name] {
+            cv_line("")
+            cv_py_fn(m, true)
+        }
+    }
+}
+
+fn cv_py_struct(s: Stmt) {
+    cv_py_use("dataclass")
+    cv_line("@dataclass")
+    cv_line("class " + s.text + ":")
+    cv_ind += 1
+    if s.fields.len() == 0 {
+        cv_line("pass")
+    }
+    for f in s.fields {
+        var line = cv_py_ident(f.name)
+        var t = cv_py_type(f.ty)
+        if t == "" {
+            t = "object"
+        }
+        line = line + ": " + t
+        if f.has_def {
+            if f.def.kind == "array" or f.def.kind == "map" {
+                cv_py_use("field")
+                line = line + " = field(default_factory=lambda: " + cv_py_expr(f.def, 1) + ")"
+            } else {
+                line = line + " = " + cv_py_expr(f.def, 1)
+            }
+        }
+        cv_line(line)
+    }
+    cv_py_methods(s.text)
+    cv_ind -= 1
+}
+
+fn cv_py_enum(s: Stmt) {
+    var payload = false
+    for v in s.variants {
+        if v.tys.len() > 0 {
+            payload = true
+        }
+    }
+    if not payload {
+        cv_py_use("Enum")
+        cv_line("class " + s.text + "(Enum):")
+        cv_ind += 1
+        var next = 0
+        if s.variants.len() == 0 {
+            cv_line("pass")
+        }
+        for v in s.variants {
+            if v.has_value {
+                next = v.value
+            }
+            cv_line(v.name + " = {next}")
+            next += 1
+        }
+        cv_py_methods(s.text)
+        cv_ind -= 1
+        return
+    }
+    // an enum with data: a base class for the methods and one dataclass per variant
+    cv_line("class " + s.text + ":")
+    cv_ind += 1
+    cv_line("pass")
+    cv_py_methods(s.text)
+    cv_ind -= 1
+    for v in s.variants {
+        cv_line("")
+        cv_line("")
+        cv_py_use("dataclass")
+        cv_line("@dataclass")
+        cv_line("class " + v.name + "(" + s.text + "):")
+        cv_ind += 1
+        if v.tys.len() == 0 {
+            cv_line("pass")
+        }
+        for i in 0..v.tys.len() {
+            var fname = "f{i}"
+            if i < v.names.len() {
+                fname = v.names[i]
+            }
+            var t = cv_py_type(v.tys[i])
+            if t == "" {
+                t = "object"
+            }
+            cv_line(fname + ": " + t)
+        }
+        cv_ind -= 1
+    }
+}
+
+// ---------------------------------------------------------------- the file
+
+fn cv_py_emit_program(prog: [Stmt]) -> str {
+    cv_py_uses = {}
+    cv_py_enums = {}
+    cv_py_variant_of = {}
+    cv_py_impls = {}
+    for s in prog {
+        if s.kind == "enum" {
+            var payload = false
+            for v in s.variants {
+                if v.tys.len() > 0 {
+                    payload = true
+                }
+            }
+            cv_py_enums[s.text] = payload
+            if payload {
+                for v in s.variants {
+                    cv_py_variant_of[v.name] = s.text
+                }
+            }
+        }
+        if s.kind == "impl" {
+            if not (s.text in cv_py_impls) {
+                var l: [Stmt] = []
+                cv_py_impls[s.text] = l
+            }
+            var l = cv_py_impls[s.text]
+            for m in s.body {
+                l.push(m)
+            }
+        }
+    }
+    cv_lines = []
+    cv_ind = 0
+    var prev = ""
+    var has_main = false
+    var main_args = false
+    var main_ret = false
+    for s in prog {
+        if s.kind == "impl" {
+            continue
+        }
+        let is_def = s.kind == "fn" or s.kind == "struct" or s.kind == "enum"
+        if prev == "def" or (prev != "" and is_def) {
+            cv_line("")
+            cv_line("")
+        }
+        cv_py_stmt(s)
+        if is_def {
+            prev = "def"
+        } else {
+            prev = "other"
+        }
+        if s.kind == "fn" and s.text == "main" {
+            has_main = true
+            main_args = s.params.len() > 0
+            main_ret = s.has_ret
+        }
+    }
+    if has_main {
+        cv_line("")
+        cv_line("")
+        cv_line("if __name__ == \"__main__\":")
+        cv_ind += 1
+        var call = "main()"
+        if main_args {
+            cv_py_use("sys")
+            call = "main(sys.argv[1:])"
+        }
+        if main_ret {
+            cv_py_use("sys")
+            call = "sys.exit(" + call + ")"
+        }
+        cv_line(call)
+        cv_ind -= 1
+    }
+    var head: [str] = ["from __future__ import annotations"]
+    if "dataclass" in cv_py_uses or "field" in cv_py_uses {
+        var names: [str] = []
+        if "dataclass" in cv_py_uses {
+            names.push("dataclass")
+        }
+        if "field" in cv_py_uses {
+            names.push("field")
+        }
+        head.push("from dataclasses import " + ", ".join(names))
+    }
+    if "Enum" in cv_py_uses {
+        head.push("from enum import Enum")
+    }
+    if "Callable" in cv_py_uses {
+        head.push("from typing import Callable")
+    }
+    for m in ["functools", "itertools", "math", "random", "sys"] {
+        if m in cv_py_uses {
+            head.push("import " + m)
+        }
+    }
+    var text = cv_lines_text()
+    if head.len() > 0 {
+        text = "\n".join(head) + "\n\n\n" + text
+    }
+    return text
+}

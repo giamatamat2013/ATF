@@ -1,0 +1,220 @@
+// ast.atf - the tree that the converters share.
+//
+// Every parser (ATF, Python, Rust) builds this tree and every writer (ATF, Python, Rust) prints it,
+// so any language can be turned into any other one. Names start with cv_ because ATF has a single
+// global namespace.
+
+// A type. name is one of int float bool str byte unit any, or:
+//   array [T]   map [K, V]   tuple [A, B, ..]   opt [T]   result [T, E]   fn [P1, .., ret]
+// or the name of a user type (args = generic arguments).
+struct Ty {
+    name: str,
+    args: [Ty]
+}
+
+// An expression. kind:
+//   int float str byte bool nil name           literals and names (text)
+//   fstr          interpolated string: kids are the pieces (kind "str" = text), names[i] = format spec
+//   bin un        operator in text (ATF spelling: and or not == != ** ?? in "not in")
+//   call          kids[0] = callee, kids[1..] = arguments, names[i] = name of kids[i + 1] or ""
+//   method        text = method name, kids[0] = receiver, kids[1..] = arguments
+//   field index slice (kids: base, lo, hi; "none" kids are left out) range (text "incl")
+//   array map (kids = key, value, key, value, ..) tuple structlit (text = type, names = fields)
+//   lambda        names = parameters, kids[0] = body expression or body = statements
+//   if            kids = cond, then, else   (an if used as a value)
+//   match         kids[0] = value, arms
+//   unwrap try cast (text = type name) none
+//   pwild pbind pvariant ptuple por prange     patterns
+struct Expr {
+    kind: str,
+    text: str,
+    kids: [Expr],
+    names: [str],
+    arms: [Arm],
+    body: [Stmt],
+    flag: bool,
+    ty: Ty
+}
+
+struct Arm {
+    pat: Expr,
+    guard: Expr,
+    body: [Stmt]
+}
+
+struct Param {
+    name: str,
+    ty: Ty,
+    has_ty: bool,
+    def: Expr,
+    has_def: bool
+}
+
+struct Variant {
+    name: str,
+    tys: [Ty],
+    names: [str],
+    value: int,
+    has_value: bool
+}
+
+// A statement or a top level item. kind:
+//   let (text = name or names = tuple, flag = mutable, e = value)   const   assign (text = operator)
+//   expr if while loop for (names = loop variables, e = iterable) break continue return
+//   fn (params, ret, body)  struct (fields)  enum (variants)  impl (text = type, body = fns)
+//   import match defer comment
+struct Stmt {
+    kind: str,
+    text: str,
+    names: [str],
+    ty: Ty,
+    has_ty: bool,
+    flag: bool,
+    e: Expr,
+    e2: Expr,
+    body: [Stmt],
+    els: [Stmt],
+    params: [Param],
+    ret: Ty,
+    has_ret: bool,
+    fields: [Param],
+    variants: [Variant],
+    arms: [Arm],
+    generics: [str]
+}
+
+fn cv_ty(name: str) -> Ty {
+    return Ty(name, [])
+}
+
+fn cv_ty1(name: str, a: Ty) -> Ty {
+    return Ty(name, [a])
+}
+
+fn cv_ty2(name: str, a: Ty, b: Ty) -> Ty {
+    return Ty(name, [a, b])
+}
+
+fn cv_e(kind: str, text: str, kids: [Expr]) -> Expr {
+    return Expr(kind, text, kids, [], [], [], false, cv_ty("any"))
+}
+
+fn cv_none() -> Expr {
+    return cv_e("none", "", [])
+}
+
+fn cv_name(text: str) -> Expr {
+    return cv_e("name", text, [])
+}
+
+fn cv_lit(kind: str, text: str) -> Expr {
+    return cv_e(kind, text, [])
+}
+
+fn cv_un(op: str, a: Expr) -> Expr {
+    return cv_e("un", op, [a])
+}
+
+fn cv_bin(op: str, a: Expr, b: Expr) -> Expr {
+    return cv_e("bin", op, [a, b])
+}
+
+fn cv_call(callee: Expr, args: [Expr]) -> Expr {
+    var kids = [callee]
+    var names = [""]
+    for a in args {
+        kids.push(a)
+    }
+    var e = cv_e("call", "", kids)
+    var nm: [str] = []
+    for a in args {
+        nm.push("")
+    }
+    e.names = nm
+    return e
+}
+
+fn cv_method(recv: Expr, name: str, args: [Expr]) -> Expr {
+    var kids = [recv]
+    for a in args {
+        kids.push(a)
+    }
+    return cv_e("method", name, kids)
+}
+
+fn cv_stmt(kind: str) -> Stmt {
+    return Stmt(kind, "", [], cv_ty("any"), false, false, cv_none(), cv_none(), [], [], [], cv_ty("unit"), false, [], [], [], [])
+}
+
+fn cv_expr_stmt(e: Expr) -> Stmt {
+    var s = cv_stmt("expr")
+    s.e = e
+    return s
+}
+
+fn cv_is_none(e: Expr) -> bool {
+    return e.kind == "none"
+}
+
+// the receiver-less "x.0" style field names of a tuple are plain ints
+fn cv_is_int_text(s: str) -> bool {
+    if s.len() == 0 {
+        return false
+    }
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c < '0' or c > '9' {
+            return false
+        }
+    }
+    return true
+}
+
+fn cv_is_upper_start(s: str) -> bool {
+    if s.len() == 0 {
+        return false
+    }
+    let c = s.byte_at(0)
+    return c >= 'A' and c <= 'Z'
+}
+
+fn cv_is_all_upper(s: str) -> bool {
+    var any_letter = false
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c >= 'a' and c <= 'z' {
+            return false
+        }
+        if c >= 'A' and c <= 'Z' {
+            any_letter = true
+        }
+    }
+    return any_letter
+}
+
+fn cv_snake(s: str) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c >= 'A' and c <= 'Z' {
+            if i > 0 and s.byte_at(i - 1) != '_' and not (s.byte_at(i - 1) >= 'A' and s.byte_at(i - 1) <= 'Z') {
+                sb.add("_")
+            }
+            sb.add_byte(byte(int(c) + 32))
+        } else {
+            sb.add_byte(c)
+        }
+    }
+    return sb.finish()
+}
+
+fn cv_indent(n: int) -> str {
+    return "    " * n
+}
+
+// diagnostics: the first one wins, the converter prints them at the end
+var cv_notes: [str] = []
+
+fn cv_note(msg: str) {
+    cv_notes.push(msg)
+}

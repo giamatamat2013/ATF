@@ -1,0 +1,455 @@
+// lex.atf - one tokenizer for ATF, Python and Rust.
+//
+// Comments are dropped. Python gets indent and dedent tokens, ATF and Python get nl tokens at the
+// end of a statement (an ATF line that obviously continues does not get one), Rust gets none.
+
+struct Tok {
+    kind: str,     // id int float str op nl indent dedent eof life
+    text: str,
+    flag: str,     // str: "" normal, "r" raw, "f" f-string, "c" char or byte literal, "b" byte string
+    line: int
+}
+
+let CV_OPS3 = ["..=", ">>>", "<<=", ">>=", "**=", "//=", "..."]
+let CV_OPS2 = ["==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "->", "=>", "::", "..", "<<", ">>", "**", "//", "??", "|=", "&=", "^=", ":="]
+let CV_CONT_OPS = [",", "+", "-", "*", "/", "%", "==", "!=", "<=", ">=", "&&", "||", "=", "+=", "-=", "*=", "/=", "%=", "??", "(", "[", ".", "&", "^", "**", "//"]
+let CV_CONT_NEXT = [".", "&&", "||", "??"]
+
+fn cv_idc(c: byte) -> bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 128
+}
+
+fn cv_digit(c: byte) -> bool {
+    return c >= '0' and c <= '9'
+}
+
+fn cv_lex_fail(msg: str, line: int) {
+    cv_note("line {line}: {msg}")
+}
+
+// index just after the closing quote of the ATF string that starts at i (s[i] == '"')
+fn cv_scan_atf_str(s: str, i0: int) -> int {
+    var i = i0
+    if i + 2 < s.len() and s[i..i + 3] == "\"\"\"" {
+        i += 3
+        while i + 2 < s.len() {
+            if s[i..i + 3] == "\"\"\"" {
+                return i + 3
+            }
+            i += 1
+        }
+        return s.len()
+    }
+    i += 1
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '\\' {
+            i += 2
+        } else if c == '"' {
+            return i + 1
+        } else if c == '{' and i + 1 < s.len() and s.byte_at(i + 1) != '"' and s.byte_at(i + 1) != '}' {
+            i = cv_scan_atf_interp(s, i)
+        } else {
+            i += 1
+        }
+    }
+    return s.len()
+}
+
+// s[i] == '{' inside an ATF string: the index just after the matching }
+fn cv_scan_atf_interp(s: str, i0: int) -> int {
+    var i = i0 + 1
+    var depth = 1
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '"' {
+            i = cv_scan_atf_str(s, i)
+        } else if c == '{' {
+            depth += 1
+            i += 1
+        } else if c == '}' {
+            depth -= 1
+            i += 1
+            if depth == 0 {
+                return i
+            }
+        } else {
+            i += 1
+        }
+    }
+    return s.len()
+}
+
+// a quoted string with backslash escapes (Rust and Python); q is the quote byte, n = 1 or 3 quotes
+fn cv_scan_plain(s: str, i0: int, q: byte, n: int, raw: bool) -> int {
+    var i = i0 + n
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '\\' and not raw {
+            i += 2
+        } else if c == q {
+            if n == 1 {
+                return i + 1
+            }
+            if i + 2 < s.len() and s.byte_at(i + 1) == q and s.byte_at(i + 2) == q {
+                return i + 3
+            }
+            i += 1
+        } else {
+            i += 1
+        }
+    }
+    return s.len()
+}
+
+fn cv_lex(src: str, lang: str) -> [Tok] {
+    var toks: [Tok] = []
+    var i = 0
+    var line = 1
+    var depth = 0
+    var at_line_start = true
+    var indents = [0]
+    let n = src.len()
+    while i < n {
+        if lang == "py" and at_line_start and depth == 0 {
+            // measure the indentation, skip blank and comment-only lines
+            var col = 0
+            var j = i
+            while j < n and (src.byte_at(j) == ' ' or src.byte_at(j) == '\t') {
+                if src.byte_at(j) == '\t' {
+                    col += 4
+                } else {
+                    col += 1
+                }
+                j += 1
+            }
+            if j >= n {
+                i = j
+                break
+            }
+            let c = src.byte_at(j)
+            if c == '\n' or c == '\r' or c == '#' {
+                while j < n and src.byte_at(j) != '\n' {
+                    j += 1
+                }
+                if j < n {
+                    j += 1
+                    line += 1
+                }
+                i = j
+                continue
+            }
+            at_line_start = false
+            i = j
+            if col > indents.last() {
+                indents.push(col)
+                toks.push(Tok("indent", "", "", line))
+            } else {
+                while col < indents.last() {
+                    indents.pop()
+                    toks.push(Tok("dedent", "", "", line))
+                }
+            }
+        }
+        let c = src.byte_at(i)
+        if c == '\n' {
+            line += 1
+            i += 1
+            at_line_start = true
+            if lang == "rs" or depth > 0 {
+                continue
+            }
+            if toks.len() == 0 or toks.last().kind == "nl" or toks.last().kind == "indent" or toks.last().kind == "dedent" {
+                continue
+            }
+            let last = toks.last()
+            if lang == "atf" and last.kind == "op" and last.text in CV_CONT_OPS {
+                continue
+            }
+            if lang == "atf" and last.kind == "id" and (last.text == "and" or last.text == "or" or last.text == "not") {
+                continue
+            }
+            toks.push(Tok("nl", "", "", line - 1))
+            continue
+        }
+        if c == ' ' or c == '\t' or c == '\r' {
+            i += 1
+            continue
+        }
+        if c == '\\' and lang == "py" and i + 1 < n and (src.byte_at(i + 1) == '\n' or src.byte_at(i + 1) == '\r') {
+            i += 2
+            if i < n and src.byte_at(i) == '\n' {
+                i += 1
+            }
+            line += 1
+            continue
+        }
+        // comments
+        if (lang == "atf" or lang == "rs") and c == '/' and i + 1 < n and src.byte_at(i + 1) == '/' {
+            while i < n and src.byte_at(i) != '\n' {
+                i += 1
+            }
+            continue
+        }
+        if (lang == "atf" or lang == "rs") and c == '/' and i + 1 < n and src.byte_at(i + 1) == '*' {
+            i += 2
+            while i + 1 < n and not (src.byte_at(i) == '*' and src.byte_at(i + 1) == '/') {
+                if src.byte_at(i) == '\n' {
+                    line += 1
+                }
+                i += 1
+            }
+            i += 2
+            continue
+        }
+        if lang == "py" and c == '#' {
+            while i < n and src.byte_at(i) != '\n' {
+                i += 1
+            }
+            continue
+        }
+        // strings
+        var prefix = ""
+        var qi = i
+        if lang == "py" and cv_idc(c) {
+            // string prefixes: f r b u fr rb
+            var j = i
+            while j < n and j - i < 3 and cv_idc(src.byte_at(j)) {
+                j += 1
+            }
+            if j < n and (src.byte_at(j) == '"' or src.byte_at(j) == '\'') {
+                let p = src[i..j].lower()
+                if p == "f" or p == "r" or p == "b" or p == "u" or p == "fr" or p == "rf" or p == "br" or p == "rb" {
+                    prefix = p
+                    qi = j
+                }
+            }
+        }
+        if lang == "rs" and (c == 'r' or c == 'b') and i + 1 < n {
+            // r"..", r#".."#, b"..", br"..", b'x'
+            var j = i
+            var isr = false
+            if src.byte_at(j) == 'b' {
+                j += 1
+            }
+            if j < n and src.byte_at(j) == 'r' {
+                isr = true
+                j += 1
+            }
+            var hashes = 0
+            while isr and j < n and src.byte_at(j) == '#' {
+                hashes += 1
+                j += 1
+            }
+            if j < n and src.byte_at(j) == '"' and (isr or src.byte_at(i) == 'b') {
+                if isr {
+                    let close = "\"" + "#" * hashes
+                    var k = j + 1
+                    while k < n and src[k..min(k + close.len(), n)] != close {
+                        if src.byte_at(k) == '\n' {
+                            line += 1
+                        }
+                        k += 1
+                    }
+                    toks.push(Tok("str", src[j + 1..k], "r", line))
+                    i = min(k + close.len(), n)
+                    continue
+                }
+                qi = j
+                prefix = "b"
+            } else if j < n and src.byte_at(i) == 'b' and src.byte_at(i + 1) == '\'' {
+                qi = i + 1
+                prefix = "b"
+            }
+        }
+        let qc = src.byte_at(qi)
+        if qc == '"' or (lang == "py" and qc == '\'') {
+            var end = 0
+            var bodystart = qi + 1
+            var bodyend = 0
+            if lang == "atf" {
+                end = cv_scan_atf_str(src, qi)
+                if qi + 2 < n and src[qi..qi + 3] == "\"\"\"" {
+                    bodystart = qi + 3
+                    bodyend = end - 3
+                } else {
+                    bodyend = end - 1
+                }
+            } else {
+                var nq = 1
+                if qi + 2 < n and src.byte_at(qi + 1) == qc and src.byte_at(qi + 2) == qc and lang == "py" {
+                    nq = 3
+                }
+                end = cv_scan_plain(src, qi, qc, nq, prefix.contains("r"))
+                bodystart = qi + nq
+                bodyend = end - nq
+            }
+            if bodyend < bodystart {
+                bodyend = bodystart
+            }
+            var flag = ""
+            if prefix.contains("f") {
+                flag = "f"
+            } else if prefix.contains("r") {
+                flag = "r"
+            }
+            toks.push(Tok("str", src[bodystart..bodyend], flag, line))
+            for k in qi..end {
+                if src.byte_at(k) == '\n' {
+                    line += 1
+                }
+            }
+            i = end
+            continue
+        }
+        if lang == "atf" and c == 'r' and i + 1 < n and src.byte_at(i + 1) == '"' {
+            var k = i + 2
+            while k < n and src.byte_at(k) != '"' {
+                if src.byte_at(k) == '\n' {
+                    line += 1
+                }
+                k += 1
+            }
+            toks.push(Tok("str", src[i + 2..k], "r", line))
+            i = k + 1
+            continue
+        }
+        // char / byte literals and Rust lifetimes
+        if qc == '\'' and (lang == "atf" or lang == "rs") {
+            var k = qi + 1
+            if k < n and src.byte_at(k) == '\\' {
+                k += 2
+                while k < n and src.byte_at(k) != '\'' {
+                    k += 1
+                }
+                toks.push(Tok("str", src[qi + 1..k], "c", line))
+                i = k + 1
+                continue
+            }
+            // one (possibly multi-byte) character and a closing quote
+            var m = k + 1
+            while m < n and src.byte_at(m) >= 128 and src.byte_at(m) < 192 {
+                m += 1
+            }
+            if m < n and src.byte_at(m) == '\'' {
+                toks.push(Tok("str", src[k..m], "c", line))
+                i = m + 1
+                continue
+            }
+            // a lifetime such as 'a
+            var e = qi + 1
+            while e < n and cv_idc(src.byte_at(e)) {
+                e += 1
+            }
+            toks.push(Tok("life", src[qi..e], "", line))
+            i = e
+            continue
+        }
+        // numbers
+        if cv_digit(c) or (c == '.' and i + 1 < n and cv_digit(src.byte_at(i + 1)) and lang == "py") {
+            var j = i
+            var is_float = false
+            if c == '0' and i + 1 < n and (src.byte_at(i + 1) == 'x' or src.byte_at(i + 1) == 'b' or src.byte_at(i + 1) == 'o' or src.byte_at(i + 1) == 'X') {
+                j += 2
+                while j < n and (cv_idc(src.byte_at(j))) {
+                    j += 1
+                }
+                var txt = src[i..j].replace("_", "")
+                // a Rust suffix such as u8 after a hex number is not handled: hex digits eat it
+                toks.push(Tok("int", txt, "", line))
+                i = j
+                continue
+            }
+            while j < n and (cv_digit(src.byte_at(j)) or src.byte_at(j) == '_') {
+                j += 1
+            }
+            if j + 1 < n and src.byte_at(j) == '.' and cv_digit(src.byte_at(j + 1)) {
+                is_float = true
+                j += 1
+                while j < n and (cv_digit(src.byte_at(j)) or src.byte_at(j) == '_') {
+                    j += 1
+                }
+            } else if j < n and src.byte_at(j) == '.' and lang == "py" and not (j + 1 < n and (src.byte_at(j + 1) == '.' or cv_idc(src.byte_at(j + 1)))) {
+                is_float = true
+                j += 1
+            } else if lang == "rs" and j < n and src.byte_at(j) == '.' and not (j + 1 < n and (src.byte_at(j + 1) == '.' or cv_idc(src.byte_at(j + 1)))) {
+                is_float = true
+                j += 1
+            }
+            if j < n and (src.byte_at(j) == 'e' or src.byte_at(j) == 'E') {
+                var k = j + 1
+                if k < n and (src.byte_at(k) == '-' or src.byte_at(k) == '+') {
+                    k += 1
+                }
+                if k < n and cv_digit(src.byte_at(k)) {
+                    is_float = true
+                    j = k
+                    while j < n and cv_digit(src.byte_at(j)) {
+                        j += 1
+                    }
+                }
+            }
+            let numtxt = src[i..j].replace("_", "")
+            // Rust suffix: i32 u8 f64 usize
+            var k = j
+            while k < n and cv_idc(src.byte_at(k)) {
+                k += 1
+            }
+            if lang == "rs" and k > j {
+                let suf = src[j..k]
+                if suf.starts_with("f") {
+                    is_float = true
+                }
+                j = k
+            }
+            if is_float {
+                toks.push(Tok("float", numtxt, "", line))
+            } else {
+                toks.push(Tok("int", numtxt, "", line))
+            }
+            i = j
+            continue
+        }
+        // identifiers
+        if cv_idc(c) {
+            var j = i
+            while j < n and cv_idc(src.byte_at(j)) {
+                j += 1
+            }
+            toks.push(Tok("id", src[i..j], "", line))
+            i = j
+            continue
+        }
+        // operators
+        var op = ""
+        if i + 2 < n and src[i..i + 3] in CV_OPS3 {
+            op = src[i..i + 3]
+        } else if i + 1 < n and src[i..i + 2] in CV_OPS2 {
+            op = src[i..i + 2]
+        } else {
+            op = src[i..i + 1]
+        }
+        if op == "(" or op == "[" {
+            depth += 1
+        } else if op == ")" or op == "]" {
+            depth -= 1
+            if depth < 0 {
+                depth = 0
+            }
+        }
+        if lang == "atf" and toks.len() > 0 and toks.last().kind == "nl" and op in CV_CONT_NEXT {
+            toks.pop()
+        }
+        toks.push(Tok("op", op, "", line))
+        i += op.len()
+    }
+    if lang != "rs" and toks.len() > 0 and toks.last().kind != "nl" and toks.last().kind != "dedent" {
+        toks.push(Tok("nl", "", "", line))
+    }
+    while indents.len() > 1 {
+        indents.pop()
+        toks.push(Tok("dedent", "", "", line))
+    }
+    toks.push(Tok("eof", "", "", line))
+    return toks
+}

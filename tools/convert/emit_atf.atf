@@ -1,0 +1,853 @@
+// emit_atf.atf - prints the tree as ATF.
+
+var cv_lines: [str] = []
+var cv_ind = 0
+
+fn cv_line(text: str) {
+    if text == "" {
+        cv_lines.push("")
+    } else {
+        cv_lines.push(cv_indent(cv_ind) + text)
+    }
+}
+
+fn cv_lines_text() -> str {
+    return "\n".join(cv_lines) + "\n"
+}
+
+// ---------------------------------------------------------------- types
+
+fn cv_atf_type(t: Ty) -> str {
+    let n = t.name
+    if n == "array" and t.args.len() == 1 {
+        return "[" + cv_atf_type(t.args[0]) + "]"
+    }
+    if n == "map" and t.args.len() == 2 {
+        return "\{" + cv_atf_type(t.args[0]) + ": " + cv_atf_type(t.args[1]) + "}"
+    }
+    if n == "tuple" {
+        var parts: [str] = []
+        for a in t.args {
+            parts.push(cv_atf_type(a))
+        }
+        return "(" + ", ".join(parts) + ")"
+    }
+    if n == "opt" and t.args.len() == 1 {
+        return cv_atf_type(t.args[0]) + "?"
+    }
+    if n == "result" and t.args.len() == 2 {
+        return "Result<" + cv_atf_type(t.args[0]) + ", " + cv_atf_type(t.args[1]) + ">"
+    }
+    if n == "fn" and t.args.len() >= 1 {
+        var parts: [str] = []
+        for i in 0..t.args.len() - 1 {
+            parts.push(cv_atf_type(t.args[i]))
+        }
+        let ret = t.args.last()
+        var s = "fn(" + ", ".join(parts) + ")"
+        if ret.name != "unit" {
+            s = s + " -> " + cv_atf_type(ret)
+        }
+        return s
+    }
+    if t.args.len() > 0 {
+        var parts: [str] = []
+        for a in t.args {
+            parts.push(cv_atf_type(a))
+        }
+        return n + "<" + ", ".join(parts) + ">"
+    }
+    return n
+}
+
+// ---------------------------------------------------------------- strings
+
+fn cv_atf_escape(s: str) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == '\\' {
+            sb.add("\\\\")
+        } else if c == '"' {
+            sb.add("\\\"")
+        } else if c == '\n' {
+            sb.add("\\n")
+        } else if c == '\t' {
+            sb.add("\\t")
+        } else if c == '\r' {
+            sb.add("\\r")
+        } else if c == '{' {
+            sb.add("\\\{")
+        } else if c == 0 {
+            sb.add("\\0")
+        } else {
+            sb.add_byte(c)
+        }
+    }
+    return sb.finish()
+}
+
+fn cv_atf_byte(s: str) -> str {
+    if s == "\n" {
+        return "'\\n'"
+    }
+    if s == "\t" {
+        return "'\\t'"
+    }
+    if s == "\r" {
+        return "'\\r'"
+    }
+    if s == "\\" {
+        return "'\\\\'"
+    }
+    if s == "'" {
+        return "'\\''"
+    }
+    if s == "\0" {
+        return "'\\0'"
+    }
+    return "'" + s + "'"
+}
+
+// ---------------------------------------------------------------- expressions
+
+fn cv_atf_binprec(op: str) -> int {
+    if op == "??" {
+        return 1
+    }
+    if op == "or" {
+        return 2
+    }
+    if op == "and" {
+        return 3
+    }
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "in" or op == "not in" {
+        return 5
+    }
+    if op == "|" {
+        return 6
+    }
+    if op == "^" {
+        return 7
+    }
+    if op == "&" {
+        return 8
+    }
+    if op == "<<" or op == ">>" or op == ">>>" {
+        return 9
+    }
+    if op == "+" or op == "-" {
+        return 10
+    }
+    if op == "*" or op == "/" or op == "%" {
+        return 11
+    }
+    if op == "**" {
+        return 13
+    }
+    return 10
+}
+
+fn cv_atf_prec(e: Expr) -> int {
+    if e.kind == "paren" {
+        return cv_atf_prec(e.kids[0])
+    }
+    if e.kind == "bin" {
+        return cv_atf_binprec(e.text)
+    }
+    if e.kind == "un" {
+        if e.text == "not" {
+            return 4
+        }
+        return 12
+    }
+    if e.kind == "range" {
+        return 4
+    }
+    if e.kind == "if" or e.kind == "lambda" or e.kind == "match" {
+        return 1
+    }
+    return 20
+}
+
+fn cv_atf_expr(e: Expr, min: int) -> str {
+    let s = cv_atf_expr_raw(e)
+    if cv_atf_prec(e) < min {
+        return "(" + s + ")"
+    }
+    return s
+}
+
+fn cv_atf_list(items: [Expr]) -> str {
+    var parts: [str] = []
+    for x in items {
+        parts.push(cv_atf_expr(x, 1))
+    }
+    return ", ".join(parts)
+}
+
+fn cv_atf_float(t: str) -> str {
+    if t.contains(".") or t.contains("e") or t.contains("E") or t == "inf" {
+        return t
+    }
+    return t + ".0"
+}
+
+fn cv_atf_expr_raw(e: Expr) -> str {
+    let k = e.kind
+    if k == "int" or k == "bool" or k == "nil" {
+        return e.text
+    }
+    if k == "float" {
+        return cv_atf_float(e.text)
+    }
+    if k == "str" {
+        return "\"" + cv_atf_escape(e.text) + "\""
+    }
+    if k == "byte" {
+        return cv_atf_byte(e.text)
+    }
+    if k == "name" {
+        return e.text
+    }
+    if k == "paren" {
+        return cv_atf_expr_raw(e.kids[0])
+    }
+    if k == "fstr" {
+        var sb = str_builder()
+        sb.add("\"")
+        for i in 0..e.kids.len() {
+            let p = e.kids[i]
+            if p.kind == "str" {
+                sb.add(cv_atf_escape(p.text))
+            } else {
+                sb.add("\{")
+                sb.add(cv_atf_expr(p, 1))
+                if e.names[i] != "" {
+                    sb.add(":" + e.names[i])
+                }
+                sb.add("}")
+            }
+        }
+        sb.add("\"")
+        return sb.finish()
+    }
+    if k == "bin" {
+        return cv_atf_bin(e)
+    }
+    if k == "un" {
+        if e.text == "not" {
+            return "not " + cv_atf_expr(e.kids[0], 5)
+        }
+        return e.text + cv_atf_expr(e.kids[0], 12)
+    }
+    if k == "call" {
+        return cv_atf_call(e)
+    }
+    if k == "method" {
+        return cv_atf_expr(e.kids[0], 15) + "." + e.text + "(" + cv_atf_args(e) + ")"
+    }
+    if k == "field" {
+        return cv_atf_expr(e.kids[0], 15) + "." + e.text
+    }
+    if k == "index" {
+        return cv_atf_expr(e.kids[0], 15) + "[" + cv_atf_expr(e.kids[1], 1) + "]"
+    }
+    if k == "slice" {
+        var lo = ""
+        var hi = ""
+        if not cv_is_none(e.kids[1]) {
+            lo = cv_atf_expr(e.kids[1], 5)
+        }
+        if not cv_is_none(e.kids[2]) {
+            hi = cv_atf_expr(e.kids[2], 5)
+        }
+        return cv_atf_expr(e.kids[0], 15) + "[" + lo + ".." + hi + "]"
+    }
+    if k == "range" {
+        var op = ".."
+        if e.text == "incl" {
+            op = "..="
+        }
+        var s = cv_atf_expr(e.kids[0], 5) + op
+        if not cv_is_none(e.kids[1]) {
+            s = s + cv_atf_expr(e.kids[1], 5)
+        }
+        if e.kids.len() > 2 {
+            s = s + " step " + cv_atf_expr(e.kids[2], 5)
+        }
+        return s
+    }
+    if k == "array" {
+        return "[" + cv_atf_list(e.kids) + "]"
+    }
+    if k == "map" {
+        var parts: [str] = []
+        var i = 0
+        while i + 1 < e.kids.len() {
+            parts.push(cv_atf_expr(e.kids[i], 1) + ": " + cv_atf_expr(e.kids[i + 1], 1))
+            i += 2
+        }
+        return "\{" + ", ".join(parts) + "}"
+    }
+    if k == "tuple" {
+        if e.kids.len() == 1 {
+            return "(" + cv_atf_expr(e.kids[0], 1) + ",)"
+        }
+        return "(" + cv_atf_list(e.kids) + ")"
+    }
+    if k == "structlit" {
+        var parts: [str] = []
+        for i in 0..e.kids.len() {
+            parts.push(e.names[i] + ": " + cv_atf_expr(e.kids[i], 1))
+        }
+        return e.text + "\{ " + ", ".join(parts) + " }"
+    }
+    if k == "lambda" {
+        var plist: [str] = []
+        for i in 0..e.names.len() {
+            if e.ty.name == "params" and i < e.ty.args.len() and e.ty.args[i].name != "any" {
+                plist.push(e.names[i] + ": " + cv_atf_type(e.ty.args[i]))
+            } else {
+                plist.push(e.names[i])
+            }
+        }
+        var params = ", ".join(plist)
+        if e.body.len() > 0 {
+            var parts: [str] = []
+            for s in e.body {
+                parts.push(cv_atf_inline_stmt(s))
+            }
+            return "|" + params + "| \{ " + "; ".join(parts) + " }"
+        }
+        return "|" + params + "| " + cv_atf_expr(e.kids[0], 1)
+    }
+    if k == "if" {
+        return "if " + cv_atf_expr(e.kids[0], 1) + " \{ " + cv_atf_expr(e.kids[1], 1) + " } else \{ " + cv_atf_expr(e.kids[2], 1) + " }"
+    }
+    if k == "comp" {
+        var vars = ", ".join(e.names)
+        var s = "[" + cv_atf_expr(e.kids[0], 1) + " for " + vars + " in " + cv_atf_expr(e.kids[1], 2)
+        if not cv_is_none(e.kids[2]) {
+            s = s + " if " + cv_atf_expr(e.kids[2], 2)
+        }
+        return s + "]"
+    }
+    if k == "unwrap" {
+        return cv_atf_expr(e.kids[0], 15) + "!"
+    }
+    if k == "try" {
+        return cv_atf_expr(e.kids[0], 15) + "?"
+    }
+    if k == "cast" {
+        let n = e.text
+        if n == "int" or n == "float" or n == "byte" or n == "str" {
+            return n + "(" + cv_atf_expr(e.kids[0], 1) + ")"
+        }
+        return cv_atf_expr(e.kids[0], 12) + " as " + cv_atf_type(e.ty)
+    }
+    if k == "match" {
+        return cv_atf_match_text(e)
+    }
+    return ""
+}
+
+fn cv_atf_inline_stmt(s: Stmt) -> str {
+    let saved_lines = cv_lines
+    let saved_ind = cv_ind
+    cv_lines = []
+    cv_ind = 0
+    cv_atf_stmt(s)
+    let text = " ".join(cv_lines)
+    cv_lines = saved_lines
+    cv_ind = saved_ind
+    return text.trim()
+}
+
+// the arguments of a call or method call: kids[1..], names[i - 1] is the name of kids[i]
+fn cv_atf_args(e: Expr) -> str {
+    var parts: [str] = []
+    for i in 1..e.kids.len() {
+        var s = cv_atf_expr(e.kids[i], 1)
+        if i - 1 < e.names.len() and e.names[i - 1] != "" {
+            s = e.names[i - 1] + ": " + s
+        }
+        parts.push(s)
+    }
+    return ", ".join(parts)
+}
+
+fn cv_atf_bin(e: Expr) -> str {
+    let op = e.text
+    let p = cv_atf_binprec(op)
+    var lmin = p
+    var rmin = p + 1
+    if op == "**" {
+        lmin = p + 1
+        rmin = p
+    }
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "in" or op == "not in" {
+        // comparisons do not chain in ATF
+        lmin = p + 1
+    }
+    // Python's / always gives a float
+    if op == "/" and e.flag {
+        let ta = cv_infer(e.kids[0])
+        let tb = cv_infer(e.kids[1])
+        if ta.name != "float" and tb.name != "float" {
+            return "float(" + cv_atf_expr(e.kids[0], 1) + ") / " + cv_atf_expr(e.kids[1], rmin)
+        }
+    }
+    return cv_atf_expr(e.kids[0], lmin) + " " + op + " " + cv_atf_expr(e.kids[1], rmin)
+}
+
+fn cv_atf_call(e: Expr) -> str {
+    let callee = e.kids[0]
+    if callee.kind == "name" and callee.text == "array_repeat" and e.kids.len() == 3 {
+        let el = e.kids[1]
+        let n = cv_atf_expr(e.kids[2], 1)
+        if el.kind == "int" and el.text == "0" {
+            return "array_make::<int>(" + n + ")"
+        }
+        if el.kind == "float" and (el.text == "0.0" or el.text == "0") {
+            return "array_make::<float>(" + n + ")"
+        }
+        if el.kind == "bool" and el.text == "false" {
+            return "array_make::<bool>(" + n + ")"
+        }
+        return "[" + cv_atf_expr(el, 1) + " for _ in 0.." + n + "]"
+    }
+    return cv_atf_expr(callee, 15) + "(" + cv_atf_args(e) + ")"
+}
+
+// ---------------------------------------------------------------- patterns
+
+fn cv_atf_pattern(p: Expr) -> str {
+    let k = p.kind
+    if k == "pwild" {
+        return "_"
+    }
+    if k == "pbind" {
+        return p.text
+    }
+    if k == "pvariant" {
+        if p.kids.len() == 0 {
+            return p.text
+        }
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_atf_pattern(x))
+        }
+        return p.text + "(" + ", ".join(parts) + ")"
+    }
+    if k == "ptuple" {
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_atf_pattern(x))
+        }
+        return "(" + ", ".join(parts) + ")"
+    }
+    if k == "por" {
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_atf_pattern(x))
+        }
+        return " | ".join(parts)
+    }
+    if k == "prange" {
+        var op = ".."
+        if p.text == "incl" {
+            op = "..="
+        }
+        return cv_atf_expr(p.kids[0], 5) + op + cv_atf_expr(p.kids[1], 5)
+    }
+    return cv_atf_expr(p, 5)
+}
+
+fn cv_atf_arms(arms: [Arm]) {
+    for a in arms {
+        var head = cv_atf_pattern(a.pat)
+        if not cv_is_none(a.guard) {
+            head = head + " if " + cv_atf_expr(a.guard, 1)
+        }
+        if a.body.len() == 1 {
+            let s = a.body[0]
+            if s.kind == "expr" or s.kind == "return" or s.kind == "break" or s.kind == "continue" or s.kind == "assign" {
+                cv_line(head + " => " + cv_atf_inline_stmt(s))
+                continue
+            }
+        }
+        cv_line(head + " => \{")
+        cv_ind += 1
+        cv_atf_block(a.body)
+        cv_ind -= 1
+        cv_line("}")
+    }
+}
+
+// a match used as a value: the text has line breaks at the current indentation
+fn cv_atf_match_text(e: Expr) -> str {
+    let saved_lines = cv_lines
+    let saved_ind = cv_ind
+    cv_lines = []
+    cv_ind = saved_ind + 1
+    cv_atf_arms(e.arms)
+    var text = "match " + cv_atf_expr(e.kids[0], 1) + " \{\n" + "\n".join(cv_lines) + "\n" + cv_indent(saved_ind) + "}"
+    cv_lines = saved_lines
+    cv_ind = saved_ind
+    return text
+}
+
+// ---------------------------------------------------------------- statements
+
+fn cv_atf_params(params: [Param]) -> str {
+    var parts: [str] = []
+    for p in params {
+        var s = p.name
+        if p.has_ty {
+            s = s + ": " + cv_atf_type(p.ty)
+        }
+        if p.has_def {
+            s = s + " = " + cv_atf_expr(p.def, 1)
+        }
+        parts.push(s)
+    }
+    return ", ".join(parts)
+}
+
+fn cv_atf_generics(g: [str]) -> str {
+    if g.len() == 0 {
+        return ""
+    }
+    return "<" + ", ".join(g) + ">"
+}
+
+fn cv_atf_block(body: [Stmt]) {
+    var i = 0
+    while i < body.len() {
+        cv_atf_stmt_at(body, i)
+        i += 1
+    }
+}
+
+fn cv_atf_stmt(s: Stmt) {
+    cv_atf_stmt_at([s], 0)
+}
+
+// an empty list or map literal needs a type in ATF: look at what the code does with it afterwards
+fn cv_atf_guess_container(name: str, rest: [Stmt], is_map: bool) -> str {
+    for s in rest {
+        if s.kind == "expr" and s.e.kind == "method" and s.e.text == "push" and s.e.kids[0].kind == "name" and s.e.kids[0].text == name and s.e.kids.len() == 2 and not is_map {
+            let t = cv_infer(s.e.kids[1])
+            if t.name != "any" {
+                return "[" + cv_atf_type(t) + "]"
+            }
+        }
+        if s.kind == "assign" and s.e.kind == "index" and s.e.kids[0].kind == "name" and s.e.kids[0].text == name and is_map {
+            let kt = cv_infer(s.e.kids[1])
+            let vt = cv_infer(s.e2)
+            if kt.name != "any" and vt.name != "any" {
+                return "\{" + cv_atf_type(kt) + ": " + cv_atf_type(vt) + "}"
+            }
+        }
+        if s.kind == "for" or s.kind == "while" or s.kind == "if" or s.kind == "loop" {
+            let r = cv_atf_guess_container(name, s.body, is_map)
+            if r != "" {
+                return r
+            }
+        }
+    }
+    return ""
+}
+
+fn cv_atf_stmt_at(body: [Stmt], idx: int) {
+    let s = body[idx]
+    let k = s.kind
+    if k == "let" or k == "const" {
+        var kw = "let"
+        if k == "const" {
+            kw = "const"
+        } else if s.flag {
+            kw = "var"
+        }
+        var target = s.text
+        if s.text == "" {
+            target = "(" + ", ".join(s.names) + ")"
+        }
+        var line = kw + " " + target
+        var ty_text = ""
+        if s.has_ty {
+            ty_text = cv_atf_type(s.ty)
+        }
+        let is_empty_array = s.e.kind == "array" and s.e.kids.len() == 0
+        let is_empty_map = s.e.kind == "map" and s.e.kids.len() == 0
+        if ty_text == "" and (is_empty_array or is_empty_map) {
+            var rest: [Stmt] = []
+            for j in idx + 1..body.len() {
+                rest.push(body[j])
+            }
+            ty_text = cv_atf_guess_container(s.text, rest, is_empty_map)
+            if ty_text == "" {
+                ty_text = "[int]"
+                if is_empty_map {
+                    ty_text = "\{str: int}"
+                }
+                cv_note("the type of '{s.text}' is a guess ({ty_text}), please check it")
+            }
+            if kw == "let" {
+                kw = "var"
+                line = "var " + target
+            }
+        }
+        if ty_text != "" {
+            line = line + ": " + ty_text
+        }
+        if not cv_is_none(s.e) {
+            line = line + " = " + cv_atf_expr(s.e, 1)
+        }
+        cv_line(line)
+        return
+    }
+    if k == "assign" {
+        var lhs = cv_atf_expr(s.e, 1)
+        var rhs = cv_atf_expr(s.e2, 1)
+        if s.e.kind == "tuple" {
+            lhs = cv_atf_list(s.e.kids)
+        }
+        if s.e2.kind == "tuple" and s.e.kind == "tuple" {
+            rhs = cv_atf_list(s.e2.kids)
+        }
+        var op = s.text
+        if op == "/=" and s.flag {
+            // Python's /= makes a float
+            cv_line(lhs + " = float(" + lhs + ") / " + cv_atf_expr(s.e2, 11))
+            return
+        }
+        cv_line(lhs + " " + op + " " + rhs)
+        return
+    }
+    if k == "expr" {
+        cv_line(cv_atf_expr(s.e, 1))
+        return
+    }
+    if k == "if" or k == "iflet" {
+        cv_atf_if(s, "if")
+        return
+    }
+    if k == "while" or k == "whilelet" or k == "loop" {
+        var label = ""
+        if s.text != "" {
+            label = s.text + ": "
+        }
+        var head = ""
+        if k == "loop" or (k == "while" and s.e.kind == "bool" and s.e.text == "true") {
+            head = "loop"
+        } else if k == "whilelet" {
+            head = "while let " + cv_atf_pattern(s.e) + " = " + cv_atf_expr(s.e2, 1)
+        } else {
+            head = "while " + cv_atf_expr(s.e, 1)
+        }
+        cv_line(label + head + " \{")
+        cv_ind += 1
+        cv_atf_block(s.body)
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "for" {
+        var label = ""
+        if s.text != "" {
+            label = s.text + ": "
+        }
+        var vars = ", ".join(s.names)
+        if s.flag and s.names.len() > 1 {
+            vars = "(" + vars + ")"
+        }
+        cv_line(label + "for " + vars + " in " + cv_atf_expr(s.e, 5) + " \{")
+        cv_ind += 1
+        cv_atf_block(s.body)
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "break" or k == "continue" {
+        if s.text != "" {
+            cv_line(k + " " + s.text)
+        } else {
+            cv_line(k)
+        }
+        return
+    }
+    if k == "return" {
+        if cv_is_none(s.e) {
+            cv_line("return")
+        } else if s.e.kind == "tuple" {
+            cv_line("return (" + cv_atf_list(s.e.kids) + ")")
+        } else {
+            cv_line("return " + cv_atf_expr(s.e, 1))
+        }
+        return
+    }
+    if k == "defer" {
+        cv_line("defer " + cv_atf_expr(s.e, 1))
+        return
+    }
+    if k == "import" {
+        cv_line("import \"" + s.text + "\"")
+        return
+    }
+    if k == "match" {
+        cv_line("match " + cv_atf_expr(s.e, 1) + " \{")
+        cv_ind += 1
+        cv_atf_arms(s.arms)
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "fn" {
+        cv_atf_fn(s)
+        return
+    }
+    if k == "struct" {
+        cv_line("struct " + s.text + cv_atf_generics(s.generics) + " \{")
+        cv_ind += 1
+        for i in 0..s.fields.len() {
+            var f = s.fields[i]
+            var sep = ","
+            if i == s.fields.len() - 1 {
+                sep = ""
+            }
+            var t = "any"
+            if f.has_ty {
+                t = cv_atf_type(f.ty)
+            }
+            var d = ""
+            if f.has_def {
+                d = " = " + cv_atf_expr(f.def, 1)
+            }
+            cv_line(f.name + ": " + t + d + sep)
+        }
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "enum" {
+        cv_line("enum " + s.text + cv_atf_generics(s.generics) + " \{")
+        cv_ind += 1
+        for i in 0..s.variants.len() {
+            let v = s.variants[i]
+            var sep = ","
+            if i == s.variants.len() - 1 {
+                sep = ""
+            }
+            var line = v.name
+            if v.tys.len() > 0 {
+                var parts: [str] = []
+                for t in v.tys {
+                    parts.push(cv_atf_type(t))
+                }
+                line = line + "(" + ", ".join(parts) + ")"
+                if v.names.len() > 0 {
+                    line = line + "  // " + ", ".join(v.names)
+                }
+            }
+            if v.has_value {
+                line = line + " = {v.value}"
+            }
+            cv_line(line + sep)
+        }
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "impl" {
+        cv_line("impl" + cv_atf_generics(s.generics) + " " + cv_atf_type(s.ty) + " \{")
+        cv_ind += 1
+        for i in 0..s.body.len() {
+            if i > 0 {
+                cv_line("")
+            }
+            cv_atf_fn(s.body[i])
+        }
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "skip" {
+        return
+    }
+}
+
+fn cv_atf_fn(s: Stmt) {
+    var head = "fn " + s.text + cv_atf_generics(s.generics) + "(" + cv_atf_params(s.params) + ")"
+    if s.has_ret {
+        head = head + " -> " + cv_atf_type(s.ret)
+    }
+    cv_line(head + " \{")
+    cv_ind += 1
+    cv_atf_block(s.body)
+    cv_ind -= 1
+    cv_line("}")
+}
+
+fn cv_atf_if(s: Stmt, kw: str) {
+    var head = ""
+    if s.kind == "iflet" {
+        head = kw + " let " + cv_atf_pattern(s.e) + " = " + cv_atf_expr(s.e2, 1)
+    } else {
+        head = kw + " " + cv_atf_expr(s.e, 1)
+    }
+    cv_line(head + " \{")
+    cv_ind += 1
+    cv_atf_block(s.body)
+    cv_ind -= 1
+    cv_atf_else(s)
+}
+
+fn cv_atf_else(s: Stmt) {
+    if s.els.len() == 0 {
+        cv_line("}")
+        return
+    }
+    if s.els.len() == 1 and (s.els[0].kind == "if" or s.els[0].kind == "iflet") and s.els[0].text == "" {
+        // } else if ...
+        let inner = s.els[0]
+        var head = ""
+        if inner.kind == "iflet" {
+            head = "} else if let " + cv_atf_pattern(inner.e) + " = " + cv_atf_expr(inner.e2, 1)
+        } else {
+            head = "} else if " + cv_atf_expr(inner.e, 1)
+        }
+        cv_line(head + " \{")
+        cv_ind += 1
+        cv_atf_block(inner.body)
+        cv_ind -= 1
+        cv_atf_else(inner)
+        return
+    }
+    cv_line("} else \{")
+    cv_ind += 1
+    cv_atf_block(s.els)
+    cv_ind -= 1
+    cv_line("}")
+}
+
+// top level: items separated by blank lines
+fn cv_atf_program(prog: [Stmt]) -> str {
+    cv_lines = []
+    cv_ind = 0
+    var prev = ""
+    for s in prog {
+        let is_item = s.kind == "fn" or s.kind == "struct" or s.kind == "enum" or s.kind == "impl"
+        if prev != "" and (is_item or prev == "item") {
+            cv_line("")
+        }
+        cv_atf_stmt_at([s], 0)
+        if is_item {
+            prev = "item"
+        } else {
+            prev = "other"
+        }
+    }
+    return cv_lines_text()
+}

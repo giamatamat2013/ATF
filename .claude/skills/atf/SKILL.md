@@ -188,6 +188,9 @@ fn main() { let app = App(); ui_run("Demo", 420, 300, || view(app)) }
 - Assigning a struct/array/map aliases it; use `copy(x)` (shallow) for an independent one.
 - Windows only (64-bit Windows 10/11). Output is buffered; it is flushed on exit, on input and on stderr writes.
 
+## Converting to and from Python and Rust
+`atf run tools/convert.atf prog.py --to atf` (also `.rs`, and `--to py|rs`, `-o out`) translates between ATF, Python and Rust. The result is a starting point, not a finished port: comments are dropped, types and ownership are guessed, and library functions with no counterpart (`str_builder`, `regex`, `std/ui`) are kept as they are. Notes about guesses go to stderr as `note: ...`. After converting to ATF, always run `atf check` and fix what it reports. Details: `docs/CONVERT.md`.
+
 ## Performance habits
 `str_builder()` or `join` instead of `+` in loops; `array_make::<T>(n)` / `array_with_cap::<T>(n)`; `byte_at` instead of `s[i]` in hot loops; avoid `int?` in tight loops (sentinels are ~7x faster); `x * x` over `x ** 2`; `set.has` / `key in map` over `array.contains`; measure with `clock()`.
 

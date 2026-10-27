@@ -1,0 +1,18 @@
+// the converter in tools/convert: Python, Rust and ATF read into one tree and written back out
+import "../../tools/convert/api"
+
+fn show(title: str, text: str) {
+    println("--- {title}")
+    println(text)
+}
+
+fn main() {
+    let py = include_str("convert_sample_py.txt")
+    let rs = include_str("convert_sample_rs.txt")
+    let atf = include_str("convert_sample_atf.txt")
+    show("py -> atf", cv_convert(py, "py", "atf"))
+    show("rs -> atf", cv_convert(rs, "rs", "atf"))
+    show("atf -> atf", cv_convert(atf, "atf", "atf"))
+    show("atf -> py", cv_convert(atf, "atf", "py"))
+    show("atf -> rs", cv_convert(atf, "atf", "rs"))
+}

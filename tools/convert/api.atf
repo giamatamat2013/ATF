@@ -1,0 +1,61 @@
+// api.atf - cv_convert(), the one call that turns source text in one language into another.
+// tools/convert.atf is the command line around it.
+
+import "ast"
+import "lex"
+import "parse_base"
+import "lower"
+import "infer"
+import "parse_brace"
+import "parse_py"
+import "emit_atf"
+import "emit_py"
+import "emit_rs"
+
+// read the source text in language `from` (atf, py or rs) and print it in language `to`
+fn cv_convert(src: str, from: str, to: str) -> str {
+    cv_lang = from
+    cv_load(src, from)
+    var prog: [Stmt] = []
+    if from == "py" {
+        prog = cv_py_program()
+    } else {
+        prog = cv_program()
+    }
+    cv_collect_tables(prog)
+    if to == "atf" {
+        return cv_atf_program(prog)
+    }
+    if to == "py" {
+        return cv_py_emit_program(prog)
+    }
+    return cv_rs_emit_program(prog)
+}
+
+// signatures and field types, so that the writers can guess types of calls and fields
+fn cv_collect_tables(prog: [Stmt]) {
+    for s in prog {
+        if s.kind == "fn" and s.has_ret {
+            cv_fn_rets[s.text] = s.ret
+        }
+        if s.kind == "struct" {
+            for f in s.fields {
+                if f.has_ty {
+                    cv_field_tys["." + f.name] = f.ty
+                    cv_field_tys[s.text + "." + f.name] = f.ty
+                    if f.ty.name == "map" {
+                        cv_mark_map("." + f.name)
+                    }
+                }
+            }
+        }
+        if s.kind == "impl" {
+            for m in s.body {
+                if m.has_ret {
+                    cv_fn_rets[s.text + "." + m.text] = m.ret
+                    cv_fn_rets["." + m.text] = m.ret
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,1604 @@
+// parse_base.atf - parser state and the expression parser shared by the three languages.
+//
+// cv_lang is "atf", "py" or "rs". The statement parsers (parse_atf, parse_py, parse_rs) sit on top.
+
+var cv_lang = "atf"
+var cv_toks: [Tok] = []
+var cv_pos = 0
+
+fn cv_load(src: str, lang: str) {
+    cv_lang = lang
+    cv_toks = cv_lex(src, lang)
+    cv_pos = 0
+}
+
+fn cv_peek() -> Tok {
+    return cv_toks[cv_pos]
+}
+
+fn cv_peek_at(k: int) -> Tok {
+    let p = cv_pos + k
+    if p >= cv_toks.len() {
+        return cv_toks[cv_toks.len() - 1]
+    }
+    return cv_toks[p]
+}
+
+fn cv_next() -> Tok {
+    let t = cv_toks[cv_pos]
+    if cv_pos < cv_toks.len() - 1 {
+        cv_pos += 1
+    }
+    return t
+}
+
+fn cv_is_op(t: Tok, op: str) -> bool {
+    return t.kind == "op" and t.text == op
+}
+
+fn cv_is_id(t: Tok, name: str) -> bool {
+    return t.kind == "id" and t.text == name
+}
+
+fn cv_at_op(op: str) -> bool {
+    return cv_is_op(cv_peek(), op)
+}
+
+fn cv_at_id(name: str) -> bool {
+    return cv_is_id(cv_peek(), name)
+}
+
+fn cv_eat_op(op: str) -> bool {
+    if cv_at_op(op) {
+        cv_next()
+        return true
+    }
+    return false
+}
+
+fn cv_eat_id(name: str) -> bool {
+    if cv_at_id(name) {
+        cv_next()
+        return true
+    }
+    return false
+}
+
+fn cv_fail(msg: str) {
+    let t = cv_peek()
+    cv_note("line {t.line}: {msg} (at '{t.text}')")
+}
+
+fn cv_expect_op(op: str) {
+    if not cv_eat_op(op) {
+        cv_fail("expected '{op}'")
+        // skip the offending token so that parsing makes progress
+        if cv_peek().kind != "eof" {
+            cv_next()
+        }
+    }
+}
+
+fn cv_skip_nl() {
+    while cv_peek().kind == "nl" {
+        cv_next()
+    }
+}
+
+fn cv_ident() -> str {
+    let t = cv_peek()
+    if t.kind == "id" {
+        cv_next()
+        return t.text
+    }
+    cv_fail("expected a name")
+    if t.kind != "eof" {
+        cv_next()
+    }
+    return "_error"
+}
+
+// ---------------------------------------------------------------- strings
+
+fn cv_utf8(cp: int) -> str {
+    var sb = str_builder()
+    if cp < 128 {
+        sb.add_byte(byte(cp))
+    } else if cp < 2048 {
+        sb.add_byte(byte(192 + (cp >> 6)))
+        sb.add_byte(byte(128 + (cp & 63)))
+    } else if cp < 65536 {
+        sb.add_byte(byte(224 + (cp >> 12)))
+        sb.add_byte(byte(128 + ((cp >> 6) & 63)))
+        sb.add_byte(byte(128 + (cp & 63)))
+    } else {
+        sb.add_byte(byte(240 + (cp >> 18)))
+        sb.add_byte(byte(128 + ((cp >> 12) & 63)))
+        sb.add_byte(byte(128 + ((cp >> 6) & 63)))
+        sb.add_byte(byte(128 + (cp & 63)))
+    }
+    return sb.finish()
+}
+
+fn cv_hexval(s: str) -> int {
+    var v = 0
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c >= '0' and c <= '9' {
+            v = v * 16 + int(c - '0')
+        } else if c >= 'a' and c <= 'f' {
+            v = v * 16 + int(c - 'a') + 10
+        } else if c >= 'A' and c <= 'F' {
+            v = v * 16 + int(c - 'A') + 10
+        }
+    }
+    return v
+}
+
+// the text of a string with its backslash escapes resolved
+fn cv_unescape(s: str) -> str {
+    if not s.contains("\\") {
+        return s
+    }
+    var sb = str_builder()
+    var i = 0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c != '\\' or i + 1 >= s.len() {
+            sb.add_byte(c)
+            i += 1
+            continue
+        }
+        let d = s.byte_at(i + 1)
+        i += 2
+        if d == 'n' {
+            sb.add("\n")
+        } else if d == 't' {
+            sb.add("\t")
+        } else if d == 'r' {
+            sb.add("\r")
+        } else if d == '0' {
+            sb.add_byte(0)
+        } else if d == 'x' and i + 1 < s.len() {
+            sb.add_byte(byte(cv_hexval(s[i..i + 2])))
+            i += 2
+        } else if d == 'u' and i < s.len() and s.byte_at(i) == '{' {
+            var j = i + 1
+            while j < s.len() and s.byte_at(j) != '}' {
+                j += 1
+            }
+            sb.add(cv_utf8(cv_hexval(s[i + 1..j])))
+            i = j + 1
+        } else if d == 'u' and i + 3 < s.len() {
+            sb.add(cv_utf8(cv_hexval(s[i..i + 4])))
+            i += 4
+        } else if d == '\n' {
+            // a Rust line continuation: skip the line break and the indentation
+            while i < s.len() and (s.byte_at(i) == ' ' or s.byte_at(i) == '\t' or s.byte_at(i) == '\n' or s.byte_at(i) == '\r') {
+                i += 1
+            }
+        } else {
+            sb.add_byte(d)
+        }
+    }
+    return sb.finish()
+}
+
+// split "{expr:spec}" at the colon that starts the format spec, outside brackets and strings
+fn cv_split_spec(s: str) -> (str, str) {
+    var depth = 0
+    var i = 0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '"' {
+            i += 1
+            while i < s.len() and s.byte_at(i) != '"' {
+                if s.byte_at(i) == '\\' {
+                    i += 1
+                }
+                i += 1
+            }
+        } else if c == '(' or c == '[' or c == '{' {
+            depth += 1
+        } else if c == ')' or c == ']' or c == '}' {
+            depth -= 1
+        } else if c == ':' and depth == 0 {
+            if i + 1 < s.len() and s.byte_at(i + 1) == ':' {
+                i += 1
+            } else {
+                return (s[..i], s[i + 1..])
+            }
+        } else if c == '!' and depth == 0 and cv_lang == "py" and i + 1 < s.len() and (s.byte_at(i + 1) == 'r' or s.byte_at(i + 1) == 's') {
+            // Python conversion flags (!r, !s) are dropped
+            return (s[..i], "")
+        }
+        i += 1
+    }
+    return (s, "")
+}
+
+// parse a piece of source text with the current language, as an expression
+fn cv_parse_snippet(text: str) -> Expr {
+    let saved_toks = cv_toks
+    let saved_pos = cv_pos
+    cv_toks = cv_lex(text, cv_lang)
+    cv_pos = 0
+    let e = cv_expr()
+    cv_toks = saved_toks
+    cv_pos = saved_pos
+    return e
+}
+
+// the string token t as an expression: "str" or, with interpolation, "fstr"
+fn cv_string_expr(t: Tok) -> Expr {
+    if t.flag == "c" {
+        // a character / byte literal
+        return cv_lit("byte", cv_unescape(t.text))
+    }
+    let interp = (cv_lang == "atf" and t.flag != "r") or (cv_lang == "py" and t.flag == "f")
+    let body = t.text
+    if not interp {
+        if t.flag == "r" {
+            return cv_lit("str", body)
+        }
+        return cv_lit("str", cv_unescape(body))
+    }
+    var kids: [Expr] = []
+    var specs: [str] = []
+    var lit = str_builder()
+    var i = 0
+    while i < body.len() {
+        let c = body.byte_at(i)
+        if c == '\\' and cv_lang == "atf" and i + 1 < body.len() {
+            // keep the pair, unescape later (\{ and \} become plain braces)
+            let d = body.byte_at(i + 1)
+            if d == '{' or d == '}' {
+                lit.add_byte(d)
+            } else {
+                lit.add(cv_unescape(body[i..i + 2]))
+            }
+            i += 2
+            if d == 'x' and i + 1 < body.len() {
+                lit.add(cv_unescape("\\x" + body[i..i + 2]).replace("\\x", ""))
+            }
+        } else if c == '\\' and cv_lang == "py" and i + 1 < body.len() {
+            lit.add(cv_unescape(body[i..i + 2]))
+            i += 2
+        } else if c == '{' and cv_lang == "py" and i + 1 < body.len() and body.byte_at(i + 1) == '{' {
+            lit.add("{")
+            i += 2
+        } else if c == '}' and cv_lang == "py" and i + 1 < body.len() and body.byte_at(i + 1) == '}' {
+            lit.add("}")
+            i += 2
+        } else if c == '{' and (i + 1 >= body.len() or body.byte_at(i + 1) == '"' or body.byte_at(i + 1) == '}') {
+            // a lone brace is just a brace
+            lit.add_byte(c)
+            i += 1
+        } else if c == '{' {
+            let end = cv_scan_atf_interp(body, i)
+            let inner = body[i + 1..end - 1]
+            let (ex, spec) = cv_split_spec(inner)
+            let text = lit.finish()
+            if text.len() > 0 {
+                kids.push(cv_lit("str", text))
+                specs.push("")
+            }
+            lit = str_builder()
+            kids.push(cv_parse_snippet(ex.trim()))
+            specs.push(spec)
+            i = end
+        } else {
+            lit.add_byte(c)
+            i += 1
+        }
+    }
+    let rest = lit.finish()
+    if kids.len() == 0 {
+        return cv_lit("str", rest)
+    }
+    if rest.len() > 0 {
+        kids.push(cv_lit("str", rest))
+        specs.push("")
+    }
+    var e = cv_e("fstr", "", kids)
+    e.names = specs
+    return e
+}
+
+// ---------------------------------------------------------------- operators
+
+// binding power of a binary operator in the current language, 0 = not a binary operator
+fn cv_binprec(t: Tok) -> int {
+    var op = t.text
+    if t.kind == "id" {
+        if cv_lang == "atf" and (op == "and" or op == "or" or op == "in") {
+            // fall through
+        } else if cv_lang == "py" and (op == "and" or op == "or" or op == "in" or op == "is" or op == "not") {
+            // fall through
+        } else {
+            return 0
+        }
+    } else if t.kind != "op" {
+        return 0
+    }
+    if op == "??" {
+        return 1
+    }
+    if op == "||" or op == "or" {
+        return 2
+    }
+    if op == "&&" or op == "and" {
+        return 3
+    }
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "in" or op == "is" or op == "not" {
+        return 5
+    }
+    if op == "|" {
+        return 6
+    }
+    if op == "^" {
+        return 7
+    }
+    if op == "&" {
+        return 8
+    }
+    if op == "<<" or op == ">>" or op == ">>>" {
+        return 9
+    }
+    if op == "+" or op == "-" {
+        return 10
+    }
+    if op == "*" or op == "/" or op == "%" or op == "//" {
+        return 11
+    }
+    if op == "**" {
+        return 13
+    }
+    return 0
+}
+
+// the ATF spelling of an operator
+fn cv_canon_op(op: str) -> str {
+    if op == "&&" {
+        return "and"
+    }
+    if op == "||" {
+        return "or"
+    }
+    if op == "//" {
+        return "/"
+    }
+    return op
+}
+
+fn cv_expr() -> Expr {
+    return cv_expr_bp(1)
+}
+
+// stop at '{' for conditions: Rust and ATF struct literals are not allowed in an if / while head
+var cv_no_struct = 0
+
+fn cv_expr_bp(min: int) -> Expr {
+    var lhs = cv_unary()
+    while true {
+        let t = cv_peek()
+        // ranges
+        if (cv_lang == "rs" or cv_lang == "atf") and t.kind == "op" and (t.text == ".." or t.text == "..=") and min <= 4 {
+            cv_next()
+            var hi = cv_none()
+            if cv_range_end_follows() {
+                hi = cv_expr_bp(5)
+            }
+            var r = cv_e("range", "", [lhs, hi])
+            if t.text == "..=" {
+                r.text = "incl"
+            }
+            // ATF "0..10 step 2": the step becomes a third kid
+            if cv_lang == "atf" and cv_at_id("step") {
+                cv_next()
+                r.kids.push(cv_expr_bp(5))
+            }
+            lhs = r
+            continue
+        }
+        // ternary: a if c else b (Python)
+        if cv_lang == "py" and cv_is_id(t, "if") and min <= 1 {
+            cv_next()
+            let c = cv_expr_bp(2)
+            if not cv_eat_id("else") {
+                cv_fail("expected 'else'")
+            }
+            let other = cv_expr_bp(1)
+            lhs = cv_e("if", "", [c, lhs, other])
+            continue
+        }
+        var prec = cv_binprec(t)
+        if prec == 0 or prec < min {
+            break
+        }
+        // "not in" and "is not" (Python), "not in" (ATF)
+        var op = t.text
+        if t.kind == "id" and op == "not" {
+            if cv_is_id(cv_peek_at(1), "in") {
+                cv_next()
+                op = "not in"
+            } else {
+                break
+            }
+        } else if t.kind == "id" and op == "is" {
+            if cv_is_id(cv_peek_at(1), "not") {
+                cv_next()
+                op = "!="
+            } else {
+                op = "=="
+            }
+        }
+        cv_next()
+        // a ">>" that closes generics is never an operator here; "|" followed by a closure is not either
+        var rhs = cv_none()
+        if op == "**" {
+            rhs = cv_expr_bp(prec)
+        } else if op == "??" {
+            rhs = cv_expr_bp(prec + 1)
+        } else {
+            rhs = cv_expr_bp(prec + 1)
+        }
+        var node = cv_bin(cv_canon_op(op), lhs, rhs)
+        if cv_lang == "py" and op == "/" {
+            node.flag = true
+        }
+        // chained comparisons (Python): a < b < c  ==>  a < b and b < c
+        if cv_lang == "py" and prec == 5 and cv_binprec(cv_peek()) == 5 {
+            let second_op_tok = cv_peek()
+            var op2 = second_op_tok.text
+            if second_op_tok.kind == "id" and op2 == "not" and cv_is_id(cv_peek_at(1), "in") {
+                cv_next()
+                op2 = "not in"
+            }
+            cv_next()
+            let rhs2 = cv_expr_bp(6)
+            node = cv_bin("and", node, cv_bin(op2, rhs, rhs2))
+        }
+        lhs = node
+    }
+    return lhs
+}
+
+// is there an expression after '..'?
+fn cv_range_end_follows() -> bool {
+    let t = cv_peek()
+    if t.kind == "nl" or t.kind == "eof" {
+        return false
+    }
+    if t.kind == "op" and (t.text == ")" or t.text == "]" or t.text == "}" or t.text == "," or t.text == ";" or t.text == "{" or t.text == "=>") {
+        return cv_no_struct == 0 and t.text == "{" and false
+    }
+    if t.kind == "id" and (t.text == "step") {
+        return false
+    }
+    return true
+}
+
+fn cv_unary() -> Expr {
+    let t = cv_peek()
+    if t.kind == "op" {
+        if t.text == "-" {
+            cv_next()
+            let operand = cv_unary()
+            if (operand.kind == "int" or operand.kind == "float") and not operand.text.starts_with("-") {
+                return cv_lit(operand.kind, "-" + operand.text)
+            }
+            return cv_un("-", operand)
+        }
+        if t.text == "+" {
+            cv_next()
+            return cv_unary()
+        }
+        if t.text == "!" and (cv_lang == "atf" or cv_lang == "rs") {
+            cv_next()
+            return cv_un("not", cv_unary())
+        }
+        if t.text == "~" {
+            cv_next()
+            return cv_un("~", cv_unary())
+        }
+        if cv_lang == "rs" and (t.text == "&" or t.text == "&&") {
+            // borrows are dropped
+            cv_next()
+            cv_eat_id("mut")
+            return cv_unary()
+        }
+        if cv_lang == "rs" and t.text == "*" {
+            // dereference is dropped
+            cv_next()
+            return cv_unary()
+        }
+    }
+    if t.kind == "id" and t.text == "not" and (cv_lang == "atf" or cv_lang == "py") {
+        cv_next()
+        // not binds weaker than comparison
+        return cv_un("not", cv_expr_bp(5))
+    }
+    if t.kind == "id" and t.text == "await" and cv_lang == "py" {
+        cv_next()
+        return cv_unary()
+    }
+    return cv_power()
+}
+
+// '**' binds tighter than a unary minus on its left
+fn cv_power() -> Expr {
+    var base = cv_postfix()
+    if cv_at_op("**") {
+        cv_next()
+        let exp = cv_unary()
+        return cv_bin("**", base, exp)
+    }
+    return base
+}
+
+fn cv_args(close: str) -> ([Expr], [str]) {
+    var args: [Expr] = []
+    var names: [str] = []
+    cv_skip_nl()
+    while not cv_at_op(close) and cv_peek().kind != "eof" {
+        var name = ""
+        let t = cv_peek()
+        let t2 = cv_peek_at(1)
+        if t.kind == "id" and ((cv_lang == "atf" and cv_is_op(t2, ":")) or (cv_lang == "py" and cv_is_op(t2, "=") )) {
+            name = t.text
+            cv_next()
+            cv_next()
+        }
+        if cv_lang == "py" and cv_at_op("*") {
+            cv_next()
+        }
+        args.push(cv_expr())
+        names.push(name)
+        cv_skip_nl()
+        if not cv_eat_op(",") {
+            break
+        }
+        cv_skip_nl()
+    }
+    cv_skip_nl()
+    cv_expect_op(close)
+    return (args, names)
+}
+
+fn cv_postfix() -> Expr {
+    var e = cv_primary()
+    while true {
+        let t = cv_peek()
+        if t.kind != "op" {
+            break
+        }
+        if t.text == "(" {
+            cv_next()
+            let (args, names) = cv_args(")")
+            var call = cv_call(e, args)
+            call.names = names
+            e = cv_lower_call(call)
+        } else if t.text == "[" {
+            cv_next()
+            cv_skip_nl()
+            e = cv_index_or_slice(e)
+        } else if t.text == "." {
+            cv_next()
+            let nt = cv_next()
+            var name = nt.text
+            if nt.kind == "float" {
+                // t.0.1 lexes as t . 0.1
+                let parts = name.split(".")
+                e = cv_e("field", parts[0], [e])
+                e = cv_e("field", parts[1], [e])
+                continue
+            }
+            var generic = ""
+            if cv_at_op("::") {
+                // x.collect::<Vec<_>>()
+                cv_next()
+                generic = cv_skip_generic_args()
+            }
+            if cv_at_op("(") {
+                cv_next()
+                let (args, names) = cv_args(")")
+                var m = cv_method(e, name, args)
+                m.names = names
+                m.ty = cv_ty(generic)
+                e = cv_lower_method(m)
+            } else {
+                e = cv_lower_field(e, name)
+            }
+        } else if t.text == "!" and cv_lang == "atf" {
+            cv_next()
+            e = cv_e("unwrap", "", [e])
+        } else if t.text == "?" {
+            cv_next()
+            e = cv_e("try", "", [e])
+        } else if t.text == "::" and cv_lang == "atf" and cv_is_op(cv_peek_at(1), "<") and e.kind == "name" {
+            // array_make::<int>(n)  set_new::<int>()  Stack::<int>{ .. }
+            cv_next()
+            cv_next()
+            let tys = cv_type_list(">")
+            cv_split_close_gt()
+            var parts: [str] = []
+            for ty in tys {
+                parts.push(cv_atf_type(ty))
+            }
+            e = cv_name(e.text + "::<" + ", ".join(parts) + ">")
+        } else if t.text == "::" and cv_lang == "rs" {
+            // path: Type::function, Enum::Variant
+            cv_next()
+            if cv_at_op("<") {
+                cv_skip_generic_args()
+                continue
+            }
+            let name = cv_ident()
+            if e.kind == "name" {
+                e = cv_name(cv_lower_path(e.text + "." + name))
+            } else {
+                e = cv_e("field", name, [e])
+            }
+        } else if t.text == "{" and cv_lang != "py" and cv_no_struct == 0 and e.kind == "name" and cv_looks_like_struct_lit(e) {
+            e = cv_struct_lit(e.text)
+        } else {
+            break
+        }
+        // "as" casts are handled in cv_after_cast below
+    }
+    while cv_at_id("as") and cv_lang != "py" {
+        cv_next()
+        let ty = cv_type()
+        e = cv_e("cast", cv_type_name_of(ty), [e])
+        e.ty = ty
+    }
+    return e
+}
+
+// at '<': skip to the matching '>' and return the first name inside ("" if there is none)
+fn cv_skip_generic_args() -> str {
+    if not cv_at_op("<") {
+        return ""
+    }
+    var first = ""
+    var depth = 0
+    while cv_peek().kind != "eof" {
+        let t = cv_next()
+        if t.kind == "id" and first == "" {
+            first = t.text
+        }
+        if t.kind == "op" and t.text == "<" {
+            depth += 1
+        } else if t.kind == "op" and t.text == ">" {
+            depth -= 1
+        } else if t.kind == "op" and t.text == ">>" {
+            depth -= 2
+        }
+        if depth <= 0 {
+            break
+        }
+    }
+    return first
+}
+
+fn cv_type_name_of(t: Ty) -> str {
+    return t.name
+}
+
+// Name { field: value } needs a capitalised name and "{ ident :" or "{ }" after it
+fn cv_looks_like_struct_lit(e: Expr) -> bool {
+    let last = e.text.split(".").last()
+    if not cv_is_upper_start(last) {
+        return false
+    }
+    let a = cv_peek_at(1)
+    let b = cv_peek_at(2)
+    if a.kind == "nl" {
+        return true
+    }
+    if cv_is_op(a, "}") {
+        return true
+    }
+    if a.kind == "id" and (cv_is_op(b, ":") or cv_is_op(b, ",") or cv_is_op(b, "}")) {
+        return true
+    }
+    if cv_is_op(a, "..") {
+        return true
+    }
+    return false
+}
+
+fn cv_struct_lit(name: str) -> Expr {
+    cv_expect_op("{")
+    cv_skip_nl()
+    var kids: [Expr] = []
+    var names: [str] = []
+    while not cv_at_op("}") and cv_peek().kind != "eof" {
+        if cv_eat_op("..") {
+            cv_expr()
+        } else {
+            let f = cv_ident()
+            if cv_eat_op(":") {
+                kids.push(cv_expr())
+            } else {
+                kids.push(cv_name(f))
+            }
+            names.push(f)
+        }
+        cv_skip_nl()
+        if not cv_eat_op(",") {
+            break
+        }
+        cv_skip_nl()
+    }
+    cv_skip_nl()
+    cv_expect_op("}")
+    var e = cv_e("structlit", name.replace("::", "."), kids)
+    e.names = names
+    return e
+}
+
+fn cv_index_or_slice(base: Expr) -> Expr {
+    // after '[': a, a..b, ..b, a.., a:b (Python), a:b:c is not supported
+    var lo = cv_none()
+    var hi = cv_none()
+    var is_slice = false
+    if cv_at_op("..") or cv_at_op("..=") or cv_at_op(":") {
+        is_slice = true
+    } else {
+        lo = cv_expr()
+        if cv_lang == "py" and cv_at_op(":") {
+            is_slice = true
+        } else if (cv_lang == "rs" or cv_lang == "atf") and lo.kind == "range" {
+            // the range expression already holds both ends
+            cv_skip_nl()
+            cv_expect_op("]")
+            return cv_e("slice", "", [base, lo.kids[0], lo.kids[1]])
+        }
+    }
+    if is_slice {
+        let sep = cv_next()
+        if not cv_at_op("]") and not (cv_lang == "py" and cv_at_op(":")) {
+            hi = cv_expr()
+        }
+        if cv_lang == "py" and cv_at_op(":") {
+            cv_next()
+            cv_note("line {sep.line}: slice step is not supported")
+            cv_expr()
+        }
+        cv_expect_op("]")
+        return cv_e("slice", "", [base, lo, hi])
+    }
+    cv_skip_nl()
+    cv_expect_op("]")
+    return cv_e("index", "", [base, lo])
+}
+
+// ---------------------------------------------------------------- primary expressions
+
+fn cv_primary() -> Expr {
+    let t = cv_next()
+    if t.kind == "int" {
+        return cv_lit("int", t.text)
+    }
+    if t.kind == "float" {
+        return cv_lit("float", t.text)
+    }
+    if t.kind == "str" {
+        return cv_string_expr(t)
+    }
+    if t.kind == "op" {
+        if t.text == "(" {
+            cv_skip_nl()
+            let saved = cv_no_struct
+            cv_no_struct = 0
+            if cv_at_op(")") {
+                cv_next()
+                cv_no_struct = saved
+                return cv_e("tuple", "", [])
+            }
+            let first = cv_expr()
+            cv_skip_nl()
+            if cv_at_op(",") {
+                var items = [first]
+                while cv_eat_op(",") {
+                    cv_skip_nl()
+                    if cv_at_op(")") {
+                        break
+                    }
+                    items.push(cv_expr())
+                    cv_skip_nl()
+                }
+                cv_expect_op(")")
+                cv_no_struct = saved
+                return cv_e("tuple", "", items)
+            }
+            cv_expect_op(")")
+            cv_no_struct = saved
+            return cv_e("paren", "", [first])
+        }
+        if t.text == "[" {
+            return cv_array_literal()
+        }
+        if t.text == "{" and cv_lang != "rs" {
+            return cv_map_literal()
+        }
+        if t.text == "|" and cv_lang != "py" {
+            return cv_lambda_bars()
+        }
+        if t.text == "||" and cv_lang != "py" {
+            return cv_lambda_body([], [])
+        }
+        if t.text == "..." {
+            return cv_name("...")
+        }
+    }
+    if t.kind == "id" {
+        return cv_primary_id(t)
+    }
+    cv_pos -= 1
+    cv_fail("unexpected token in expression")
+    cv_next()
+    return cv_none()
+}
+
+fn cv_array_literal() -> Expr {
+    cv_skip_nl()
+    // Python comprehension [x for x in xs if c] is lowered to map / filter calls
+    var items: [Expr] = []
+    while not cv_at_op("]") and cv_peek().kind != "eof" {
+        items.push(cv_expr())
+        cv_skip_nl()
+        if cv_lang != "rs" and cv_at_id("for") and items.len() == 1 {
+            return cv_comprehension(items[0])
+        }
+        if cv_lang == "rs" and cv_at_op(";") {
+            // [0; n]: a repeated element
+            cv_next()
+            let count = cv_expr()
+            cv_expect_op("]")
+            return cv_call(cv_name("array_repeat"), [items[0], count])
+        }
+        if not cv_eat_op(",") {
+            break
+        }
+        cv_skip_nl()
+    }
+    cv_skip_nl()
+    cv_expect_op("]")
+    return cv_e("array", "", items)
+}
+
+// [expr for v in iter if cond] : kind "comp", names = loop variables, kids = expr, iter, cond
+fn cv_comprehension(item: Expr) -> Expr {
+    cv_next()
+    var vars: [str] = []
+    if cv_eat_op("(") {
+        while not cv_at_op(")") {
+            vars.push(cv_ident())
+            cv_eat_op(",")
+        }
+        cv_next()
+    } else {
+        vars.push(cv_ident())
+        while cv_eat_op(",") {
+            vars.push(cv_ident())
+        }
+    }
+    if not cv_eat_id("in") {
+        cv_fail("expected 'in'")
+    }
+    let iter = cv_expr_bp(2)
+    var cond = cv_none()
+    if cv_eat_id("if") {
+        cond = cv_expr_bp(2)
+    }
+    cv_skip_nl()
+    cv_expect_op("]")
+    var e = cv_e("comp", "", [item, iter, cond])
+    e.names = vars
+    return e
+}
+
+fn cv_map_literal() -> Expr {
+    cv_skip_nl()
+    var kids: [Expr] = []
+    while not cv_at_op("}") and cv_peek().kind != "eof" {
+        kids.push(cv_expr())
+        cv_skip_nl()
+        cv_expect_op(":")
+        cv_skip_nl()
+        kids.push(cv_expr())
+        cv_skip_nl()
+        if not cv_eat_op(",") {
+            break
+        }
+        cv_skip_nl()
+    }
+    cv_skip_nl()
+    cv_expect_op("}")
+    return cv_e("map", "", kids)
+}
+
+// |a, b| body   (the first '|' is already read)
+fn cv_lambda_bars() -> Expr {
+    var names: [str] = []
+    var tys: [Ty] = []
+    while not cv_at_op("|") and cv_peek().kind != "eof" {
+        cv_eat_op("&")
+        cv_eat_id("mut")
+        names.push(cv_ident())
+        if cv_eat_op(":") {
+            tys.push(cv_type())
+        } else {
+            tys.push(cv_ty("any"))
+        }
+        if not cv_eat_op(",") {
+            break
+        }
+    }
+    cv_expect_op("|")
+    return cv_lambda_body(names, tys)
+}
+
+fn cv_lambda_body(names: [str], tys: [Ty]) -> Expr {
+    if cv_eat_op("->") {
+        cv_type()
+    }
+    var e = cv_e("lambda", "", [])
+    e.names = names
+    // the parameter types ride along in ty: params<T1, T2> ("any" where a type is not written)
+    var ptys: [Ty] = []
+    for i in 0..names.len() {
+        if i < tys.len() {
+            ptys.push(tys[i])
+        } else {
+            ptys.push(cv_ty("any"))
+        }
+    }
+    e.ty = Ty("params", ptys)
+    if cv_at_op("{") {
+        e.body = cv_block()
+    } else {
+        e.kids = [cv_expr()]
+    }
+    return e
+}
+
+fn cv_primary_id(t: Tok) -> Expr {
+    let w = t.text
+    if w == "true" or w == "True" {
+        return cv_lit("bool", "true")
+    }
+    if w == "false" or w == "False" {
+        return cv_lit("bool", "false")
+    }
+    if w == "nil" or w == "None" {
+        return cv_lit("nil", "nil")
+    }
+    if w == "lambda" and cv_lang == "py" {
+        var names: [str] = []
+        while not cv_at_op(":") and cv_peek().kind != "eof" {
+            names.push(cv_ident())
+            if cv_eat_op("=") {
+                cv_expr()
+            }
+            if not cv_eat_op(",") {
+                break
+            }
+        }
+        cv_expect_op(":")
+        var e = cv_e("lambda", "", [cv_expr()])
+        e.names = names
+        return e
+    }
+    if w == "match" and cv_lang != "py" {
+        return cv_match_expr()
+    }
+    if w == "if" and cv_lang != "py" {
+        return cv_if_expr()
+    }
+    if w == "self" or w == "Self" {
+        return cv_name(w)
+    }
+    if cv_lang == "rs" and cv_at_op("!") and not cv_is_op(cv_peek_at(1), "=") {
+        return cv_macro(w)
+    }
+    return cv_name(w)
+}
+
+// if c { a } else { b } used as a value (ATF, Rust)
+fn cv_if_expr() -> Expr {
+    let saved = cv_no_struct
+    cv_no_struct = 1
+    let c = cv_expr()
+    cv_no_struct = saved
+    let a = cv_block()
+    var b: [Stmt] = []
+    if cv_eat_id("else") {
+        if cv_at_id("if") {
+            cv_next()
+            b = [cv_expr_stmt(cv_if_expr())]
+        } else {
+            b = cv_block()
+        }
+    }
+    var e = cv_e("if", "", [c, cv_block_value(a), cv_block_value(b)])
+    e.body = a
+    return e
+}
+
+// the value of a block: its last expression statement, or "none"
+fn cv_block_value(b: [Stmt]) -> Expr {
+    if b.len() > 0 and b.last().kind == "expr" {
+        return b.last().e
+    }
+    return cv_none()
+}
+
+fn cv_match_expr() -> Expr {
+    let saved = cv_no_struct
+    cv_no_struct = 1
+    let v = cv_expr()
+    cv_no_struct = saved
+    cv_skip_nl()
+    cv_expect_op("{")
+    cv_skip_nl()
+    var arms: [Arm] = []
+    while not cv_at_op("}") and cv_peek().kind != "eof" {
+        arms.push(cv_arm())
+        cv_skip_nl()
+        cv_eat_op(",")
+        cv_skip_nl()
+    }
+    cv_expect_op("}")
+    var e = cv_e("match", "", [v])
+    e.arms = arms
+    return e
+}
+
+fn cv_arm() -> Arm {
+    cv_eat_op("|")
+    let pat = cv_pattern()
+    var guard = cv_none()
+    if cv_eat_id("if") {
+        guard = cv_expr()
+    }
+    cv_expect_op("=>")
+    cv_skip_nl()
+    var body: [Stmt] = []
+    if cv_at_op("{") {
+        body = cv_block()
+    } else if cv_at_id("return") or cv_at_id("break") or cv_at_id("continue") {
+        body = [cv_simple_stmt()]
+    } else {
+        let e = cv_expr()
+        if cv_at_op("=") or cv_at_op("+=") or cv_at_op("-=") {
+            let op = cv_next().text
+            let rhs = cv_expr()
+            var s = cv_stmt("assign")
+            s.text = op
+            s.e = e
+            s.e2 = rhs
+            body = [s]
+        } else {
+            body = [cv_expr_stmt(e)]
+        }
+    }
+    return Arm(pat, guard, body)
+}
+
+// patterns: _  name  1  "s"  1 | 2  1..=5  Variant(p, ..)  Enum.Variant  (a, b)
+fn cv_pattern() -> Expr {
+    var first = cv_pattern_one()
+    if cv_at_op("|") {
+        var alts = [first]
+        while cv_eat_op("|") {
+            alts.push(cv_pattern_one())
+        }
+        return cv_e("por", "", alts)
+    }
+    return first
+}
+
+fn cv_pattern_one() -> Expr {
+    let t = cv_peek()
+    if t.kind == "op" and t.text == "(" {
+        cv_next()
+        var items: [Expr] = []
+        while not cv_at_op(")") and cv_peek().kind != "eof" {
+            items.push(cv_pattern())
+            if not cv_eat_op(",") {
+                break
+            }
+        }
+        cv_expect_op(")")
+        return cv_e("ptuple", "", items)
+    }
+    if t.kind == "op" and t.text == "&" {
+        cv_next()
+        return cv_pattern_one()
+    }
+    if t.kind == "int" or t.kind == "float" or t.kind == "str" or (t.kind == "op" and t.text == "-") {
+        let lo = cv_unary()
+        if cv_at_op("..=") or cv_at_op("..") {
+            let incl = cv_next().text == "..="
+            let hi = cv_unary()
+            var r = cv_e("prange", "", [lo, hi])
+            if incl {
+                r.text = "incl"
+            }
+            return r
+        }
+        return lo
+    }
+    if t.kind == "id" {
+        if t.text == "_" {
+            cv_next()
+            return cv_e("pwild", "", [])
+        }
+        if t.text == "true" or t.text == "false" or t.text == "True" or t.text == "False" or t.text == "nil" or t.text == "None" {
+            cv_next()
+            return cv_primary_id(t)
+        }
+        cv_next()
+        var path = t.text
+        while cv_at_op(".") or cv_at_op("::") {
+            cv_next()
+            path = path + "." + cv_ident()
+        }
+        if cv_at_op("(") {
+            cv_next()
+            var items: [Expr] = []
+            while not cv_at_op(")") and cv_peek().kind != "eof" {
+                if cv_eat_op("..") {
+                    items.push(cv_e("pwild", "", []))
+                } else {
+                    items.push(cv_pattern())
+                }
+                if not cv_eat_op(",") {
+                    break
+                }
+            }
+            cv_expect_op(")")
+            if cv_lang == "rs" and path == "Some" and items.len() == 1 {
+                return items[0]
+            }
+            if cv_lang == "rs" and (path == "Ok" or path == "Err") {
+                return cv_e("pvariant", "Result." + path, items)
+            }
+            return cv_e("pvariant", path, items)
+        }
+        if cv_lang == "rs" and path == "None" {
+            return cv_lit("nil", "nil")
+        }
+        if path.contains(".") or cv_is_upper_start(path) {
+            return cv_e("pvariant", path, [])
+        }
+        return cv_e("pbind", path, [])
+    }
+    cv_fail("unexpected token in pattern")
+    cv_next()
+    return cv_e("pwild", "", [])
+}
+
+// ---------------------------------------------------------------- Rust macros
+
+// println!("..", a, b)  format!(..)  vec![..]  panic!(..)  assert!(..)  assert_eq!(..)
+fn cv_macro(name: str) -> Expr {
+    cv_expect_op("!")
+    let open = cv_next()
+    var close = ")"
+    if open.text == "[" {
+        close = "]"
+    } else if open.text == "{" {
+        close = "}"
+    }
+    if name == "vec" {
+        if close == "]" {
+            return cv_array_literal()
+        }
+    }
+    let (args, names) = cv_args(close)
+    if name == "println" or name == "print" or name == "eprintln" or name == "eprint" or name == "format" or name == "panic" {
+        var fn_name = name
+        if name == "format" {
+            fn_name = "str"
+        } else if name == "panic" {
+            fn_name = "panic"
+        }
+        if args.len() == 0 {
+            return cv_call(cv_name(fn_name), [])
+        }
+        let msg = cv_rust_format(args)
+        if name == "format" {
+            return msg
+        }
+        return cv_call(cv_name(fn_name), [msg])
+    }
+    if name == "assert" {
+        return cv_call(cv_name("assert"), args)
+    }
+    if name == "assert_eq" and args.len() >= 2 {
+        return cv_call(cv_name("assert"), [cv_bin("==", args[0], args[1])])
+    }
+    if name == "assert_ne" and args.len() >= 2 {
+        return cv_call(cv_name("assert"), [cv_bin("!=", args[0], args[1])])
+    }
+    cv_note("macro {name}! is not supported")
+    return cv_call(cv_name(name + "_macro"), args)
+}
+
+// the first argument is a format string with {} / {:.2} / {name} placeholders
+fn cv_rust_format(args: [Expr]) -> Expr {
+    let fmt = args[0]
+    if fmt.kind != "str" {
+        return fmt
+    }
+    let s = fmt.text
+    var kids: [Expr] = []
+    var specs: [str] = []
+    var lit = str_builder()
+    var next_arg = 1
+    var i = 0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '{' and i + 1 < s.len() and s.byte_at(i + 1) == '{' {
+            lit.add("{")
+            i += 2
+        } else if c == '}' and i + 1 < s.len() and s.byte_at(i + 1) == '}' {
+            lit.add("}")
+            i += 2
+        } else if c == '{' {
+            var j = i + 1
+            while j < s.len() and s.byte_at(j) != '}' {
+                j += 1
+            }
+            let inner = s[i + 1..j]
+            var arg_text = inner
+            var spec = ""
+            let ci = inner.find(":")
+            if ci >= 0 {
+                arg_text = inner[..ci]
+                spec = inner[ci + 1..]
+            }
+            // Rust's "{:.2}" is "{:.2f}" in ATF and Python; "{:?}" has no counterpart
+            if spec == "?" or spec == "#?" {
+                spec = ""
+            }
+            if spec.contains(".") and not spec.ends_with("f") and not spec.ends_with("e") {
+                spec = spec + "f"
+            }
+            var piece = cv_none()
+            if arg_text == "" {
+                if next_arg < args.len() {
+                    piece = args[next_arg]
+                }
+                next_arg += 1
+            } else if cv_is_int_text(arg_text) {
+                let k = int(arg_text) + 1
+                if k < args.len() {
+                    piece = args[k]
+                }
+            } else {
+                piece = cv_name(arg_text)
+            }
+            let text = lit.finish()
+            if text.len() > 0 {
+                kids.push(cv_lit("str", text))
+                specs.push("")
+            }
+            lit = str_builder()
+            kids.push(piece)
+            specs.push(spec)
+            i = j + 1
+        } else {
+            lit.add_byte(c)
+            i += 1
+        }
+    }
+    let rest = lit.finish()
+    if kids.len() == 0 {
+        return cv_lit("str", rest)
+    }
+    if rest.len() > 0 {
+        kids.push(cv_lit("str", rest))
+        specs.push("")
+    }
+    var e = cv_e("fstr", "", kids)
+    e.names = specs
+    return e
+}
+
+// ---------------------------------------------------------------- types
+
+fn cv_type() -> Ty {
+    if cv_lang == "atf" {
+        return cv_type_atf()
+    }
+    if cv_lang == "py" {
+        return cv_type_py()
+    }
+    return cv_type_rs()
+}
+
+fn cv_split_close_gt() {
+    // turn a ">>" token into ">" so that nested generics close one at a time
+    let t = cv_peek()
+    if t.kind == "op" and t.text == ">>" {
+        cv_toks[cv_pos] = Tok("op", ">", "", t.line)
+    } else if t.kind == "op" and t.text == ">=" {
+        cv_toks[cv_pos] = Tok("op", "=", "", t.line)
+    } else {
+        cv_next()
+    }
+}
+
+fn cv_type_list(close: str) -> [Ty] {
+    var args: [Ty] = []
+    while not cv_at_op(close) and cv_peek().kind != "eof" {
+        args.push(cv_type())
+        if not cv_eat_op(",") {
+            break
+        }
+    }
+    return args
+}
+
+fn cv_prim_name(w: str) -> str {
+    if w == "int" or w == "i64" or w == "i32" or w == "i16" or w == "i8" or w == "u64" or w == "u32" or w == "u16" or w == "usize" or w == "isize" or w == "u128" or w == "i128" {
+        return "int"
+    }
+    if w == "float" or w == "f64" or w == "f32" {
+        return "float"
+    }
+    if w == "bool" {
+        return "bool"
+    }
+    if w == "str" or w == "String" or w == "string" {
+        return "str"
+    }
+    if w == "byte" or w == "u8" or w == "char" {
+        return "byte"
+    }
+    return w
+}
+
+fn cv_type_atf() -> Ty {
+    let t = cv_peek()
+    var ty = cv_ty("any")
+    if cv_eat_op("[") {
+        let el = cv_type()
+        cv_expect_op("]")
+        ty = cv_ty1("array", el)
+    } else if cv_eat_op("{") {
+        let k = cv_type()
+        cv_expect_op(":")
+        let v = cv_type()
+        cv_expect_op("}")
+        ty = cv_ty2("map", k, v)
+    } else if cv_eat_op("(") {
+        let items = cv_type_list(")")
+        cv_expect_op(")")
+        ty = Ty("tuple", items)
+    } else if t.kind == "id" and t.text == "fn" {
+        cv_next()
+        cv_expect_op("(")
+        var items = cv_type_list(")")
+        cv_expect_op(")")
+        if cv_eat_op("->") {
+            items.push(cv_type())
+        } else {
+            items.push(cv_ty("unit"))
+        }
+        ty = Ty("fn", items)
+    } else {
+        let name = cv_ident()
+        var args: [Ty] = []
+        if cv_eat_op("<") {
+            args = cv_type_list(">")
+            cv_split_close_gt()
+        }
+        if name == "Result" and args.len() == 2 {
+            ty = Ty("result", args)
+        } else {
+            ty = Ty(cv_prim_name(name), args)
+        }
+    }
+    while cv_at_op("?") {
+        cv_next()
+        ty = cv_ty1("opt", ty)
+    }
+    return ty
+}
+
+fn cv_type_py() -> Ty {
+    let t = cv_peek()
+    var ty = cv_ty("any")
+    if t.kind == "str" {
+        // a quoted forward reference
+        cv_next()
+        return cv_ty(cv_prim_name(t.text))
+    }
+    if cv_at_op("(") {
+        cv_next()
+        let items = cv_type_list(")")
+        cv_expect_op(")")
+        return Ty("tuple", items)
+    }
+    var name = cv_ident()
+    while cv_eat_op(".") {
+        name = cv_ident()
+    }
+    var args: [Ty] = []
+    if cv_eat_op("[") {
+        args = cv_type_list("]")
+        cv_expect_op("]")
+    }
+    if name == "None" {
+        ty = cv_ty("unit")
+    } else if name == "list" or name == "List" or name == "Sequence" or name == "Iterable" {
+        if args.len() == 0 {
+            args = [cv_ty("any")]
+        }
+        ty = Ty("array", args)
+    } else if name == "dict" or name == "Dict" {
+        if args.len() < 2 {
+            args = [cv_ty("any"), cv_ty("any")]
+        }
+        ty = Ty("map", args)
+    } else if name == "tuple" or name == "Tuple" {
+        ty = Ty("tuple", args)
+    } else if name == "Optional" and args.len() == 1 {
+        ty = cv_ty1("opt", args[0])
+    } else if name == "Callable" {
+        ty = Ty("fn", args)
+    } else {
+        ty = Ty(cv_prim_name(name), args)
+    }
+    // X | None
+    while cv_at_op("|") and cv_is_id(cv_peek_at(1), "None") {
+        cv_next()
+        cv_next()
+        ty = cv_ty1("opt", ty)
+    }
+    return ty
+}
+
+fn cv_type_rs() -> Ty {
+    var ty = cv_ty("any")
+    while cv_at_op("&") or cv_at_op("&&") or cv_at_op("*") {
+        cv_next()
+        if cv_peek().kind == "life" {
+            cv_next()
+        }
+        cv_eat_id("mut")
+        cv_eat_id("const")
+    }
+    if cv_peek().kind == "life" {
+        cv_next()
+    }
+    if cv_eat_op("(") {
+        let items = cv_type_list(")")
+        cv_expect_op(")")
+        if items.len() == 0 {
+            return cv_ty("unit")
+        }
+        return Ty("tuple", items)
+    }
+    if cv_eat_op("[") {
+        let el = cv_type()
+        if cv_eat_op(";") {
+            cv_expr()
+        }
+        cv_expect_op("]")
+        return cv_ty1("array", el)
+    }
+    if cv_at_id("dyn") or cv_at_id("impl") {
+        cv_next()
+    }
+    if cv_at_id("fn") or cv_at_id("Fn") or cv_at_id("FnMut") or cv_at_id("FnOnce") {
+        cv_next()
+        cv_expect_op("(")
+        var items = cv_type_list(")")
+        cv_expect_op(")")
+        if cv_eat_op("->") {
+            items.push(cv_type())
+        } else {
+            items.push(cv_ty("unit"))
+        }
+        return Ty("fn", items)
+    }
+    if cv_at_op("!") {
+        cv_next()
+        return cv_ty("unit")
+    }
+    var name = cv_ident()
+    while cv_at_op("::") {
+        cv_next()
+        name = cv_ident()
+    }
+    var args: [Ty] = []
+    if cv_at_op("<") {
+        cv_next()
+        while not cv_at_op(">") and not cv_at_op(">>") and cv_peek().kind != "eof" {
+            if cv_peek().kind == "life" {
+                cv_next()
+            } else if cv_at_op("_") {
+                cv_next()
+                args.push(cv_ty("any"))
+            } else {
+                args.push(cv_type())
+            }
+            if not cv_eat_op(",") {
+                break
+            }
+        }
+        cv_split_close_gt()
+    }
+    if name == "Vec" or name == "VecDeque" or name == "HashSet" or name == "BTreeSet" {
+        if args.len() == 0 {
+            args = [cv_ty("any")]
+        }
+        ty = Ty("array", args)
+    } else if name == "HashMap" or name == "BTreeMap" {
+        if args.len() < 2 {
+            args = [cv_ty("any"), cv_ty("any")]
+        }
+        ty = Ty("map", args)
+    } else if name == "Option" and args.len() == 1 {
+        ty = cv_ty1("opt", args[0])
+    } else if name == "Result" and args.len() >= 1 {
+        if args.len() == 1 {
+            args.push(cv_ty("str"))
+        }
+        ty = Ty("result", args)
+    } else if name == "Box" or name == "Rc" or name == "Arc" or name == "RefCell" {
+        if args.len() == 1 {
+            ty = args[0]
+        } else {
+            ty = cv_ty("any")
+        }
+    } else {
+        ty = Ty(cv_prim_name(name), args)
+    }
+    return ty
+}
+
+// a generic parameter list such as <T, U: Display> ; the bounds are dropped
+fn cv_generic_params() -> [str] {
+    var names: [str] = []
+    if not cv_at_op("<") {
+        return names
+    }
+    cv_next()
+    while not cv_at_op(">") and not cv_at_op(">>") and cv_peek().kind != "eof" {
+        if cv_peek().kind == "life" {
+            cv_next()
+        } else {
+            names.push(cv_ident())
+            if cv_eat_op(":") {
+                // a bound: skip until , or >
+                var depth = 0
+                while cv_peek().kind != "eof" {
+                    if cv_at_op("<") {
+                        depth += 1
+                    } else if cv_at_op(">") and depth == 0 {
+                        break
+                    } else if cv_at_op(">") {
+                        depth -= 1
+                    } else if cv_at_op(",") and depth == 0 {
+                        break
+                    }
+                    cv_next()
+                }
+            }
+        }
+        if not cv_eat_op(",") {
+            break
+        }
+    }
+    cv_split_close_gt()
+    return names
+}

@@ -1,0 +1,706 @@
+// parse_brace.atf - statements and items of the two brace languages, ATF and Rust.
+//
+// They are close enough to share one parser; cv_lang tells them apart where they differ.
+
+fn cv_simple_stmt() -> Stmt {
+    return cv_statement()
+}
+
+// { statements }
+fn cv_block() -> [Stmt] {
+    cv_skip_nl()
+    cv_expect_op("{")
+    var out: [Stmt] = []
+    while true {
+        cv_skip_nl()
+        while cv_eat_op(";") {
+            cv_skip_nl()
+        }
+        if cv_at_op("}") or cv_peek().kind == "eof" {
+            break
+        }
+        let before = cv_pos
+        var s = cv_statement()
+        // Rust: an expression without ';' at the end of a block is its value
+        if cv_lang == "rs" and s.kind == "expr" and cv_at_op("}") {
+            s.flag = true
+        }
+        if s.kind != "skip" {
+            out.push(s)
+        }
+        if cv_pos == before {
+            // no progress: skip a token so that we cannot loop forever
+            cv_next()
+        }
+    }
+    cv_expect_op("}")
+    return out
+}
+
+fn cv_program() -> [Stmt] {
+    var out: [Stmt] = []
+    while true {
+        cv_skip_nl()
+        while cv_eat_op(";") {
+            cv_skip_nl()
+        }
+        if cv_peek().kind == "eof" {
+            break
+        }
+        let before = cv_pos
+        let s = cv_statement()
+        if s.kind != "skip" {
+            out.push(s)
+        }
+        if cv_pos == before {
+            cv_next()
+        }
+    }
+    return out
+}
+
+fn cv_skip_attribute() {
+    // # [ ... ]   or   # ! [ ... ]
+    cv_next()
+    cv_eat_op("!")
+    if cv_at_op("[") {
+        var depth = 0
+        while cv_peek().kind != "eof" {
+            let t = cv_next()
+            if t.kind == "op" and t.text == "[" {
+                depth += 1
+            } else if t.kind == "op" and t.text == "]" {
+                depth -= 1
+                if depth == 0 {
+                    break
+                }
+            }
+        }
+    }
+}
+
+fn cv_skip_to_line_end() {
+    while cv_peek().kind != "nl" and cv_peek().kind != "eof" and not cv_at_op(";") {
+        cv_next()
+    }
+}
+
+fn cv_statement() -> Stmt {
+    cv_skip_nl()
+    let t = cv_peek()
+    if t.kind == "op" and t.text == "#" and cv_lang == "rs" {
+        cv_skip_attribute()
+        return cv_stmt("skip")
+    }
+    if t.kind == "life" {
+        // 'outer: for ...
+        cv_next()
+        cv_expect_op(":")
+        var s = cv_statement()
+        s.text = t.text[1..]
+        return s
+    }
+    if t.kind == "id" {
+        let w = t.text
+        // visibility and other modifiers
+        if cv_lang == "rs" and (w == "pub" or w == "async" or w == "unsafe" or w == "extern") and not cv_is_op(cv_peek_at(1), "(") {
+            cv_next()
+            return cv_statement()
+        }
+        if cv_lang == "rs" and w == "pub" and cv_is_op(cv_peek_at(1), "(") {
+            cv_next()
+            cv_next()
+            while not cv_at_op(")") and cv_peek().kind != "eof" {
+                cv_next()
+            }
+            cv_next()
+            return cv_statement()
+        }
+        if w == "pub" and cv_lang == "atf" {
+            cv_next()
+            return cv_statement()
+        }
+        if w == "let" or w == "var" or w == "const" or w == "static" {
+            // "let" starts an if-let only inside a condition, so this is a declaration
+            return cv_let_stmt()
+        }
+        if w == "fn" and cv_peek_at(1).kind == "id" {
+            return cv_fn_stmt()
+        }
+        if w == "struct" {
+            return cv_struct_stmt()
+        }
+        if w == "enum" {
+            return cv_enum_stmt()
+        }
+        if w == "impl" {
+            return cv_impl_stmt()
+        }
+        if w == "use" and cv_lang == "rs" {
+            cv_skip_to_line_end()
+            return cv_stmt("skip")
+        }
+        if (w == "mod" or w == "trait" or w == "type") and cv_lang == "rs" {
+            cv_note("line {t.line}: '{w}' is not supported and was skipped")
+            cv_skip_item()
+            return cv_stmt("skip")
+        }
+        if (w == "interface" or w == "extern") and cv_lang == "atf" {
+            cv_note("line {t.line}: '{w}' is not supported and was skipped")
+            cv_skip_item()
+            return cv_stmt("skip")
+        }
+        if w == "import" and cv_lang == "atf" {
+            cv_next()
+            var s = cv_stmt("import")
+            let st = cv_next()
+            s.text = st.text
+            return s
+        }
+        if w == "if" {
+            return cv_if_stmt()
+        }
+        if w == "while" {
+            return cv_while_stmt()
+        }
+        if w == "loop" {
+            cv_next()
+            var s = cv_stmt("loop")
+            s.body = cv_block()
+            return s
+        }
+        if w == "for" {
+            return cv_for_stmt()
+        }
+        if w == "match" {
+            cv_next()
+            let m = cv_match_expr()
+            var s = cv_stmt("match")
+            s.e = m.kids[0]
+            s.arms = m.arms
+            return s
+        }
+        if w == "break" or w == "continue" {
+            cv_next()
+            var s = cv_stmt(w)
+            if cv_peek().kind == "id" and cv_peek().line == t.line {
+                s.text = cv_next().text
+            } else if cv_peek().kind == "life" {
+                s.text = cv_next().text[1..]
+            }
+            return s
+        }
+        if w == "return" {
+            cv_next()
+            var s = cv_stmt("return")
+            let nt = cv_peek()
+            if nt.kind != "nl" and nt.kind != "eof" and not cv_is_op(nt, "}") and not cv_is_op(nt, ";") and not cv_is_op(nt, ",") {
+                s.e = cv_expr()
+            }
+            return s
+        }
+        if w == "defer" and cv_lang == "atf" {
+            cv_next()
+            var s = cv_stmt("defer")
+            s.e = cv_expr()
+            return s
+        }
+    }
+    if t.kind == "id" and cv_is_op(cv_peek_at(1), ":") and cv_lang == "atf" and (cv_is_id(cv_peek_at(2), "for") or cv_is_id(cv_peek_at(2), "while") or cv_is_id(cv_peek_at(2), "loop")) {
+        cv_next()
+        cv_next()
+        var s = cv_statement()
+        s.text = t.text
+        return s
+    }
+    return cv_expr_or_assign()
+}
+
+fn cv_skip_item() {
+    // skip an unsupported item: everything up to the end of its { } block or to the end of the line
+    while cv_peek().kind != "eof" and not cv_at_op("{") and cv_peek().kind != "nl" and not cv_at_op(";") {
+        cv_next()
+    }
+    if cv_at_op("{") {
+        var depth = 0
+        while cv_peek().kind != "eof" {
+            let t = cv_next()
+            if t.kind == "op" and t.text == "{" {
+                depth += 1
+            } else if t.kind == "op" and t.text == "}" {
+                depth -= 1
+                if depth == 0 {
+                    break
+                }
+            }
+        }
+    }
+}
+
+fn cv_expr_or_assign() -> Stmt {
+    var e = cv_expr()
+    // a, b = b, a
+    if cv_at_op(",") and cv_lang == "atf" {
+        var targets = [e]
+        while cv_eat_op(",") {
+            targets.push(cv_expr())
+        }
+        e = cv_e("tuple", "", targets)
+    }
+    let t = cv_peek()
+    if t.kind == "op" and (t.text == "=" or t.text == "+=" or t.text == "-=" or t.text == "*=" or t.text == "/=" or t.text == "%=" or t.text == "|=" or t.text == "&=" or t.text == "^=" or t.text == "<<=" or t.text == ">>=" or t.text == "**=") {
+        cv_next()
+        var rhs = cv_expr()
+        if cv_at_op(",") and e.kind == "tuple" {
+            var vals = [rhs]
+            while cv_eat_op(",") {
+                vals.push(cv_expr())
+            }
+            rhs = cv_e("tuple", "", vals)
+        }
+        var s = cv_stmt("assign")
+        s.text = t.text
+        s.e = e
+        s.e2 = rhs
+        return s
+    }
+    // x.push_str(s)  ==>  x += s
+    if e.kind == "method" and e.text == "push_str" and e.kids.len() == 2 {
+        var s = cv_stmt("assign")
+        s.text = "+="
+        s.e = e.kids[0]
+        s.e2 = e.kids[1]
+        return s
+    }
+    // m.insert(k, v) on a map  ==>  m[k] = v
+    if e.kind == "method" and e.text == "insert" and e.kids.len() == 3 and cv_is_map_expr(e.kids[0]) {
+        var s = cv_stmt("assign")
+        s.text = "="
+        s.e = cv_e("index", "", [e.kids[0], e.kids[1]])
+        s.e2 = e.kids[2]
+        return s
+    }
+    return cv_expr_stmt(e)
+}
+
+fn cv_let_stmt() -> Stmt {
+    let kw = cv_next().text
+    var s = cv_stmt("let")
+    if kw == "const" or kw == "static" {
+        s.kind = "const"
+    }
+    s.flag = (kw == "var")
+    if cv_lang == "rs" and cv_eat_id("mut") {
+        s.flag = true
+    }
+    if cv_at_op("(") {
+        cv_next()
+        var names: [str] = []
+        while not cv_at_op(")") and cv_peek().kind != "eof" {
+            cv_eat_id("mut")
+            names.push(cv_ident())
+            if not cv_eat_op(",") {
+                break
+            }
+        }
+        cv_expect_op(")")
+        s.names = names
+    } else {
+        s.text = cv_ident()
+    }
+    if cv_eat_op(":") {
+        s.ty = cv_type()
+        s.has_ty = true
+    }
+    if cv_eat_op("=") {
+        s.e = cv_expr()
+    }
+    if (s.has_ty and s.ty.name == "map") or s.e.kind == "map" {
+        cv_mark_map(s.text)
+    }
+    return s
+}
+
+fn cv_if_stmt() -> Stmt {
+    cv_next()
+    var s = cv_stmt("if")
+    let saved = cv_no_struct
+    cv_no_struct = 1
+    if cv_at_id("let") {
+        cv_next()
+        s.kind = "iflet"
+        s.e = cv_pattern()
+        cv_expect_op("=")
+        s.e2 = cv_expr()
+    } else {
+        s.e = cv_expr()
+    }
+    cv_no_struct = saved
+    s.body = cv_block()
+    // "else" may follow on the next line
+    var k = 0
+    while cv_peek_at(k).kind == "nl" {
+        k += 1
+    }
+    if cv_is_id(cv_peek_at(k), "else") {
+        cv_pos += k
+        cv_next()
+        if cv_at_id("if") {
+            s.els = [cv_if_stmt()]
+        } else {
+            s.els = cv_block()
+        }
+    }
+    return s
+}
+
+fn cv_while_stmt() -> Stmt {
+    cv_next()
+    var s = cv_stmt("while")
+    let saved = cv_no_struct
+    cv_no_struct = 1
+    if cv_at_id("let") {
+        cv_next()
+        s.kind = "whilelet"
+        s.e = cv_pattern()
+        cv_expect_op("=")
+        s.e2 = cv_expr()
+    } else {
+        s.e = cv_expr()
+    }
+    cv_no_struct = saved
+    s.body = cv_block()
+    return s
+}
+
+fn cv_for_stmt() -> Stmt {
+    cv_next()
+    var s = cv_stmt("for")
+    var names: [str] = []
+    var parens = false
+    if cv_at_op("(") {
+        parens = true
+        cv_next()
+        while not cv_at_op(")") and cv_peek().kind != "eof" {
+            cv_eat_id("mut")
+            names.push(cv_ident())
+            if not cv_eat_op(",") {
+                break
+            }
+        }
+        cv_expect_op(")")
+    } else {
+        cv_eat_id("mut")
+        names.push(cv_ident())
+        while cv_eat_op(",") {
+            names.push(cv_ident())
+        }
+    }
+    if not cv_eat_id("in") {
+        cv_fail("expected 'in'")
+    }
+    let saved = cv_no_struct
+    cv_no_struct = 1
+    var e = cv_expr()
+    cv_no_struct = saved
+    s.names = names
+    // for (i, x) in v.iter().enumerate()
+    if names.len() == 2 and e.kind == "method" and e.text == "enumerate" and e.kids.len() == 1 {
+        e = e.kids[0]
+        parens = false
+    } else if names.len() == 2 and parens and cv_is_map_expr(e) {
+        parens = false
+    } else if names.len() == 2 and e.kind == "method" and e.text == "items" and e.kids.len() == 1 {
+        cv_mark_map_expr(e.kids[0])
+        e = e.kids[0]
+        parens = false
+    } else if names.len() == 2 and cv_lang == "rs" and parens {
+        parens = true
+    }
+    // (a..b).rev()  ==>  b-1..a-1 step -1
+    if e.kind == "method" and e.text == "reversed" and e.kids.len() == 1 {
+        var r = e.kids[0]
+        if r.kind == "paren" {
+            r = r.kids[0]
+        }
+        if r.kind == "range" and r.kids.len() == 2 {
+            var hi = r.kids[1]
+            if r.text != "incl" {
+                hi = cv_bin("-", hi, cv_lit("int", "1"))
+            }
+            let lo = cv_bin("-", r.kids[0], cv_lit("int", "1"))
+            e = cv_e("range", "incl", [hi, lo, cv_lit("int", "-1")])
+        }
+    }
+    s.e = e
+    s.flag = parens
+    s.body = cv_block()
+    return s
+}
+
+fn cv_mark_map_expr(e: Expr) {
+    if e.kind == "name" {
+        cv_mark_map(e.text)
+    }
+}
+
+fn cv_params() -> [Param] {
+    var params: [Param] = []
+    cv_skip_nl()
+    while not cv_at_op(")") and cv_peek().kind != "eof" {
+        cv_skip_nl()
+        var p = Param("", cv_ty("any"), false, cv_none(), false)
+        // &self  &mut self  self  mut self
+        if cv_lang == "rs" {
+            cv_eat_op("&")
+            if cv_peek().kind == "life" {
+                cv_next()
+            }
+            cv_eat_id("mut")
+        }
+        p.name = cv_ident()
+        if p.name == "self" {
+            params.push(p)
+            if cv_eat_op(":") {
+                cv_type()
+            }
+        } else {
+            if cv_eat_op(":") {
+                p.ty = cv_type()
+                p.has_ty = true
+            }
+            if cv_eat_op("=") {
+                p.def = cv_expr()
+                p.has_def = true
+            }
+            params.push(p)
+        }
+        cv_skip_nl()
+        if not cv_eat_op(",") {
+            break
+        }
+        cv_skip_nl()
+    }
+    cv_skip_nl()
+    cv_expect_op(")")
+    return params
+}
+
+fn cv_fn_stmt() -> Stmt {
+    cv_next()
+    var s = cv_stmt("fn")
+    s.text = cv_ident()
+    s.generics = cv_generic_params()
+    cv_expect_op("(")
+    s.params = cv_params()
+    for p in s.params {
+        if p.has_ty and p.ty.name == "map" {
+            cv_mark_map(p.name)
+        }
+    }
+    if cv_eat_op("->") {
+        s.ret = cv_type()
+        s.has_ret = s.ret.name != "unit"
+    }
+    if cv_at_id("where") {
+        while not cv_at_op("{") and cv_peek().kind != "eof" {
+            cv_next()
+        }
+    }
+    if cv_at_op("=>") {
+        cv_next()
+        var r = cv_stmt("return")
+        r.e = cv_expr()
+        s.body = [r]
+    } else if cv_at_op("{") {
+        s.body = cv_block()
+        if cv_lang == "rs" and s.has_ret {
+            s.body = cv_tail_return(s.body)
+        }
+    } else {
+        cv_eat_op(";")
+    }
+    return s
+}
+
+// Rust: the value of a block becomes a return statement
+fn cv_tail_return(body: [Stmt]) -> [Stmt] {
+    if body.len() == 0 {
+        return body
+    }
+    var out = copy(body)
+    var last = out.last()
+    if last.kind == "expr" and last.flag {
+        // a bare panic / exit does not return anything
+        var r = cv_stmt("return")
+        r.e = last.e
+        out[out.len() - 1] = r
+    } else if last.kind == "if" or last.kind == "iflet" {
+        last.body = cv_tail_return(last.body)
+        last.els = cv_tail_return(last.els)
+        out[out.len() - 1] = last
+    } else if last.kind == "match" {
+        var arms: [Arm] = []
+        for a in last.arms {
+            var body = copy(a.body)
+            // an arm that is just an expression is the value of the match
+            if body.len() == 1 and body[0].kind == "expr" {
+                var only = body[0]
+                only.flag = true
+                body[0] = only
+            }
+            arms.push(Arm(a.pat, a.guard, cv_tail_return(body)))
+        }
+        last.arms = arms
+        out[out.len() - 1] = last
+    }
+    return out
+}
+
+fn cv_struct_stmt() -> Stmt {
+    cv_next()
+    var s = cv_stmt("struct")
+    s.text = cv_ident()
+    s.generics = cv_generic_params()
+    if cv_at_id("where") {
+        while not cv_at_op("{") and cv_peek().kind != "eof" {
+            cv_next()
+        }
+    }
+    if cv_at_op("(") {
+        // tuple struct
+        cv_next()
+        var k = 0
+        while not cv_at_op(")") and cv_peek().kind != "eof" {
+            cv_eat_id("pub")
+            let ty = cv_type()
+            s.fields.push(Param("f{k}", ty, true, cv_none(), false))
+            k += 1
+            if not cv_eat_op(",") {
+                break
+            }
+        }
+        cv_expect_op(")")
+        cv_eat_op(";")
+        return s
+    }
+    if not cv_at_op("{") {
+        cv_eat_op(";")
+        return s
+    }
+    cv_next()
+    cv_skip_nl()
+    while not cv_at_op("}") and cv_peek().kind != "eof" {
+        if cv_at_op("#") {
+            cv_skip_attribute()
+            cv_skip_nl()
+            continue
+        }
+        cv_eat_id("pub")
+        if cv_at_op("(") {
+            while not cv_at_op(")") {
+                cv_next()
+            }
+            cv_next()
+        }
+        var p = Param("", cv_ty("any"), true, cv_none(), false)
+        p.name = cv_ident()
+        cv_expect_op(":")
+        p.ty = cv_type()
+        if p.ty.name == "map" {
+            cv_mark_map("." + p.name)
+        }
+        if cv_eat_op("=") {
+            p.def = cv_expr()
+            p.has_def = true
+        }
+        s.fields.push(p)
+        cv_skip_nl()
+        cv_eat_op(",")
+        cv_skip_nl()
+    }
+    cv_expect_op("}")
+    return s
+}
+
+fn cv_enum_stmt() -> Stmt {
+    cv_next()
+    var s = cv_stmt("enum")
+    s.text = cv_ident()
+    s.generics = cv_generic_params()
+    cv_expect_op("{")
+    cv_skip_nl()
+    while not cv_at_op("}") and cv_peek().kind != "eof" {
+        if cv_at_op("#") {
+            cv_skip_attribute()
+            cv_skip_nl()
+            continue
+        }
+        var v = Variant(cv_ident(), [], [], 0, false)
+        if cv_eat_op("(") {
+            v.tys = cv_type_list(")")
+            cv_expect_op(")")
+        } else if cv_eat_op("{") {
+            cv_skip_nl()
+            while not cv_at_op("}") and cv_peek().kind != "eof" {
+                v.names.push(cv_ident())
+                cv_expect_op(":")
+                v.tys.push(cv_type())
+                cv_skip_nl()
+                cv_eat_op(",")
+                cv_skip_nl()
+            }
+            cv_expect_op("}")
+        } else if cv_eat_op("=") {
+            let e = cv_expr()
+            v.value = int(e.text)
+            v.has_value = true
+        }
+        s.variants.push(v)
+        cv_skip_nl()
+        cv_eat_op(",")
+        cv_skip_nl()
+    }
+    cv_expect_op("}")
+    return s
+}
+
+fn cv_impl_stmt() -> Stmt {
+    cv_next()
+    var s = cv_stmt("impl")
+    s.generics = cv_generic_params()
+    var ty = cv_type()
+    if cv_eat_id("for") {
+        ty = cv_type()
+    }
+    s.text = ty.name
+    s.ty = ty
+    if cv_at_id("where") {
+        while not cv_at_op("{") and cv_peek().kind != "eof" {
+            cv_next()
+        }
+    }
+    cv_skip_nl()
+    cv_expect_op("{")
+    while true {
+        cv_skip_nl()
+        while cv_eat_op(";") {
+            cv_skip_nl()
+        }
+        if cv_at_op("}") or cv_peek().kind == "eof" {
+            break
+        }
+        let before = cv_pos
+        let m = cv_statement()
+        if m.kind == "fn" {
+            s.body.push(m)
+        } else if m.kind != "skip" {
+            cv_note("line {cv_peek().line}: only functions are supported inside impl")
+        }
+        if cv_pos == before {
+            cv_next()
+        }
+    }
+    cv_expect_op("}")
+    return s
+}

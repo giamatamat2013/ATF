@@ -1,0 +1,792 @@
+// parse_py.atf - statements of Python.
+//
+// Python has no declarations, so the first assignment to a name becomes a let, and a name that is
+// assigned again becomes a var. Classes turn into a struct plus an impl, Enum classes into enums.
+// Loose statements at the top of the file are collected into fn main().
+
+var cv_py_scopes: [{str: bool}] = []
+
+fn cv_py_push_scope() {
+    var m: {str: bool} = {}
+    cv_py_scopes.push(m)
+}
+
+fn cv_py_pop_scope() {
+    cv_py_scopes.pop()
+}
+
+fn cv_py_declared(name: str) -> bool {
+    if cv_py_scopes.len() == 0 {
+        return false
+    }
+    return name in cv_py_scopes.last()
+}
+
+fn cv_py_declare(name: str) {
+    if cv_py_scopes.len() > 0 {
+        var m = cv_py_scopes.last()
+        m[name] = true
+    }
+}
+
+// ---------------------------------------------------------------- mutability
+
+fn cv_py_collect(body: [Stmt], m: {str: bool}) {
+    for s in body {
+        if s.kind == "assign" {
+            if s.e.kind == "name" {
+                m[s.e.text] = true
+            } else if s.e.kind == "tuple" {
+                for x in s.e.kids {
+                    if x.kind == "name" {
+                        m[x.text] = true
+                    }
+                }
+            }
+        }
+        if s.kind != "fn" and s.kind != "impl" {
+            cv_py_collect(s.body, m)
+            cv_py_collect(s.els, m)
+            for a in s.arms {
+                cv_py_collect(a.body, m)
+            }
+        }
+    }
+}
+
+fn cv_py_apply(body: [Stmt], m: {str: bool}) {
+    for s in body {
+        if s.kind == "let" {
+            if s.text != "" {
+                s.flag = s.text in m
+            } else {
+                var any_mut = false
+                for n in s.names {
+                    if n in m {
+                        any_mut = true
+                    }
+                }
+                s.flag = any_mut
+            }
+        }
+        if s.kind != "fn" and s.kind != "impl" {
+            cv_py_apply(s.body, m)
+            cv_py_apply(s.els, m)
+            for a in s.arms {
+                cv_py_apply(a.body, m)
+            }
+        }
+    }
+}
+
+fn cv_py_finalize(body: [Stmt]) {
+    var m: {str: bool} = {}
+    cv_py_collect(body, m)
+    cv_py_apply(body, m)
+}
+
+// ---------------------------------------------------------------- blocks
+
+fn cv_py_block() -> [Stmt] {
+    cv_expect_op(":")
+    var out: [Stmt] = []
+    if cv_peek().kind == "nl" {
+        cv_next()
+        if cv_peek().kind != "indent" {
+            cv_fail("expected an indented block")
+            return out
+        }
+        cv_next()
+        while cv_peek().kind != "dedent" and cv_peek().kind != "eof" {
+            let before = cv_pos
+            cv_py_statement(out)
+            if cv_pos == before {
+                cv_next()
+            }
+        }
+        if cv_peek().kind == "dedent" {
+            cv_next()
+        }
+    } else {
+        cv_py_statement(out)
+    }
+    return out
+}
+
+fn cv_py_end_of_statement() {
+    while cv_eat_op(";") {
+    }
+    if cv_peek().kind == "nl" {
+        cv_next()
+    }
+}
+
+// ---------------------------------------------------------------- statements
+
+fn cv_py_statement(out: [Stmt]) {
+    while cv_peek().kind == "nl" {
+        cv_next()
+    }
+    let t = cv_peek()
+    if t.kind == "eof" or t.kind == "dedent" {
+        return
+    }
+    if t.kind == "op" and t.text == "@" {
+        // a decorator: ignored
+        cv_skip_to_line_end()
+        cv_py_end_of_statement()
+        return
+    }
+    if t.kind == "id" {
+        let w = t.text
+        if w == "def" {
+            out.push(cv_py_def())
+            return
+        }
+        if w == "async" {
+            cv_next()
+            cv_py_statement(out)
+            return
+        }
+        if w == "class" {
+            cv_py_class(out)
+            return
+        }
+        if w == "if" {
+            out.push(cv_py_if())
+            return
+        }
+        if w == "while" {
+            cv_next()
+            var s = cv_stmt("while")
+            s.e = cv_expr()
+            s.body = cv_py_block()
+            out.push(s)
+            return
+        }
+        if w == "for" {
+            out.push(cv_py_for())
+            return
+        }
+        if w == "match" and cv_py_line_ends_with_colon() {
+            out.push(cv_py_match())
+            return
+        }
+        if w == "try" {
+            cv_note("line {t.line}: try / except is not supported; only the try body was kept")
+            cv_next()
+            let body = cv_py_block()
+            for s in body {
+                out.push(s)
+            }
+            while cv_at_id("except") or cv_at_id("finally") or cv_at_id("else") {
+                cv_next()
+                cv_skip_until_colon()
+                cv_py_block()
+            }
+            return
+        }
+        if w == "with" {
+            cv_note("line {t.line}: 'with' is not supported; only its body was kept")
+            cv_next()
+            cv_skip_until_colon()
+            let body = cv_py_block()
+            for s in body {
+                out.push(s)
+            }
+            return
+        }
+        if w == "pass" {
+            cv_next()
+            cv_py_end_of_statement()
+            return
+        }
+        if w == "break" or w == "continue" {
+            cv_next()
+            out.push(cv_stmt(w))
+            cv_py_end_of_statement()
+            return
+        }
+        if w == "return" {
+            cv_next()
+            var s = cv_stmt("return")
+            if cv_peek().kind != "nl" and cv_peek().kind != "eof" and not cv_at_op(";") {
+                s.e = cv_py_expr_list()
+            }
+            out.push(s)
+            cv_py_end_of_statement()
+            return
+        }
+        if w == "import" or w == "from" {
+            cv_skip_to_line_end()
+            cv_py_end_of_statement()
+            return
+        }
+        if w == "global" or w == "nonlocal" or w == "del" {
+            cv_skip_to_line_end()
+            cv_py_end_of_statement()
+            return
+        }
+        if w == "raise" {
+            cv_next()
+            var msg = cv_str_lit("error")
+            if cv_peek().kind != "nl" {
+                let ex = cv_expr()
+                if ex.kind == "call" and ex.kids.len() > 1 {
+                    msg = ex.kids[1]
+                }
+            }
+            out.push(cv_expr_stmt(cv_call(cv_name("panic"), [msg])))
+            cv_py_end_of_statement()
+            return
+        }
+        if w == "assert" {
+            cv_next()
+            let c = cv_expr()
+            var args = [c]
+            if cv_eat_op(",") {
+                args.push(cv_expr())
+            }
+            out.push(cv_expr_stmt(cv_call(cv_name("assert"), args)))
+            cv_py_end_of_statement()
+            return
+        }
+    }
+    cv_py_simple(out)
+}
+
+fn cv_py_line_ends_with_colon() -> bool {
+    var k = 0
+    while cv_peek_at(k).kind != "nl" and cv_peek_at(k).kind != "eof" {
+        k += 1
+    }
+    return k > 0 and cv_is_op(cv_peek_at(k - 1), ":")
+}
+
+fn cv_skip_until_colon() {
+    var depth = 0
+    while cv_peek().kind != "eof" and cv_peek().kind != "nl" {
+        if cv_at_op("(") or cv_at_op("[") or cv_at_op("{") {
+            depth += 1
+        } else if cv_at_op(")") or cv_at_op("]") or cv_at_op("}") {
+            depth -= 1
+        } else if cv_at_op(":") and depth == 0 {
+            return
+        }
+        cv_next()
+    }
+}
+
+// a, b  or  a  (used for return and the right side of an assignment)
+fn cv_py_expr_list() -> Expr {
+    let first = cv_expr()
+    if cv_at_op(",") {
+        var items = [first]
+        while cv_eat_op(",") {
+            if cv_peek().kind == "nl" or cv_at_op("=") {
+                break
+            }
+            items.push(cv_expr())
+        }
+        return cv_e("tuple", "", items)
+    }
+    return first
+}
+
+fn cv_py_simple(out: [Stmt]) {
+    let line = cv_peek().line
+    var e = cv_py_expr_list()
+    // x: int = 5
+    if cv_at_op(":") and e.kind == "name" {
+        cv_next()
+        var s = cv_stmt("let")
+        s.text = e.text
+        s.ty = cv_type()
+        s.has_ty = true
+        if cv_eat_op("=") {
+            s.e = cv_py_expr_list()
+        }
+        cv_py_declare(s.text)
+        cv_env_set(s.text, s.ty)
+        if s.ty.name == "map" {
+            cv_mark_map(s.text)
+        }
+        out.push(s)
+        cv_py_end_of_statement()
+        return
+    }
+    let t = cv_peek()
+    if t.kind == "op" and (t.text == "=" or t.text == "+=" or t.text == "-=" or t.text == "*=" or t.text == "/=" or t.text == "%=" or t.text == "//=" or t.text == "**=" or t.text == "|=" or t.text == "&=" or t.text == "^=" or t.text == "<<=" or t.text == ">>=") {
+        cv_next()
+        var rhs = cv_py_expr_list()
+        // a = b = 0 is read as a = (b = 0) by only keeping the last value
+        while cv_at_op("=") {
+            cv_next()
+            rhs = cv_py_expr_list()
+        }
+        var op = t.text
+        if op == "//=" {
+            op = "/="
+        }
+        // the first assignment to a plain name declares it
+        if op == "=" and e.kind == "name" and not cv_py_declared(e.text) {
+            var s = cv_stmt("let")
+            s.text = e.text
+            s.e = rhs
+            cv_py_declare(e.text)
+            cv_env_set(e.text, cv_infer(rhs))
+            if rhs.kind == "map" or (rhs.kind == "call" and rhs.kids[0].kind == "name" and rhs.kids[0].text == "dict") {
+                cv_mark_map(e.text)
+            }
+            out.push(s)
+            cv_py_end_of_statement()
+            return
+        }
+        if op == "=" and e.kind == "tuple" {
+            var all_new = true
+            var names: [str] = []
+            for x in e.kids {
+                if x.kind != "name" or cv_py_declared(x.text) {
+                    all_new = false
+                } else {
+                    names.push(x.text)
+                }
+            }
+            if all_new {
+                var s = cv_stmt("let")
+                s.names = names
+                s.e = rhs
+                for nm in names {
+                    cv_py_declare(nm)
+                }
+                out.push(s)
+                cv_py_end_of_statement()
+                return
+            }
+        }
+        var s = cv_stmt("assign")
+        s.text = op
+        s.e = e
+        s.e2 = rhs
+        if op == "/=" and t.text == "/=" {
+            s.flag = true
+        }
+        out.push(s)
+        cv_py_end_of_statement()
+        return
+    }
+    // a docstring is not a statement
+    if e.kind == "str" {
+        cv_py_end_of_statement()
+        return
+    }
+    out.push(cv_expr_stmt(e))
+    cv_py_end_of_statement()
+}
+
+fn cv_py_if() -> Stmt {
+    cv_next()
+    var s = cv_stmt("if")
+    s.e = cv_expr()
+    s.body = cv_py_block()
+    if cv_at_id("elif") {
+        s.els = [cv_py_if()]
+    } else if cv_at_id("else") {
+        cv_next()
+        s.els = cv_py_block()
+    }
+    return s
+}
+
+fn cv_py_for() -> Stmt {
+    cv_next()
+    var s = cv_stmt("for")
+    var names: [str] = []
+    var parens = false
+    if cv_at_op("(") {
+        cv_next()
+        parens = true
+        while not cv_at_op(")") and cv_peek().kind != "eof" {
+            names.push(cv_ident())
+            if not cv_eat_op(",") {
+                break
+            }
+        }
+        cv_expect_op(")")
+    } else {
+        names.push(cv_ident())
+        while cv_eat_op(",") {
+            names.push(cv_ident())
+        }
+    }
+    if not cv_eat_id("in") {
+        cv_fail("expected 'in'")
+    }
+    var e = cv_expr()
+    s.names = names
+    var tuple_vars = names.len() > 1
+    if names.len() == 2 and e.kind == "call" and e.kids[0].kind == "name" and e.kids[0].text == "enumerate" and e.kids.len() == 2 {
+        e = e.kids[1]
+        tuple_vars = false
+    } else if names.len() == 2 and e.kind == "method" and e.text == "items" and e.kids.len() == 1 {
+        cv_mark_map_expr(e.kids[0])
+        e = e.kids[0]
+        tuple_vars = false
+    }
+    s.e = e
+    s.flag = tuple_vars
+    cv_py_declare_loop(names, e, tuple_vars)
+    s.body = cv_py_block()
+    return s
+}
+
+fn cv_py_declare_loop(names: [str], e: Expr, tuple_vars: bool) {
+    for n in names {
+        cv_py_declare(n)
+    }
+    if names.len() == 1 {
+        let t = cv_infer(e)
+        if t.name == "array" and t.args.len() > 0 {
+            cv_env_set(names[0], t.args[0])
+        } else if t.name == "str" {
+            cv_env_set(names[0], cv_ty("str"))
+        }
+    } else if names.len() == 2 and not tuple_vars {
+        cv_env_set(names[0], cv_ty("int"))
+    }
+}
+
+fn cv_py_match() -> Stmt {
+    cv_next()
+    var s = cv_stmt("match")
+    s.e = cv_expr()
+    cv_expect_op(":")
+    cv_skip_nl()
+    if cv_peek().kind == "indent" {
+        cv_next()
+    }
+    while cv_at_id("case") {
+        cv_next()
+        let pat = cv_pattern()
+        var guard = cv_none()
+        if cv_eat_id("if") {
+            guard = cv_expr()
+        }
+        let body = cv_py_block()
+        s.arms.push(Arm(pat, guard, body))
+        cv_skip_nl()
+    }
+    if cv_peek().kind == "dedent" {
+        cv_next()
+    }
+    return s
+}
+
+// ---------------------------------------------------------------- functions
+
+fn cv_py_def() -> Stmt {
+    cv_next()
+    var s = cv_stmt("fn")
+    s.text = cv_ident()
+    cv_expect_op("(")
+    var params: [Param] = []
+    cv_skip_nl()
+    while not cv_at_op(")") and cv_peek().kind != "eof" {
+        if cv_at_op("*") or cv_at_op("**") {
+            cv_next()
+        }
+        var p = Param(cv_ident(), cv_ty("any"), false, cv_none(), false)
+        if cv_eat_op(":") {
+            p.ty = cv_type()
+            p.has_ty = true
+        }
+        if cv_eat_op("=") {
+            p.def = cv_expr()
+            p.has_def = true
+            if not p.has_ty {
+                let g = cv_infer(p.def)
+                if g.name != "any" {
+                    p.ty = g
+                    p.has_ty = true
+                }
+            }
+        }
+        if p.name != "cls" {
+            params.push(p)
+        }
+        cv_skip_nl()
+        if not cv_eat_op(",") {
+            break
+        }
+        cv_skip_nl()
+    }
+    cv_expect_op(")")
+    s.params = params
+    if cv_eat_op("->") {
+        s.ret = cv_type()
+        s.has_ret = s.ret.name != "unit"
+    }
+    // a fresh scope and a fresh variable table
+    let saved_env = cv_env
+    cv_env = {}
+    cv_py_push_scope()
+    for p in params {
+        cv_py_declare(p.name)
+        if p.has_ty {
+            cv_env_set(p.name, p.ty)
+            if p.ty.name == "map" {
+                cv_mark_map(p.name)
+            }
+        }
+    }
+    s.body = cv_py_block()
+    cv_py_pop_scope()
+    cv_py_finalize(s.body)
+    if not s.has_ret and cv_has_value_return(s.body) {
+        let g = cv_guess_return(s.body)
+        if g.name != "any" {
+            s.ret = g
+            s.has_ret = true
+        } else {
+            cv_note("line {cv_peek().line}: the return type of '{s.text}' is unknown, add it by hand")
+        }
+    }
+    cv_env = saved_env
+    if s.has_ret {
+        cv_fn_rets[s.text] = s.ret
+    }
+    return s
+}
+
+// ---------------------------------------------------------------- classes
+
+fn cv_py_op_name(n: str) -> str {
+    if n == "__str__" or n == "__repr__" {
+        return "to_str"
+    }
+    if n == "__add__" {
+        return "op_add"
+    }
+    if n == "__sub__" {
+        return "op_sub"
+    }
+    if n == "__mul__" {
+        return "op_mul"
+    }
+    if n == "__truediv__" {
+        return "op_div"
+    }
+    if n == "__neg__" {
+        return "op_neg"
+    }
+    if n == "__getitem__" {
+        return "op_index"
+    }
+    if n == "__eq__" {
+        return "eq"
+    }
+    if n == "__len__" {
+        return "len"
+    }
+    return n
+}
+
+fn cv_py_class(out: [Stmt]) {
+    cv_next()
+    let name = cv_ident()
+    var base = ""
+    if cv_eat_op("(") {
+        if cv_peek().kind == "id" {
+            base = cv_next().text
+        }
+        while not cv_at_op(")") and cv_peek().kind != "eof" {
+            cv_next()
+        }
+        cv_expect_op(")")
+    }
+    cv_expect_op(":")
+    var body: [Stmt] = []
+    // read the class body as statements
+    cv_py_push_scope()
+    if cv_peek().kind == "nl" {
+        cv_next()
+        if cv_peek().kind == "indent" {
+            cv_next()
+            while cv_peek().kind != "dedent" and cv_peek().kind != "eof" {
+                let before = cv_pos
+                cv_py_statement(body)
+                if cv_pos == before {
+                    cv_next()
+                }
+            }
+            if cv_peek().kind == "dedent" {
+                cv_next()
+            }
+        }
+    } else {
+        cv_py_statement(body)
+    }
+    cv_py_pop_scope()
+    if base == "Enum" or base == "IntEnum" {
+        var en = cv_stmt("enum")
+        en.text = name
+        for s in body {
+            if s.kind == "let" {
+                var v = Variant(s.text, [], [], 0, false)
+                if s.e.kind == "int" {
+                    v.value = int(s.e.text)
+                    v.has_value = true
+                }
+                en.variants.push(v)
+            }
+        }
+        out.push(en)
+        return
+    }
+    var st = cv_stmt("struct")
+    st.text = name
+    var im = cv_stmt("impl")
+    im.text = name
+    for s in body {
+        if s.kind == "let" and s.has_ty {
+            var p = Param(s.text, s.ty, true, cv_none(), false)
+            if not cv_is_none(s.e) {
+                p.def = s.e
+                p.has_def = true
+            }
+            st.fields.push(p)
+            cv_field_tys["." + s.text] = s.ty
+            cv_field_tys[name + "." + s.text] = s.ty
+        } else if s.kind == "fn" {
+            if s.text == "__init__" {
+                cv_py_fields_from_init(st, s)
+            } else {
+                s.text = cv_py_op_name(s.text)
+                im.body.push(s)
+            }
+        }
+    }
+    out.push(st)
+    if im.body.len() > 0 {
+        out.push(im)
+    }
+}
+
+// __init__(self, a, b): self.a = a  makes the fields a and b
+fn cv_py_fields_from_init(st: Stmt, init: Stmt) {
+    for s in init.body {
+        if s.kind == "assign" and s.text == "=" and s.e.kind == "field" and s.e.kids[0].kind == "name" and s.e.kids[0].text == "self" {
+            var p = Param(s.e.text, cv_ty("any"), false, cv_none(), false)
+            if s.e2.kind == "name" {
+                for q in init.params {
+                    if q.name == s.e2.text {
+                        p.ty = q.ty
+                        p.has_ty = q.has_ty
+                        p.def = q.def
+                        p.has_def = q.has_def
+                    }
+                }
+            }
+            if not p.has_ty {
+                let g = cv_infer(s.e2)
+                if g.name != "any" {
+                    p.ty = g
+                    p.has_ty = true
+                }
+            }
+            if not p.has_ty {
+                cv_note("the type of field '{p.name}' is unknown, add it by hand")
+            }
+            cv_field_tys["." + p.name] = p.ty
+            cv_field_tys[st.text + "." + p.name] = p.ty
+            if p.ty.name == "map" {
+                cv_mark_map("." + p.name)
+            }
+            st.fields.push(p)
+        }
+    }
+}
+
+// ---------------------------------------------------------------- the file
+
+fn cv_py_is_constant(e: Expr) -> bool {
+    if e.kind == "int" or e.kind == "float" or e.kind == "str" or e.kind == "bool" or e.kind == "nil" or e.kind == "byte" {
+        return true
+    }
+    if e.kind == "un" or e.kind == "paren" {
+        return cv_py_is_constant(e.kids[0])
+    }
+    if e.kind == "bin" {
+        return cv_py_is_constant(e.kids[0]) and cv_py_is_constant(e.kids[1])
+    }
+    if e.kind == "array" or e.kind == "tuple" or e.kind == "map" {
+        for k in e.kids {
+            if not cv_py_is_constant(k) {
+                return false
+            }
+        }
+        return true
+    }
+    return false
+}
+
+fn cv_py_is_main_guard(s: Stmt) -> bool {
+    if s.kind != "if" or s.e.kind != "bin" or s.e.text != "==" {
+        return false
+    }
+    return s.e.kids[0].kind == "name" and s.e.kids[0].text == "__name__"
+}
+
+fn cv_py_program() -> [Stmt] {
+    var all: [Stmt] = []
+    cv_py_push_scope()
+    while cv_peek().kind != "eof" {
+        let before = cv_pos
+        cv_py_statement(all)
+        if cv_pos == before {
+            cv_next()
+        }
+    }
+    var decls: [Stmt] = []
+    var main_body: [Stmt] = []
+    var has_main = false
+    for s in all {
+        if s.kind == "fn" and s.text == "main" {
+            has_main = true
+        }
+    }
+    for s in all {
+        if s.kind == "fn" or s.kind == "struct" or s.kind == "impl" or s.kind == "enum" {
+            decls.push(s)
+        } else if s.kind == "let" and s.text != "" and cv_py_is_constant(s.e) {
+            s.kind = "const"
+            if not cv_is_all_upper(s.text) {
+                s.kind = "let"
+            }
+            decls.push(s)
+        } else if cv_py_is_main_guard(s) {
+            // if __name__ == "__main__": main()
+            var only_call = false
+            if s.body.len() == 1 and s.body[0].kind == "expr" and s.body[0].e.kind == "call" and s.body[0].e.kids[0].kind == "name" and s.body[0].e.kids[0].text == "main" {
+                only_call = true
+            }
+            if not (only_call and has_main) {
+                for b in s.body {
+                    main_body.push(b)
+                }
+            }
+        } else {
+            main_body.push(s)
+        }
+    }
+    cv_py_pop_scope()
+    // the statements outside functions may assign the same name more than once
+    cv_py_finalize(main_body)
+    if main_body.len() > 0 {
+        var m = cv_stmt("fn")
+        m.text = "main"
+        m.body = main_body
+        decls.push(m)
+    }
+    return decls
+}

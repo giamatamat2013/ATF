@@ -1,0 +1,1692 @@
+// emit_rs.atf - prints the tree as Rust.
+//
+// The output follows these rules, so that it is close to something that compiles:
+//   int = i64, float = f64, str = String (a parameter is &str), arrays are Vec<T>, maps HashMap<K, V>
+//   a parameter that the function changes is &mut, any other array / map / struct parameter is &
+// It still needs a look from a person (ownership and clones are guessed, not checked).
+
+var cv_rs_uses: {str: bool} = {}
+// struct name -> field list, so Item("x", 1.0) can become Item { name: ..., price: ... }
+var cv_rs_structs: {str: [Param]} = {}
+// enum names, and enum variants that carry data
+var cv_rs_enums: {str: bool} = {}
+// function name -> how each parameter is passed: "" by value, "&" or "&mut"
+var cv_rs_pmodes: {str: [str]} = {}
+var cv_rs_generics: [str] = []
+
+// ---------------------------------------------------------------- types
+
+fn cv_rs_type(t: Ty) -> str {
+    let n = t.name
+    if n == "int" {
+        return "i64"
+    }
+    if n == "float" {
+        return "f64"
+    }
+    if n == "bool" {
+        return "bool"
+    }
+    if n == "str" {
+        return "String"
+    }
+    if n == "byte" {
+        return "u8"
+    }
+    if n == "unit" {
+        return "()"
+    }
+    if n == "any" {
+        return "_"
+    }
+    if n == "array" and t.args.len() == 1 {
+        return "Vec<" + cv_rs_type(t.args[0]) + ">"
+    }
+    if n == "map" and t.args.len() == 2 {
+        cv_rs_uses["HashMap"] = true
+        return "HashMap<" + cv_rs_type(t.args[0]) + ", " + cv_rs_type(t.args[1]) + ">"
+    }
+    if n == "tuple" {
+        var parts: [str] = []
+        for a in t.args {
+            parts.push(cv_rs_type(a))
+        }
+        if parts.len() == 1 {
+            return "(" + parts[0] + ",)"
+        }
+        return "(" + ", ".join(parts) + ")"
+    }
+    if n == "opt" and t.args.len() == 1 {
+        return "Option<" + cv_rs_type(t.args[0]) + ">"
+    }
+    if n == "result" and t.args.len() == 2 {
+        return "Result<" + cv_rs_type(t.args[0]) + ", " + cv_rs_type(t.args[1]) + ">"
+    }
+    if n == "fn" and t.args.len() >= 1 {
+        var parts: [str] = []
+        for i in 0..t.args.len() - 1 {
+            parts.push(cv_rs_type(t.args[i]))
+        }
+        let ret = t.args.last()
+        var s = "fn(" + ", ".join(parts) + ")"
+        if ret.name != "unit" {
+            s = s + " -> " + cv_rs_type(ret)
+        }
+        return s
+    }
+    if t.args.len() > 0 {
+        var parts: [str] = []
+        for a in t.args {
+            parts.push(cv_rs_type(a))
+        }
+        return n + "<" + ", ".join(parts) + ">"
+    }
+    return n
+}
+
+// a type in a parameter list
+fn cv_rs_param_type(t: Ty, mode: str) -> str {
+    if t.name == "str" {
+        return "&str"
+    }
+    if t.name == "array" and t.args.len() == 1 {
+        if mode == "&mut" {
+            return "&mut " + cv_rs_type(t)
+        }
+        return "&[" + cv_rs_type(t.args[0]) + "]"
+    }
+    if mode == "&" {
+        return "&" + cv_rs_type(t)
+    }
+    if mode != "" {
+        return mode + " " + cv_rs_type(t)
+    }
+    return cv_rs_type(t)
+}
+
+fn cv_rs_is_copy(t: Ty) -> bool {
+    return t.name == "int" or t.name == "float" or t.name == "bool" or t.name == "byte"
+}
+
+// ---------------------------------------------------------------- strings
+
+fn cv_rs_escape(s: str) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == '\\' {
+            sb.add("\\\\")
+        } else if c == '"' {
+            sb.add("\\\"")
+        } else if c == '\n' {
+            sb.add("\\n")
+        } else if c == '\t' {
+            sb.add("\\t")
+        } else if c == '\r' {
+            sb.add("\\r")
+        } else if c == 0 {
+            sb.add("\\0")
+        } else {
+            sb.add_byte(c)
+        }
+    }
+    return sb.finish()
+}
+
+// the text of a Rust format string for the pieces of an fstr, and the argument list
+fn cv_rs_format(e: Expr) -> str {
+    var fmt = str_builder()
+    var args: [str] = []
+    for i in 0..e.kids.len() {
+        let p = e.kids[i]
+        if p.kind == "str" {
+            fmt.add(cv_rs_escape(p.text).replace("{", "\{\{").replace("}", "}}"))
+        } else {
+            var spec = e.names[i]
+            if spec.ends_with("f") and spec.contains(".") {
+                spec = spec[..spec.len() - 1]
+            }
+            let t = cv_infer(p)
+            if spec == "" and (t.name == "array" or t.name == "map" or t.name == "tuple" or t.name == "opt") {
+                spec = "?"
+            }
+            if spec == "" {
+                fmt.add("\{}")
+            } else {
+                fmt.add("\{:" + spec + "}")
+            }
+            args.push(cv_rs_expr(p, 1))
+        }
+    }
+    var s = "\"" + fmt.finish() + "\""
+    if args.len() > 0 {
+        s = s + ", " + ", ".join(args)
+    }
+    return s
+}
+
+// format!("..", args) for a string value
+fn cv_rs_fstr(e: Expr) -> str {
+    return "format!(" + cv_rs_format(e) + ")"
+}
+
+// ---------------------------------------------------------------- expressions
+
+fn cv_rs_binprec(op: str) -> int {
+    if op == "??" {
+        return 15
+    }
+    if op == "or" {
+        return 2
+    }
+    if op == "and" {
+        return 3
+    }
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" {
+        return 5
+    }
+    if op == "in" or op == "not in" {
+        return 15
+    }
+    if op == "|" {
+        return 6
+    }
+    if op == "^" {
+        return 7
+    }
+    if op == "&" {
+        return 8
+    }
+    if op == "<<" or op == ">>" or op == ">>>" {
+        return 9
+    }
+    if op == "+" or op == "-" {
+        return 10
+    }
+    if op == "*" or op == "/" or op == "%" {
+        return 11
+    }
+    if op == "**" {
+        return 15
+    }
+    return 10
+}
+
+fn cv_rs_prec(e: Expr) -> int {
+    if e.kind == "paren" {
+        return cv_rs_prec(e.kids[0])
+    }
+    if e.kind == "bin" {
+        return cv_rs_binprec(e.text)
+    }
+    if e.kind == "un" {
+        return 13
+    }
+    if e.kind == "cast" {
+        return 12
+    }
+    if e.kind == "lambda" {
+        return 1
+    }
+    if e.kind == "range" {
+        return 4
+    }
+    return 20
+}
+
+fn cv_rs_expr(e: Expr, min: int) -> str {
+    let s = cv_rs_expr_raw(e)
+    if cv_rs_prec(e) < min {
+        return "(" + s + ")"
+    }
+    return s
+}
+
+fn cv_rs_list(items: [Expr]) -> str {
+    var parts: [str] = []
+    for x in items {
+        parts.push(cv_rs_owned(x))
+    }
+    return ", ".join(parts)
+}
+
+// a value that is stored: a string literal must be an owned String
+fn cv_rs_owned(e: Expr) -> str {
+    if e.kind == "str" {
+        return cv_rs_expr(e, 1) + ".to_string()"
+    }
+    return cv_rs_expr(e, 1)
+}
+
+// an index: an int variable has to become a usize, a literal can stay
+fn cv_rs_index(e: Expr) -> str {
+    if e.kind == "int" {
+        return e.text
+    }
+    return cv_rs_expr(e, 12) + " as usize"
+}
+
+fn cv_rs_path(n: str) -> str {
+    if n == "PI" {
+        return "std::f64::consts::PI"
+    }
+    if n == "E" {
+        return "std::f64::consts::E"
+    }
+    if n == "INF" {
+        return "f64::INFINITY"
+    }
+    if n == "INT_MAX" {
+        return "i64::MAX"
+    }
+    if n == "INT_MIN" {
+        return "i64::MIN"
+    }
+    if n == "nil" {
+        return "None"
+    }
+    let parts = n.split(".")
+    if parts.len() > 1 and cv_is_upper_start(parts[0]) {
+        return "::".join(parts)
+    }
+    return n
+}
+
+fn cv_rs_numeric(e: Expr) -> bool {
+    return cv_is_num(cv_infer(e))
+}
+
+// operands of an arithmetic operator: an int next to a float is cast
+fn cv_rs_operand(e: Expr, min: int, other: Expr) -> str {
+    let t = cv_infer(e)
+    let o = cv_infer(other)
+    if t.name == "int" and o.name == "float" {
+        if e.kind == "int" {
+            return e.text + ".0"
+        }
+        return cv_rs_expr(e, 12) + " as f64"
+    }
+    return cv_rs_expr(e, min)
+}
+
+fn cv_rs_expr_raw(e: Expr) -> str {
+    let k = e.kind
+    if k == "int" {
+        return e.text
+    }
+    if k == "float" {
+        return cv_atf_float(e.text)
+    }
+    if k == "bool" {
+        return e.text
+    }
+    if k == "nil" {
+        return "None"
+    }
+    if k == "str" {
+        return "\"" + cv_rs_escape(e.text) + "\""
+    }
+    if k == "byte" {
+        let c = e.text
+        if c == "\n" {
+            return "b'\\n'"
+        }
+        if c == "\t" {
+            return "b'\\t'"
+        }
+        if c == "\\" {
+            return "b'\\\\'"
+        }
+        if c == "'" {
+            return "b'\\''"
+        }
+        if c == "\0" {
+            return "b'\\0'"
+        }
+        return "b'" + c + "'"
+    }
+    if k == "name" {
+        if e.text in cv_rs_structs and cv_rs_structs[e.text].len() == 0 {
+            return e.text
+        }
+        return cv_rs_path(e.text)
+    }
+    if k == "paren" {
+        return cv_rs_expr_raw(e.kids[0])
+    }
+    if k == "fstr" {
+        return cv_rs_fstr(e)
+    }
+    if k == "bin" {
+        return cv_rs_bin(e)
+    }
+    if k == "un" {
+        if e.text == "not" {
+            return "!" + cv_rs_expr(e.kids[0], 13)
+        }
+        return e.text + cv_rs_expr(e.kids[0], 13)
+    }
+    if k == "call" {
+        return cv_rs_call(e)
+    }
+    if k == "method" {
+        return cv_rs_method(e)
+    }
+    if k == "field" {
+        if e.kids[0].kind == "name" and (e.kids[0].text in cv_rs_enums or cv_is_upper_start(e.kids[0].text)) {
+            return e.kids[0].text + "::" + e.text
+        }
+        return cv_rs_expr(e.kids[0], 15) + "." + e.text
+    }
+    if k == "index" {
+        let bt = cv_infer(e.kids[0])
+        if bt.name == "map" {
+            return cv_rs_expr(e.kids[0], 15) + "[&" + cv_rs_expr(e.kids[1], 13) + "]"
+        }
+        return cv_rs_expr(e.kids[0], 15) + "[" + cv_rs_index(e.kids[1]) + "]"
+    }
+    if k == "slice" {
+        var lo = ""
+        var hi = ""
+        if not cv_is_none(e.kids[1]) {
+            lo = cv_rs_index(e.kids[1])
+        }
+        if not cv_is_none(e.kids[2]) {
+            hi = cv_rs_index(e.kids[2])
+        }
+        var tail = ".to_vec()"
+        if cv_infer(e.kids[0]).name == "str" {
+            tail = ".to_string()"
+        }
+        return "&" + cv_rs_expr(e.kids[0], 15) + "[" + lo + ".." + hi + "]" + tail
+    }
+    if k == "range" {
+        return cv_rs_range(e)
+    }
+    if k == "array" {
+        return "vec![" + cv_rs_list(e.kids) + "]"
+    }
+    if k == "map" {
+        cv_rs_uses["HashMap"] = true
+        var parts: [str] = []
+        var i = 0
+        while i + 1 < e.kids.len() {
+            parts.push("(" + cv_rs_owned(e.kids[i]) + ", " + cv_rs_owned(e.kids[i + 1]) + ")")
+            i += 2
+        }
+        if parts.len() == 0 {
+            return "HashMap::new()"
+        }
+        return "HashMap::from([" + ", ".join(parts) + "])"
+    }
+    if k == "tuple" {
+        if e.kids.len() == 1 {
+            return "(" + cv_rs_expr(e.kids[0], 1) + ",)"
+        }
+        return "(" + cv_rs_list(e.kids) + ")"
+    }
+    if k == "structlit" {
+        var parts: [str] = []
+        for i in 0..e.kids.len() {
+            parts.push(e.names[i] + ": " + cv_rs_owned(e.kids[i]))
+        }
+        return cv_rs_path(e.text) + " \{ " + ", ".join(parts) + " }"
+    }
+    if k == "lambda" {
+        return cv_rs_lambda(e, false)
+    }
+    if k == "if" {
+        return "if " + cv_rs_expr(e.kids[0], 1) + " \{ " + cv_rs_expr(e.kids[1], 1) + " } else \{ " + cv_rs_expr(e.kids[2], 1) + " }"
+    }
+    if k == "comp" {
+        var s = cv_rs_expr(e.kids[1], 15)
+        if e.kids[1].kind == "range" {
+            s = "(" + cv_rs_range(e.kids[1]) + ")"
+        } else if cv_infer(e.kids[1]).name == "array" {
+            s = s + ".iter().cloned()"
+        }
+        var vars = ", ".join(e.names)
+        if e.names.len() > 1 {
+            vars = "(" + vars + ")"
+        }
+        if not cv_is_none(e.kids[2]) {
+            s = s + ".filter(|" + vars + "| " + cv_rs_expr(e.kids[2], 1) + ")"
+        }
+        return s + ".map(|" + vars + "| " + cv_rs_expr(e.kids[0], 1) + ").collect::<Vec<_>>()"
+    }
+    if k == "unwrap" {
+        return cv_rs_expr(e.kids[0], 15) + ".unwrap()"
+    }
+    if k == "try" {
+        return cv_rs_expr(e.kids[0], 15) + "?"
+    }
+    if k == "cast" {
+        return cv_rs_expr(e.kids[0], 12) + " as " + cv_rs_type(e.ty)
+    }
+    if k == "match" {
+        return cv_rs_match_text(e)
+    }
+    return ""
+}
+
+fn cv_rs_range(e: Expr) -> str {
+    let lo = cv_rs_expr(e.kids[0], 5)
+    if cv_is_none(e.kids[1]) {
+        return lo + ".."
+    }
+    var op = ".."
+    if e.text == "incl" {
+        op = "..="
+    }
+    let hi = cv_rs_expr(e.kids[1], 5)
+    if e.kids.len() > 2 {
+        let by = e.kids[2]
+        if by.kind == "int" and by.text.starts_with("-") {
+            // a descending range: 10..0 step -3 visits 10, 7, 4, 1
+            let amount = by.text[1..]
+            var low = ""
+            if e.text == "incl" {
+                low = cv_rs_expr(e.kids[1], 5)
+            } else {
+                low = cv_rs_expr(e.kids[1], 10) + " + 1"
+            }
+            var s = "(" + low + "..=" + cv_rs_expr(e.kids[0], 5) + ").rev()"
+            if amount != "1" {
+                s = s + ".step_by(" + amount + ")"
+            }
+            return s
+        }
+        return "(" + lo + op + hi + ").step_by(" + cv_rs_expr(by, 1) + " as usize)"
+    }
+    return lo + op + hi
+}
+
+fn cv_rs_lambda(e: Expr, by_ref: bool) -> str {
+    var plist: [str] = []
+    for i in 0..e.names.len() {
+        var s = e.names[i]
+        if by_ref {
+            s = "&" + s
+        }
+        if e.ty.name == "params" and i < e.ty.args.len() and e.ty.args[i].name != "any" and not by_ref {
+            s = s + ": " + cv_rs_type(e.ty.args[i])
+        }
+        plist.push(s)
+    }
+    let head = "|" + ", ".join(plist) + "| "
+    if e.body.len() > 0 {
+        let saved_lines = cv_lines
+        let saved_ind = cv_ind
+        cv_lines = []
+        cv_ind = 0
+        cv_rs_block(e.body)
+        let text = " ".join(cv_lines)
+        cv_lines = saved_lines
+        cv_ind = saved_ind
+        return head + "\{ " + text + " }"
+    }
+    return head + cv_rs_expr(e.kids[0], 1)
+}
+
+fn cv_rs_bin(e: Expr) -> str {
+    let op = e.text
+    let a = e.kids[0]
+    let b = e.kids[1]
+    if op == "??" {
+        return cv_rs_expr(a, 15) + ".unwrap_or(" + cv_rs_expr(b, 1) + ")"
+    }
+    if op == "in" {
+        if cv_infer(b).name == "map" {
+            return cv_rs_expr(b, 15) + ".contains_key(&" + cv_rs_expr(a, 13) + ")"
+        }
+        return cv_rs_expr(b, 15) + ".contains(&" + cv_rs_expr(a, 13) + ")"
+    }
+    if op == "not in" {
+        if cv_infer(b).name == "map" {
+            return "!" + cv_rs_expr(b, 15) + ".contains_key(&" + cv_rs_expr(a, 13) + ")"
+        }
+        return "!" + cv_rs_expr(b, 15) + ".contains(&" + cv_rs_expr(a, 13) + ")"
+    }
+    if (op == "==" or op == "!=") and (b.kind == "nil" or a.kind == "nil") {
+        let other = a
+        if a.kind == "nil" {
+            if op == "==" {
+                return cv_rs_expr(b, 15) + ".is_none()"
+            }
+            return cv_rs_expr(b, 15) + ".is_some()"
+        }
+        if op == "==" {
+            return cv_rs_expr(other, 15) + ".is_none()"
+        }
+        return cv_rs_expr(other, 15) + ".is_some()"
+    }
+    if op == "**" {
+        let ta = cv_infer(a)
+        let tb = cv_infer(b)
+        if ta.name == "float" and tb.name == "int" {
+            return cv_rs_expr(a, 15) + ".powi(" + cv_rs_expr(b, 1) + " as i32)"
+        }
+        if ta.name == "float" {
+            return cv_rs_expr(a, 15) + ".powf(" + cv_rs_expr(b, 1) + ")"
+        }
+        return cv_rs_expr(a, 15) + ".pow(" + cv_rs_expr(b, 1) + " as u32)"
+    }
+    let p = cv_rs_binprec(op)
+    var rop = op
+    if op == "and" {
+        rop = "&&"
+    } else if op == "or" {
+        rop = "||"
+    } else if op == ">>>" {
+        rop = ">>"
+    }
+    var lmin = p
+    var rmin = p + 1
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" {
+        lmin = p + 1
+    }
+    // strings: a + b needs an owned String on the left and a borrowed str on the right
+    let ta = cv_infer(a)
+    if op == "+" and ta.name == "str" {
+        var left = cv_rs_expr(a, 10)
+        if a.kind == "str" {
+            left = cv_rs_expr(a, 10) + ".to_string()"
+        } else if a.kind != "fstr" and a.kind != "call" and a.kind != "method" {
+            left = cv_rs_expr(a, 10) + ".clone()"
+        }
+        var right = cv_rs_expr(b, 11)
+        if b.kind != "str" {
+            right = "&" + cv_rs_expr(b, 13)
+        }
+        return left + " + " + right
+    }
+    return cv_rs_operand(a, lmin, b) + " " + rop + " " + cv_rs_operand(b, rmin, a)
+}
+
+// how the arguments of a call are passed: "&x" for a borrowed parameter
+fn cv_rs_arg(e: Expr, mode: str) -> str {
+    if mode == "" {
+        return cv_rs_expr(e, 1)
+    }
+    if e.kind == "str" {
+        return cv_rs_expr(e, 1)
+    }
+    if e.kind == "fstr" {
+        return "&" + cv_rs_expr(e, 13)
+    }
+    if e.kind == "array" or e.kind == "map" {
+        return "&" + cv_rs_expr(e, 13)
+    }
+    if mode == "&" {
+        return "&" + cv_rs_expr(e, 13)
+    }
+    return mode + " " + cv_rs_expr(e, 13)
+}
+
+fn cv_rs_call_args(e: Expr, key: str) -> str {
+    var parts: [str] = []
+    var modes: [str] = []
+    if key in cv_rs_pmodes {
+        modes = cv_rs_pmodes[key]
+    }
+    for i in 1..e.kids.len() {
+        var mode = ""
+        if i - 1 < modes.len() {
+            mode = modes[i - 1]
+        }
+        let a = e.kids[i]
+        if i - 1 < e.names.len() and e.names[i - 1] != "" {
+            parts.push(cv_rs_arg(a, mode))
+        } else {
+            parts.push(cv_rs_arg(a, mode))
+        }
+    }
+    return ", ".join(parts)
+}
+
+fn cv_rs_call(e: Expr) -> str {
+    let callee = e.kids[0]
+    let n = e.kids.len() - 1
+    if callee.kind == "name" {
+        let name = callee.text
+        if name == "println" or name == "print" or name == "eprintln" or name == "eprint" {
+            var mac = name + "!"
+            if n == 0 {
+                return mac + "()"
+            }
+            let a = e.kids[1]
+            if a.kind == "fstr" {
+                return mac + "(" + cv_rs_format(a) + ")"
+            }
+            if a.kind == "str" {
+                return mac + "(\"" + cv_rs_escape(a.text).replace("{", "\{\{").replace("}", "}}") + "\")"
+            }
+            let t = cv_infer(a)
+            if t.name == "array" or t.name == "map" or t.name == "tuple" or t.name == "opt" {
+                return mac + "(\"\{:?}\", " + cv_rs_expr(a, 1) + ")"
+            }
+            return mac + "(\"\{}\", " + cv_rs_expr(a, 1) + ")"
+        }
+        if name == "panic" {
+            if n >= 1 and e.kids[1].kind == "fstr" {
+                return "panic!(" + cv_rs_format(e.kids[1]) + ")"
+            }
+            return "panic!(\"\{}\", " + cv_rs_expr(e.kids[1], 1) + ")"
+        }
+        if name == "assert" {
+            return "assert!(" + cv_rs_expr(e.kids[1], 1) + ")"
+        }
+        if name == "str" and n == 1 {
+            let a = e.kids[1]
+            if a.kind == "fstr" {
+                return cv_rs_expr(a, 1)
+            }
+            return cv_rs_expr(a, 15) + ".to_string()"
+        }
+        if name == "int" and n == 1 {
+            return cv_rs_expr(e.kids[1], 12) + " as i64"
+        }
+        if name == "float" and n == 1 {
+            return cv_rs_expr(e.kids[1], 12) + " as f64"
+        }
+        if name == "byte" and n == 1 {
+            return cv_rs_expr(e.kids[1], 12) + " as u8"
+        }
+        if name == "len" and n == 1 {
+            return cv_rs_expr(e.kids[1], 15) + ".len() as i64"
+        }
+        if name == "abs" and n == 1 {
+            return cv_rs_expr(e.kids[1], 15) + ".abs()"
+        }
+        if (name == "min" or name == "max") and n == 2 {
+            return "std::cmp::" + name + "(" + cv_rs_expr(e.kids[1], 1) + ", " + cv_rs_expr(e.kids[2], 1) + ")"
+        }
+        if name == "sqrt" or name == "sin" or name == "cos" or name == "tan" or name == "exp" or name == "floor" or name == "ceil" {
+            let t = cv_infer(e.kids[1])
+            if t.name == "int" {
+                return "(" + cv_rs_expr(e.kids[1], 12) + " as f64)." + name + "()"
+            }
+            return cv_rs_expr(e.kids[1], 15) + "." + name + "()"
+        }
+        if name == "log" and n == 1 {
+            return cv_rs_expr(e.kids[1], 15) + ".ln()"
+        }
+        if name == "exit" {
+            return "std::process::exit(" + cv_rs_expr(e.kids[1], 1) + " as i32)"
+        }
+        if name == "copy" and n == 1 {
+            return cv_rs_expr(e.kids[1], 15) + ".clone()"
+        }
+        if name.starts_with("set_new") {
+            cv_rs_uses["HashSet"] = true
+            return "HashSet::new()"
+        }
+        if name.starts_with("array_make") and n == 1 {
+            var zero = "0"
+            if name.contains("float") {
+                zero = "0.0"
+            } else if name.contains("bool") {
+                zero = "false"
+            } else if name.contains("str") {
+                zero = "String::new()"
+            }
+            return "vec![" + zero + "; " + cv_rs_expr(e.kids[1], 12) + " as usize]"
+        }
+        if name == "array_repeat" and n == 2 {
+            return "vec![" + cv_rs_owned(e.kids[1]) + "; " + cv_rs_expr(e.kids[2], 12) + " as usize]"
+        }
+        if name == "Result.Ok" and n == 1 {
+            return "Ok(" + cv_rs_owned(e.kids[1]) + ")"
+        }
+        if name == "Result.Err" and n == 1 {
+            return "Err(" + cv_rs_owned(e.kids[1]) + ")"
+        }
+        if name == "rand_int" and n == 2 {
+            return "rand_int(" + cv_rs_call_args(e, name) + ")"
+        }
+        if name == "pad_left" and n == 2 {
+            return "format!(\"\{:>1$}\", " + cv_rs_expr(e.kids[1], 1) + ", " + cv_rs_expr(e.kids[2], 12) + " as usize)"
+        }
+        if name == "pad_right" and n == 2 {
+            return "format!(\"\{:<1$}\", " + cv_rs_expr(e.kids[1], 1) + ", " + cv_rs_expr(e.kids[2], 12) + " as usize)"
+        }
+        if name == "chr" and n == 1 {
+            return "(" + cv_rs_expr(e.kids[1], 12) + " as u8 as char).to_string()"
+        }
+        if name == "input" {
+            return "\{ let mut s = String::new(); std::io::stdin().read_line(&mut s).unwrap(); s.trim_end().to_string() }"
+        }
+        // a struct constructor: Item("x", 1.0) -> Item { name: "x".to_string(), price: 1.0 }
+        if name in cv_rs_structs and cv_rs_structs[name].len() > 0 {
+            return cv_rs_construct(name, e)
+        }
+        return cv_rs_path(name) + "(" + cv_rs_call_args(e, name) + ")"
+    }
+    return cv_rs_expr(callee, 15) + "(" + cv_rs_call_args(e, "") + ")"
+}
+
+fn cv_rs_construct(name: str, e: Expr) -> str {
+    let fields = cv_rs_structs[name]
+    var parts: [str] = []
+    for i in 0..fields.len() {
+        let f = fields[i]
+        var value = ""
+        // a named argument wins, then the position, then the default
+        for j in 1..e.kids.len() {
+            if j - 1 < e.names.len() and e.names[j - 1] == f.name {
+                value = cv_rs_owned(e.kids[j])
+            }
+        }
+        if value == "" and i + 1 < e.kids.len() and (i < e.names.len() and e.names[i] == "") {
+            value = cv_rs_owned(e.kids[i + 1])
+        }
+        if value == "" and f.has_def {
+            value = cv_rs_owned(f.def)
+        }
+        if value == "" {
+            value = "Default::default()"
+        }
+        parts.push(f.name + ": " + value)
+    }
+    return name + " \{ " + ", ".join(parts) + " }"
+}
+
+fn cv_rs_closure_arg(e: Expr, elem: Ty) -> str {
+    if e.kind == "lambda" {
+        return cv_rs_lambda(e, cv_rs_is_copy(elem))
+    }
+    return cv_rs_expr(e, 1)
+}
+
+fn cv_rs_elem(t: Ty) -> Ty {
+    if t.name == "array" and t.args.len() > 0 {
+        return t.args[0]
+    }
+    return cv_ty("any")
+}
+
+fn cv_rs_method(e: Expr) -> str {
+    let name = e.text
+    let r = e.kids[0]
+    let n = e.kids.len() - 1
+    let rs = cv_rs_expr(r, 15)
+    let rt = cv_infer(r)
+    var a0 = ""
+    if n >= 1 {
+        a0 = cv_rs_expr(e.kids[1], 1)
+    }
+    var a1 = ""
+    if n >= 2 {
+        a1 = cv_rs_expr(e.kids[2], 1)
+    }
+    let elem = cv_rs_elem(rt)
+    // Type.function(args): an associated function or an enum variant
+    if r.kind == "name" and cv_is_upper_start(r.text) and not (r.text in cv_env) {
+        return r.text + "::" + name + "(" + cv_rs_call_args(e, r.text + "." + name) + ")"
+    }
+    if name == "len" and n == 0 {
+        return rs + ".len() as i64"
+    }
+    if name == "push" and n == 1 {
+        return rs + ".push(" + cv_rs_owned(e.kids[1]) + ")"
+    }
+    if name == "pop" and n == 0 {
+        return rs + ".pop().unwrap()"
+    }
+    if name == "insert" and n == 2 {
+        return rs + ".insert(" + cv_rs_index(e.kids[1]) + ", " + cv_rs_owned(e.kids[2]) + ")"
+    }
+    if name == "remove" and n == 1 {
+        if rt.name == "map" {
+            return rs + ".remove(&" + cv_rs_expr(e.kids[1], 13) + ")"
+        }
+        return rs + ".remove(" + cv_rs_index(e.kids[1]) + ")"
+    }
+    if name == "contains" and n == 1 {
+        if rt.name == "str" {
+            return rs + ".contains(" + a0 + ")"
+        }
+        return rs + ".contains(&" + cv_rs_expr(e.kids[1], 13) + ")"
+    }
+    if name == "has" and n == 1 {
+        return rs + ".contains_key(&" + cv_rs_expr(e.kids[1], 13) + ")"
+    }
+    if name == "trim" and n == 0 {
+        return rs + ".trim()"
+    }
+    if name == "upper" and n == 0 {
+        return rs + ".to_uppercase()"
+    }
+    if name == "lower" and n == 0 {
+        return rs + ".to_lowercase()"
+    }
+    if name == "starts_with" or name == "ends_with" {
+        return rs + "." + name + "(" + a0 + ")"
+    }
+    if name == "replace" and n == 2 {
+        return rs + ".replace(" + a0 + ", " + a1 + ")"
+    }
+    if name == "split" and n == 1 {
+        return rs + ".split(" + a0 + ").collect::<Vec<_>>()"
+    }
+    if name == "lines" and n == 0 {
+        return rs + ".lines().collect::<Vec<_>>()"
+    }
+    if name == "split_whitespace" and n == 0 {
+        return rs + ".split_whitespace().collect::<Vec<_>>()"
+    }
+    if name == "join" and n == 1 {
+        return cv_rs_expr(e.kids[1], 15) + ".join(" + cv_rs_expr(r, 1) + ")"
+    }
+    if name == "repeat" and n == 1 {
+        return rs + ".repeat(" + cv_rs_expr(e.kids[1], 12) + " as usize)"
+    }
+    if name == "reverse" and n == 0 {
+        if rt.name == "str" {
+            return rs + ".chars().rev().collect::<String>()"
+        }
+        return rs + ".reverse()"
+    }
+    if name == "reversed" and n == 0 {
+        return rs + ".iter().rev().cloned().collect::<Vec<_>>()"
+    }
+    if name == "sort" and n == 0 {
+        if elem.name == "float" {
+            return rs + ".sort_by(|a, b| a.partial_cmp(b).unwrap())"
+        }
+        return rs + ".sort()"
+    }
+    if name == "sorted" and n == 0 {
+        return "\{ let mut v = " + rs + ".clone(); v.sort(); v }"
+    }
+    if name == "sort_by" and n == 1 {
+        return rs + ".sort_by(|a, b| (" + cv_rs_call_closure(e.kids[1]) + ").cmp(&0))"
+    }
+    if name == "sum" and n == 0 {
+        return rs + ".iter().sum::<" + cv_rs_type(elem) + ">()"
+    }
+    if (name == "min" or name == "max") and n == 0 {
+        return rs + ".iter()." + name + "().unwrap().clone()"
+    }
+    if name == "map" and n == 1 {
+        return rs + ".iter().map(" + cv_rs_closure_arg(e.kids[1], elem) + ").collect::<Vec<_>>()"
+    }
+    if name == "filter" and n == 1 {
+        return rs + ".iter().cloned().filter(" + cv_rs_closure_ref_arg(e.kids[1]) + ").collect::<Vec<_>>()"
+    }
+    if name == "any" and n == 1 {
+        return rs + ".iter().any(" + cv_rs_closure_arg(e.kids[1], elem) + ")"
+    }
+    if name == "all" and n == 1 {
+        return rs + ".iter().all(" + cv_rs_closure_arg(e.kids[1], elem) + ")"
+    }
+    if name == "for_each" and n == 1 {
+        return rs + ".iter().for_each(" + cv_rs_closure_arg(e.kids[1], elem) + ")"
+    }
+    if name == "reduce" and n == 2 {
+        return rs + ".iter().cloned().fold(" + a0 + ", " + a1 + ")"
+    }
+    if name == "first" and n == 0 {
+        return rs + "[0].clone()"
+    }
+    if name == "last" and n == 0 {
+        return rs + ".last().unwrap().clone()"
+    }
+    if name == "is_empty" and n == 0 {
+        return rs + ".is_empty()"
+    }
+    if name == "index_of" and n == 1 {
+        return rs + ".iter().position(|x| *x == " + a0 + ").unwrap() as i64"
+    }
+    if name == "to_int" and n == 0 {
+        return rs + ".trim().parse::<i64>().unwrap()"
+    }
+    if name == "to_float" and n == 0 {
+        return rs + ".trim().parse::<f64>().unwrap()"
+    }
+    if name == "parse_int" and n == 0 {
+        return rs + ".trim().parse::<i64>().ok()"
+    }
+    if name == "parse_float" and n == 0 {
+        return rs + ".trim().parse::<f64>().ok()"
+    }
+    if name == "to_str" and n == 0 {
+        return rs + ".to_string()"
+    }
+    if name == "keys" and n == 0 {
+        return rs + ".keys().cloned().collect::<Vec<_>>()"
+    }
+    if name == "values" and n == 0 {
+        return rs + ".values().cloned().collect::<Vec<_>>()"
+    }
+    if name == "items" and n == 0 {
+        return rs + ".iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()"
+    }
+    if name == "get" and n == 2 {
+        return rs + ".get(&" + cv_rs_expr(e.kids[1], 13) + ").cloned().unwrap_or(" + a1 + ")"
+    }
+    if name == "try_get" and n == 1 {
+        return rs + ".get(&" + cv_rs_expr(e.kids[1], 13) + ").cloned()"
+    }
+    if name == "copy" and n == 0 {
+        return rs + ".clone()"
+    }
+    if name == "take" and n == 1 {
+        return rs + "[.." + cv_rs_index(e.kids[1]) + "].to_vec()"
+    }
+    if name == "skip" and n == 1 {
+        return rs + "[" + cv_rs_index(e.kids[1]) + "..].to_vec()"
+    }
+    if name == "byte_at" and n == 1 {
+        return rs + ".as_bytes()[" + cv_rs_index(e.kids[1]) + "]"
+    }
+    if name == "extend" and n == 1 {
+        return rs + ".extend(" + a0 + ".iter().cloned())"
+    }
+    if name == "unwrap_or" and n == 1 {
+        return rs + ".unwrap_or(" + a0 + ")"
+    }
+    if name == "is_digits" and n == 0 {
+        return rs + ".chars().all(|c| c.is_ascii_digit())"
+    }
+    var parts: [str] = []
+    for i in 1..e.kids.len() {
+        parts.push(cv_rs_expr(e.kids[i], 1))
+    }
+    var key = rt.name + "." + name
+    if not (key in cv_rs_pmodes) {
+        key = "." + name
+    }
+    return rs + "." + name + "(" + cv_rs_call_args(e, key) + ")"
+}
+
+// closures for filter get a reference: |x| x > 1 becomes |x| *x > 1 through a pattern
+fn cv_rs_closure_ref_arg(e: Expr) -> str {
+    if e.kind == "lambda" {
+        return cv_rs_lambda(e, true)
+    }
+    return cv_rs_expr(e, 1)
+}
+
+// sort_by(|a, b| a - b): the comparator returns a number
+fn cv_rs_call_closure(e: Expr) -> str {
+    if e.kind == "lambda" and e.names.len() == 2 and e.kids.len() > 0 {
+        return cv_rs_expr(e.kids[0], 1)
+    }
+    return cv_rs_expr(e, 15) + "(*a, *b)"
+}
+
+// ---------------------------------------------------------------- patterns
+
+fn cv_rs_pattern(p: Expr) -> str {
+    let k = p.kind
+    if k == "pwild" {
+        return "_"
+    }
+    if k == "pbind" {
+        return p.text
+    }
+    if k == "pvariant" {
+        var name = "::".join(p.text.split("."))
+        if p.kids.len() == 0 {
+            return name
+        }
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_rs_pattern(x))
+        }
+        return name + "(" + ", ".join(parts) + ")"
+    }
+    if k == "ptuple" {
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_rs_pattern(x))
+        }
+        return "(" + ", ".join(parts) + ")"
+    }
+    if k == "por" {
+        var parts: [str] = []
+        for x in p.kids {
+            parts.push(cv_rs_pattern(x))
+        }
+        return " | ".join(parts)
+    }
+    if k == "prange" {
+        var op = ".."
+        if p.text == "incl" {
+            op = "..="
+        }
+        return cv_rs_expr(p.kids[0], 5) + op + cv_rs_expr(p.kids[1], 5)
+    }
+    if k == "nil" {
+        return "None"
+    }
+    return cv_rs_expr(p, 5)
+}
+
+fn cv_rs_arms(arms: [Arm]) {
+    for a in arms {
+        var head = cv_rs_pattern(a.pat)
+        if not cv_is_none(a.guard) {
+            head = head + " if " + cv_rs_expr(a.guard, 1)
+        }
+        if a.body.len() == 1 and a.body[0].kind == "expr" {
+            cv_line(head + " => " + cv_rs_owned(a.body[0].e) + ",")
+            continue
+        }
+        if a.body.len() == 1 and (a.body[0].kind == "return" or a.body[0].kind == "break" or a.body[0].kind == "continue") {
+            var text = cv_rs_inline_stmt(a.body[0])
+            cv_line(head + " => " + text.replace(";", "") + ",")
+            continue
+        }
+        cv_line(head + " => \{")
+        cv_ind += 1
+        cv_rs_block_value(a.body)
+        cv_ind -= 1
+        cv_line("}")
+    }
+}
+
+// the last expression of an arm block is its value: no semicolon
+fn cv_rs_block_value(body: [Stmt]) {
+    for i in 0..body.len() {
+        let s = body[i]
+        if i == body.len() - 1 and s.kind == "expr" {
+            cv_line(cv_rs_expr(s.e, 1))
+        } else {
+            cv_rs_stmt_at(body, i)
+        }
+    }
+}
+
+fn cv_rs_inline_stmt(s: Stmt) -> str {
+    let saved_lines = cv_lines
+    let saved_ind = cv_ind
+    cv_lines = []
+    cv_ind = 0
+    cv_rs_stmt_at([s], 0)
+    let text = " ".join(cv_lines)
+    cv_lines = saved_lines
+    cv_ind = saved_ind
+    return text.trim()
+}
+
+fn cv_rs_scrutinee(e: Expr) -> str {
+    let t = cv_infer(e)
+    if t.name == "str" {
+        return cv_rs_expr(e, 1) + ".as_str()"
+    }
+    return cv_rs_expr(e, 1)
+}
+
+fn cv_rs_match_text(e: Expr) -> str {
+    let saved_lines = cv_lines
+    let saved_ind = cv_ind
+    cv_lines = []
+    cv_ind = saved_ind + 1
+    cv_rs_arms(e.arms)
+    let text = "match " + cv_rs_scrutinee(e.kids[0]) + " \{\n" + "\n".join(cv_lines) + "\n" + cv_indent(saved_ind) + "}"
+    cv_lines = saved_lines
+    cv_ind = saved_ind
+    return text
+}
+
+// ---------------------------------------------------------------- statements
+
+fn cv_rs_block(body: [Stmt]) {
+    var i = 0
+    while i < body.len() {
+        cv_rs_stmt_at(body, i)
+        i += 1
+    }
+}
+
+fn cv_rs_type_for_decl(s: Stmt, rest: [Stmt]) -> str {
+    if s.has_ty {
+        return cv_rs_type(s.ty)
+    }
+    let is_empty_array = s.e.kind == "array" and s.e.kids.len() == 0
+    let is_empty_map = s.e.kind == "map" and s.e.kids.len() == 0
+    if is_empty_array or is_empty_map {
+        let guess = cv_atf_guess_container(s.text, rest, is_empty_map)
+        if guess != "" {
+            // guess is ATF text such as [int]: read it back as a type
+            var t = cv_ty("any")
+            if guess.starts_with("[") {
+                t = cv_ty1("array", cv_ty(guess[1..guess.len() - 1]))
+            } else {
+                t = cv_ty2("map", cv_ty("str"), cv_ty("int"))
+            }
+            return cv_rs_type(t)
+        }
+        if is_empty_map {
+            return "HashMap<String, i64>"
+        }
+        return "Vec<i64>"
+    }
+    return ""
+}
+
+fn cv_rs_stmt(s: Stmt) {
+    cv_rs_stmt_at([s], 0)
+}
+
+fn cv_rs_stmt_at(body: [Stmt], idx: int) {
+    let s = body[idx]
+    let k = s.kind
+    if k == "let" or k == "const" {
+        var rest: [Stmt] = []
+        for j in idx + 1..body.len() {
+            rest.push(body[j])
+        }
+        var target = s.text
+        if s.text == "" {
+            target = "(" + ", ".join(s.names) + ")"
+        }
+        let ty = cv_rs_type_for_decl(s, rest)
+        if k == "const" {
+            var cty = ty
+            if cty == "" {
+                let t = cv_infer(s.e)
+                cty = cv_rs_type(t)
+                if t.name == "str" {
+                    cty = "&str"
+                }
+            }
+            cv_line("const " + target + ": " + cty + " = " + cv_rs_expr(s.e, 1) + ";")
+            return
+        }
+        var kw = "let"
+        if s.flag {
+            kw = "let mut"
+        }
+        var line = kw + " " + target
+        if ty != "" {
+            line = line + ": " + ty
+        }
+        if not cv_is_none(s.e) {
+            if s.e.kind == "match" {
+                cv_line(line + " = " + cv_rs_match_text(s.e) + ";")
+                return
+            }
+            var rhs = cv_rs_expr(s.e, 1)
+            if s.flag or s.has_ty {
+                rhs = cv_rs_owned(s.e)
+            }
+            if s.e.kind == "tuple" and s.text == "" {
+                rhs = "(" + cv_rs_list(s.e.kids) + ")"
+            }
+            line = line + " = " + rhs
+        }
+        cv_line(line + ";")
+        return
+    }
+    if k == "assign" {
+        var lhs = cv_rs_expr(s.e, 1)
+        var rhs = cv_rs_owned(s.e2)
+        if s.e.kind == "tuple" {
+            lhs = "(" + cv_rs_list(s.e.kids) + ")"
+        }
+        if s.e2.kind == "tuple" and s.e.kind == "tuple" {
+            rhs = "(" + cv_rs_list(s.e2.kids) + ")"
+        }
+        var op = s.text
+        if op == "**=" {
+            cv_line(lhs + " = " + cv_rs_bin(cv_bin("**", s.e, s.e2)) + ";")
+            return
+        }
+        if op == ">>>=" {
+            op = ">>="
+        }
+        // an index into a map: m[k] = v
+        if s.e.kind == "index" and cv_infer(s.e.kids[0]).name == "map" and op == "=" {
+            cv_line(cv_rs_expr(s.e.kids[0], 15) + ".insert(" + cv_rs_owned(s.e.kids[1]) + ", " + rhs + ");")
+            return
+        }
+        if op != "=" and (cv_infer(s.e).name == "float") and cv_infer(s.e2).name == "int" {
+            rhs = cv_rs_operand(s.e2, 11, s.e)
+        }
+        cv_line(lhs + " " + op + " " + rhs + ";")
+        return
+    }
+    if k == "expr" {
+        if s.e.kind == "match" {
+            cv_line(cv_rs_match_text(s.e))
+            return
+        }
+        cv_line(cv_rs_expr(s.e, 1) + ";")
+        return
+    }
+    if k == "if" or k == "iflet" {
+        cv_rs_if(s, "if")
+        return
+    }
+    if k == "while" or k == "whilelet" or k == "loop" {
+        var label = ""
+        if s.text != "" {
+            label = "'" + s.text + ": "
+        }
+        var head = ""
+        if k == "loop" or (k == "while" and s.e.kind == "bool" and s.e.text == "true") {
+            head = "loop"
+        } else if k == "whilelet" {
+            head = "while let " + cv_rs_let_pattern(s.e) + " = " + cv_rs_expr(s.e2, 1)
+        } else {
+            head = "while " + cv_rs_expr(s.e, 1)
+        }
+        cv_line(label + head + " \{")
+        cv_ind += 1
+        cv_rs_block(s.body)
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "for" {
+        cv_rs_for(s)
+        return
+    }
+    if k == "break" or k == "continue" {
+        if s.text != "" {
+            cv_line(k + " '" + s.text + ";")
+        } else {
+            cv_line(k + ";")
+        }
+        return
+    }
+    if k == "return" {
+        if cv_is_none(s.e) {
+            cv_line("return;")
+        } else if s.e.kind == "match" {
+            cv_line("return " + cv_rs_match_text(s.e) + ";")
+        } else if s.e.kind == "tuple" {
+            cv_line("return (" + cv_rs_list(s.e.kids) + ");")
+        } else {
+            cv_line("return " + cv_rs_owned(s.e) + ";")
+        }
+        return
+    }
+    if k == "defer" {
+        cv_note("defer has no Rust counterpart; the statement is kept as a comment")
+        cv_line("// defer " + cv_rs_expr(s.e, 1))
+        return
+    }
+    if k == "import" {
+        cv_line("// import \"" + s.text + "\"")
+        return
+    }
+    if k == "match" {
+        cv_line("match " + cv_rs_scrutinee(s.e) + " \{")
+        cv_ind += 1
+        cv_rs_arms(s.arms)
+        cv_ind -= 1
+        cv_line("}")
+        return
+    }
+    if k == "fn" {
+        cv_rs_fn(s, false)
+        return
+    }
+    if k == "struct" {
+        cv_rs_struct(s)
+        return
+    }
+    if k == "enum" {
+        cv_rs_enum(s)
+        return
+    }
+    if k == "impl" {
+        cv_rs_impl(s)
+        return
+    }
+}
+
+// a pattern after "let": a plain name is wrapped in Some(..)
+fn cv_rs_let_pattern(p: Expr) -> str {
+    if p.kind == "pbind" {
+        return "Some(" + p.text + ")"
+    }
+    return cv_rs_pattern(p)
+}
+
+fn cv_rs_if(s: Stmt, kw: str) {
+    var head = ""
+    if s.kind == "iflet" {
+        head = kw + " let " + cv_rs_let_pattern(s.e) + " = " + cv_rs_expr(s.e2, 1)
+    } else {
+        head = kw + " " + cv_rs_expr(s.e, 1)
+    }
+    cv_line(head + " \{")
+    cv_ind += 1
+    cv_rs_block(s.body)
+    cv_ind -= 1
+    cv_rs_else(s)
+}
+
+fn cv_rs_else(s: Stmt) {
+    if s.els.len() == 0 {
+        cv_line("}")
+        return
+    }
+    if s.els.len() == 1 and (s.els[0].kind == "if" or s.els[0].kind == "iflet") and s.els[0].text == "" {
+        let inner = s.els[0]
+        var head = ""
+        if inner.kind == "iflet" {
+            head = "} else if let " + cv_rs_let_pattern(inner.e) + " = " + cv_rs_expr(inner.e2, 1)
+        } else {
+            head = "} else if " + cv_rs_expr(inner.e, 1)
+        }
+        cv_line(head + " \{")
+        cv_ind += 1
+        cv_rs_block(inner.body)
+        cv_ind -= 1
+        cv_rs_else(inner)
+        return
+    }
+    cv_line("} else \{")
+    cv_ind += 1
+    cv_rs_block(s.els)
+    cv_ind -= 1
+    cv_line("}")
+}
+
+fn cv_rs_for(s: Stmt) {
+    var label = ""
+    if s.text != "" {
+        label = "'" + s.text + ": "
+    }
+    let e = s.e
+    var vars = ", ".join(s.names)
+    var iter = ""
+    var prelude = ""
+    if s.names.len() == 2 and not s.flag {
+        if cv_is_map_expr(e) {
+            vars = "(" + vars + ")"
+            iter = "&" + cv_rs_expr(e, 13)
+        } else {
+            vars = "(" + s.names[0] + "_u, " + s.names[1] + ")"
+            iter = cv_rs_expr(e, 15) + ".iter().enumerate()"
+            prelude = "let " + s.names[0] + " = " + s.names[0] + "_u as i64;"
+        }
+    } else if s.names.len() > 1 {
+        vars = "(" + vars + ")"
+        iter = "&" + cv_rs_expr(e, 13)
+    } else if e.kind == "range" {
+        iter = cv_rs_range(e)
+        if e.kids.len() == 2 and e.kids[1].kind != "none" {
+            iter = cv_rs_range(e)
+        }
+    } else {
+        let t = cv_infer(e)
+        if t.name == "str" {
+            iter = cv_rs_expr(e, 15) + ".chars()"
+        } else if t.name == "array" or t.name == "map" or t.name == "any" {
+            iter = "&" + cv_rs_expr(e, 13)
+        } else {
+            iter = cv_rs_expr(e, 1)
+        }
+    }
+    cv_line(label + "for " + vars + " in " + iter + " \{")
+    cv_ind += 1
+    if prelude != "" {
+        cv_line(prelude)
+    }
+    cv_rs_block(s.body)
+    cv_ind -= 1
+    cv_line("}")
+}
+
+// does the body change the thing called name?
+fn cv_rs_mutates(body: [Stmt], name: str) -> bool {
+    for s in body {
+        if s.kind == "assign" and cv_rs_root(s.e) == name and s.e.kind != "name" {
+            return true
+        }
+        if s.kind == "expr" and s.e.kind == "method" and cv_rs_root(s.e.kids[0]) == name {
+            let m = s.e.text
+            if m == "push" or m == "pop" or m == "insert" or m == "remove" or m == "sort" or m == "reverse" or m == "extend" or m == "clear" or m == "sort_by" or m == "set" or m == "add" {
+                return true
+            }
+        }
+        if s.kind != "fn" {
+            if cv_rs_mutates(s.body, name) or cv_rs_mutates(s.els, name) {
+                return true
+            }
+            for a in s.arms {
+                if cv_rs_mutates(a.body, name) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+fn cv_rs_root(e: Expr) -> str {
+    if e.kind == "name" {
+        return e.text
+    }
+    if e.kind == "field" or e.kind == "index" or e.kind == "method" {
+        return cv_rs_root(e.kids[0])
+    }
+    return ""
+}
+
+fn cv_rs_modes(s: Stmt) -> [str] {
+    var modes: [str] = []
+    for p in s.params {
+        if p.name == "self" {
+            continue
+        }
+        var m = ""
+        if p.has_ty and (p.ty.name == "array" or p.ty.name == "map" or cv_is_upper_start(p.ty.name)) and not (p.ty.name in cv_rs_generics) {
+            if cv_rs_mutates(s.body, p.name) {
+                m = "&mut"
+            } else {
+                m = "&"
+            }
+        } else if p.has_ty and p.ty.name == "str" {
+            m = "&"
+        }
+        modes.push(m)
+    }
+    return modes
+}
+
+fn cv_rs_fn(s: Stmt, is_method: bool) {
+    let saved_generics = cv_rs_generics
+    cv_rs_generics = s.generics
+    let saved_env = cv_env
+    cv_env = {}
+    for p in s.params {
+        if p.has_ty {
+            cv_env_set(p.name, p.ty)
+        }
+    }
+    let modes = cv_rs_modes(s)
+    var parts: [str] = []
+    var pi = 0
+    var is_main = s.text == "main" and not is_method
+    for p in s.params {
+        if p.name == "self" {
+            if cv_rs_mutates(s.body, "self") {
+                parts.push("&mut self")
+            } else {
+                parts.push("&self")
+            }
+            continue
+        }
+        var ty = "i64"
+        if p.has_ty {
+            ty = cv_rs_param_type(p.ty, modes[pi])
+        } else {
+            cv_note("the type of parameter '{p.name}' is unknown, i64 was used")
+        }
+        parts.push(p.name + ": " + ty)
+        pi += 1
+    }
+    var gen = ""
+    if s.generics.len() > 0 {
+        var bounded: [str] = []
+        for g in s.generics {
+            bounded.push(g + ": Clone + std::fmt::Debug + PartialOrd")
+        }
+        gen = "<" + ", ".join(bounded) + ">"
+    }
+    var name = s.text
+    if is_main and (s.params.len() > 0 or s.has_ret) {
+        name = "atf_main"
+    }
+    var head = "fn " + name + gen + "(" + ", ".join(parts) + ")"
+    if s.has_ret {
+        head = head + " -> " + cv_rs_type(s.ret)
+    }
+    cv_line(head + " \{")
+    cv_ind += 1
+    cv_rs_block(s.body)
+    cv_ind -= 1
+    cv_line("}")
+    if is_main and name == "atf_main" {
+        cv_line("")
+        cv_line("fn main() {")
+        cv_ind += 1
+        var call = "atf_main("
+        if s.params.len() > 0 {
+            cv_line("let args: Vec<String> = std::env::args().skip(1).collect();")
+            call = call + "&args"
+        }
+        call = call + ")"
+        if s.has_ret {
+            cv_line("std::process::exit(" + call + " as i32);")
+        } else {
+            cv_line(call + ";")
+        }
+        cv_ind -= 1
+        cv_line("}")
+    }
+    cv_env = saved_env
+    cv_rs_generics = saved_generics
+}
+
+fn cv_rs_generic_decl(g: [str]) -> str {
+    if g.len() == 0 {
+        return ""
+    }
+    return "<" + ", ".join(g) + ">"
+}
+
+fn cv_rs_struct(s: Stmt) {
+    cv_line("#[derive(Debug, Clone)]")
+    let saved = cv_rs_generics
+    cv_rs_generics = s.generics
+    if s.fields.len() == 0 {
+        cv_line("struct " + s.text + cv_rs_generic_decl(s.generics) + ";")
+        cv_rs_generics = saved
+        return
+    }
+    cv_line("struct " + s.text + cv_rs_generic_decl(s.generics) + " \{")
+    cv_ind += 1
+    for f in s.fields {
+        var t = "i64"
+        if f.has_ty {
+            t = cv_rs_type(f.ty)
+        }
+        cv_line("pub " + f.name + ": " + t + ",")
+    }
+    cv_ind -= 1
+    cv_line("}")
+    cv_rs_generics = saved
+}
+
+fn cv_rs_enum(s: Stmt) {
+    cv_line("#[derive(Debug, Clone, PartialEq)]")
+    cv_line("enum " + s.text + cv_rs_generic_decl(s.generics) + " \{")
+    cv_ind += 1
+    for v in s.variants {
+        var line = v.name
+        if v.tys.len() > 0 and v.names.len() > 0 {
+            var parts: [str] = []
+            for i in 0..v.tys.len() {
+                parts.push(v.names[i] + ": " + cv_rs_type(v.tys[i]))
+            }
+            line = line + " \{ " + ", ".join(parts) + " }"
+        } else if v.tys.len() > 0 {
+            var parts: [str] = []
+            for t in v.tys {
+                parts.push(cv_rs_type(t))
+            }
+            line = line + "(" + ", ".join(parts) + ")"
+        }
+        if v.has_value {
+            line = line + " = {v.value}"
+        }
+        cv_line(line + ",")
+    }
+    cv_ind -= 1
+    cv_line("}")
+}
+
+fn cv_rs_impl(s: Stmt) {
+    cv_line("impl" + cv_rs_generic_decl(s.generics) + " " + cv_rs_type(s.ty) + " \{")
+    cv_ind += 1
+    for i in 0..s.body.len() {
+        if i > 0 {
+            cv_line("")
+        }
+        cv_rs_fn(s.body[i], true)
+    }
+    cv_ind -= 1
+    cv_line("}")
+}
+
+// ---------------------------------------------------------------- the file
+
+fn cv_rs_emit_program(prog: [Stmt]) -> str {
+    cv_rs_uses = {}
+    cv_rs_structs = {}
+    cv_rs_enums = {}
+    cv_rs_pmodes = {}
+    for s in prog {
+        if s.kind == "struct" {
+            cv_rs_structs[s.text] = s.fields
+        }
+        if s.kind == "enum" {
+            cv_rs_enums[s.text] = true
+        }
+        if s.kind == "fn" {
+            cv_rs_pmodes[s.text] = cv_rs_modes(s)
+        }
+        if s.kind == "impl" {
+            for m in s.body {
+                cv_rs_pmodes[s.text + "." + m.text] = cv_rs_modes(m)
+                cv_rs_pmodes["." + m.text] = cv_rs_modes(m)
+            }
+        }
+    }
+    cv_lines = []
+    cv_ind = 0
+    var prev = ""
+    for s in prog {
+        let is_item = s.kind == "fn" or s.kind == "struct" or s.kind == "enum" or s.kind == "impl"
+        if prev != "" and (is_item or prev == "item") {
+            cv_line("")
+        }
+        cv_rs_stmt_at([s], 0)
+        if is_item {
+            prev = "item"
+        } else {
+            prev = "other"
+        }
+    }
+    var head: [str] = []
+    if "HashMap" in cv_rs_uses {
+        head.push("use std::collections::HashMap;")
+    }
+    if "HashSet" in cv_rs_uses {
+        head.push("use std::collections::HashSet;")
+    }
+    var text = cv_lines_text()
+    if head.len() > 0 {
+        text = "\n".join(head) + "\n\n" + text
+    }
+    return text
+}

@@ -1,0 +1,106 @@
+// convert.atf - translates programs between ATF, Python and Rust.
+//
+//   atf run tools/convert.atf prog.py --to atf              Python -> ATF, printed on screen
+//   atf run tools/convert.atf prog.atf --to rs -o prog.rs   ATF -> Rust, written to a file
+//   atf run tools/convert.atf prog.rs --to py
+//
+// The source language comes from the file extension (.atf .py .rs), or from --from. A converter
+// reads the source into one shared tree (tools/convert/ast.atf) and prints it in the other
+// language, so all six directions share the same code. See docs/CONVERT.md for what is supported.
+
+import "convert/api"
+import "convert/parse_base"
+
+fn cv_lang_of(path: str) -> str {
+    if path.ends_with(".atf") {
+        return "atf"
+    }
+    if path.ends_with(".py") {
+        return "py"
+    }
+    if path.ends_with(".rs") {
+        return "rs"
+    }
+    return ""
+}
+
+fn cv_lang_name(s: str) -> str {
+    let l = s.lower()
+    if l == "atf" {
+        return "atf"
+    }
+    if l == "py" or l == "python" {
+        return "py"
+    }
+    if l == "rs" or l == "rust" {
+        return "rs"
+    }
+    return ""
+}
+
+fn cv_usage() {
+    eprintln("usage: convert.atf <file> --to atf|py|rs [--from atf|py|rs] [-o out]")
+    eprintln("       the source language is taken from the extension (.atf .py .rs)")
+}
+
+fn main(args: [str]) -> int {
+    var input = ""
+    var output = ""
+    var to = ""
+    var from = ""
+    var i = 0
+    while i < args.len() {
+        let a = args[i]
+        if a == "--to" or a == "-t" {
+            i += 1
+            if i < args.len() {
+                to = cv_lang_name(args[i])
+            }
+        } else if a == "--from" or a == "-f" {
+            i += 1
+            if i < args.len() {
+                from = cv_lang_name(args[i])
+            }
+        } else if a == "-o" or a == "--output" {
+            i += 1
+            if i < args.len() {
+                output = args[i]
+            }
+        } else if a == "-h" or a == "--help" {
+            cv_usage()
+            return 0
+        } else {
+            input = a
+        }
+        i += 1
+    }
+    if input == "" or to == "" {
+        cv_usage()
+        return 2
+    }
+    if from == "" {
+        from = cv_lang_of(input)
+    }
+    if from == "" {
+        eprintln("cannot tell the language of {input}, use --from")
+        return 2
+    }
+    let text = read_file(input)
+    if text == nil {
+        eprintln("cannot read {input}")
+        return 1
+    }
+    let result = cv_convert(text!, from, to)
+    if output == "" {
+        print(result)
+    } else {
+        if not write_file(output, result) {
+            eprintln("cannot write {output}")
+            return 1
+        }
+    }
+    for n in cv_notes {
+        eprintln("note: {n}")
+    }
+    return 0
+}

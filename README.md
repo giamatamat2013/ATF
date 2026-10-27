@@ -194,7 +194,8 @@ examples/              example programs with their expected output
 tests/                 test suites (see below)
 bench/                 benchmarks
 editors/               editor support
-tools/                 tools written in ATF (tools/stdlib_docs.atf writes docs/STDLIB.md)
+tools/                 tools written in ATF (tools/stdlib_docs.atf writes docs/STDLIB.md,
+                       tools/convert.atf converts between ATF, Python and Rust, see docs/CONVERT.md)
 CLAUDE.md              rules for Claude Code: every change also updates the docs, tutorials and the ATF skill
 .claude/skills/atf/    the Claude skill that teaches the language
 ```

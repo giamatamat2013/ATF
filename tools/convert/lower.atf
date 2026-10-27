@@ -1,0 +1,376 @@
+// lower.atf - turns the library calls of Python and Rust into the ATF spelling while parsing.
+//
+// After this step the tree only has ATF names (len() push() trim() println() ...). The writers map
+// them back to the library of the language they write.
+
+// names of variables that hold maps (found while parsing); helps with insert / get / for k, v
+var cv_maps: {str: bool} = {}
+
+fn cv_mark_map(name: str) {
+    cv_maps[name] = true
+}
+
+fn cv_is_map_expr(e: Expr) -> bool {
+    if e.kind == "name" {
+        return e.text in cv_maps
+    }
+    if e.kind == "field" {
+        return ("." + e.text) in cv_maps
+    }
+    if e.kind == "map" {
+        return true
+    }
+    return false
+}
+
+fn cv_lower_path(path: str) -> str {
+    if path.ends_with("consts.PI") {
+        return "PI"
+    }
+    if path.ends_with("consts.E") {
+        return "E"
+    }
+    if path == "i64.MAX" or path == "i32.MAX" or path == "usize.MAX" or path == "u64.MAX" or path == "isize.MAX" {
+        return "INT_MAX"
+    }
+    if path == "i64.MIN" or path == "i32.MIN" or path == "isize.MIN" {
+        return "INT_MIN"
+    }
+    if path == "f64.INFINITY" or path == "f64.MAX" {
+        return "INF"
+    }
+    return path
+}
+
+fn cv_lower_field(base: Expr, name: str) -> Expr {
+    if base.kind == "name" and base.text == "math" {
+        if name == "pi" {
+            return cv_name("PI")
+        }
+        if name == "e" {
+            return cv_name("E")
+        }
+        if name == "inf" {
+            return cv_name("INF")
+        }
+    }
+    return cv_e("field", name, [base])
+}
+
+fn cv_args_of(m: Expr) -> [Expr] {
+    var out: [Expr] = []
+    for i in 1..m.kids.len() {
+        out.push(m.kids[i])
+    }
+    return out
+}
+
+fn cv_str_lit(s: str) -> Expr {
+    return cv_lit("str", s)
+}
+
+// print(a, b, end="") -> println("{a} {b}")
+fn cv_lower_print(c: Expr) -> Expr {
+    var pieces: [Expr] = []
+    var newline = true
+    var n = 0
+    for i in 1..c.kids.len() {
+        let nm = c.names[i - 1]
+        if nm == "end" {
+            if c.kids[i].kind == "str" and c.kids[i].text == "" {
+                newline = false
+            }
+            continue
+        }
+        if nm == "sep" or nm == "file" or nm == "flush" {
+            continue
+        }
+        if n > 0 {
+            pieces.push(cv_str_lit(" "))
+        }
+        pieces.push(c.kids[i])
+        n += 1
+    }
+    var fname = "println"
+    if not newline {
+        fname = "print"
+    }
+    if n == 0 {
+        return cv_call(cv_name(fname), [])
+    }
+    if n == 1 {
+        return cv_call(cv_name(fname), [pieces[0]])
+    }
+    var specs: [str] = []
+    for p in pieces {
+        specs.push("")
+    }
+    var f = cv_e("fstr", "", pieces)
+    f.names = specs
+    return cv_call(cv_name(fname), [f])
+}
+
+fn cv_lower_call(c: Expr) -> Expr {
+    let callee = c.kids[0]
+    if callee.kind != "name" {
+        return c
+    }
+    var name = callee.text
+    let args = cv_args_of(c)
+    let n = args.len()
+    if cv_lang == "py" {
+        if name == "print" {
+            return cv_lower_print(c)
+        }
+        if name == "len" and n == 1 {
+            return cv_method(args[0], "len", [])
+        }
+        if name == "sum" and n == 1 {
+            return cv_method(args[0], "sum", [])
+        }
+        if name == "sorted" and n == 1 {
+            return cv_method(args[0], "sorted", [])
+        }
+        if name == "reversed" and n == 1 {
+            return cv_method(args[0], "reversed", [])
+        }
+        if name == "list" and n == 1 {
+            return cv_call(cv_name("copy"), args)
+        }
+        if name == "list" and n == 0 {
+            return cv_e("array", "", [])
+        }
+        if name == "dict" and n == 0 {
+            return cv_e("map", "", [])
+        }
+        if name == "set" and n == 0 {
+            return cv_call(cv_name("set_new"), [])
+        }
+        if name == "range" {
+            if n == 1 {
+                return cv_e("range", "", [cv_lit("int", "0"), args[0]])
+            }
+            if n == 2 {
+                return cv_e("range", "", [args[0], args[1]])
+            }
+            if n == 3 {
+                return cv_e("range", "", [args[0], args[1], args[2]])
+            }
+        }
+        if name == "int" and n == 1 and (args[0].kind == "str" or args[0].kind == "fstr" or (args[0].kind == "call" and args[0].kids[0].kind == "name" and args[0].kids[0].text == "input")) {
+            return cv_method(args[0], "to_int", [])
+        }
+        if name == "float" and n == 1 and (args[0].kind == "str" or (args[0].kind == "call" and args[0].kids[0].kind == "name" and args[0].kids[0].text == "input")) {
+            return cv_method(args[0], "to_float", [])
+        }
+        if name == "round" and n == 1 {
+            return cv_call(cv_name("round"), args)
+        }
+        if name == "exit" {
+            return cv_call(cv_name("exit"), args)
+        }
+        return c
+    }
+    if cv_lang == "rs" {
+        let segs = name.split(".")
+        let last = segs.last()
+        var pre = ""
+        if segs.len() >= 2 {
+            pre = segs[segs.len() - 2]
+        }
+        if (pre == "Vec" or pre == "VecDeque") and (last == "new" or last == "with_capacity") {
+            return cv_e("array", "", [])
+        }
+        if (pre == "HashMap" or pre == "BTreeMap") and last == "new" {
+            return cv_e("map", "", [])
+        }
+        if (pre == "HashSet" or pre == "BTreeSet") and last == "new" {
+            return cv_call(cv_name("set_new"), [])
+        }
+        if pre == "String" and (last == "new") {
+            return cv_str_lit("")
+        }
+        if pre == "String" and (last == "from" or last == "from_str") and n == 1 {
+            return args[0]
+        }
+        if (pre == "Box" or pre == "Rc" or pre == "Arc" or pre == "RefCell" or pre == "Cell") and last == "new" and n == 1 {
+            return args[0]
+        }
+        if name == "Some" and n == 1 {
+            return args[0]
+        }
+        if name == "Ok" and n == 1 {
+            return cv_call(cv_name("Result.Ok"), args)
+        }
+        if name == "Err" and n == 1 {
+            return cv_call(cv_name("Result.Err"), args)
+        }
+        if last == "exit" and (pre == "process" or segs.len() == 1) {
+            return cv_call(cv_name("exit"), args)
+        }
+        if (last == "max" or last == "min") and pre == "cmp" and n == 2 {
+            return cv_call(cv_name(last), args)
+        }
+        if (pre == "i64" or pre == "i32" or pre == "u64" or pre == "u32" or pre == "usize" or pre == "f64") and last == "from" and n == 1 {
+            return args[0]
+        }
+        if segs.len() > 1 and pre == "mem" and last == "swap" {
+            return c
+        }
+        return c
+    }
+    return c
+}
+
+fn cv_lower_method(m: Expr) -> Expr {
+    let recv = m.kids[0]
+    let name = m.text
+    let args = cv_args_of(m)
+    let n = args.len()
+    if cv_lang == "atf" {
+        return m
+    }
+    if recv.kind == "name" and (recv.text == "math" or recv.text == "random" or recv.text == "sys" or recv.text == "os") and cv_lang == "py" {
+        if recv.text == "math" {
+            if name == "floor" or name == "ceil" or name == "sqrt" or name == "pow" or name == "sin" or name == "cos" or name == "tan" or name == "log" or name == "exp" or name == "fabs" {
+                var fname = name
+                if name == "fabs" {
+                    fname = "abs"
+                }
+                if name == "pow" and n == 2 {
+                    return cv_bin("**", args[0], args[1])
+                }
+                return cv_call(cv_name(fname), args)
+            }
+        }
+        if recv.text == "sys" and name == "exit" {
+            return cv_call(cv_name("exit"), args)
+        }
+        if recv.text == "random" and name == "randint" and n == 2 {
+            return cv_call(cv_name("rand_int"), args)
+        }
+        if recv.text == "random" and name == "random" {
+            return cv_call(cv_name("rand_float"), [])
+        }
+        if recv.text == "random" and name == "choice" and n == 1 {
+            return cv_call(cv_name("rand_choice"), args)
+        }
+        if recv.text == "random" and name == "shuffle" and n == 1 {
+            return cv_call(cv_name("shuffle"), args)
+        }
+    }
+    if cv_lang == "py" {
+        return cv_lower_py_method(m, recv, name, args)
+    }
+    return cv_lower_rs_method(m, recv, name, args)
+}
+
+fn cv_lower_py_method(m: Expr, recv: Expr, name: str, args: [Expr]) -> Expr {
+    let n = args.len()
+    if name == "append" and n == 1 {
+        return cv_method(recv, "push", args)
+    }
+    if name == "strip" and n == 0 {
+        return cv_method(recv, "trim", [])
+    }
+    if (name == "lstrip" or name == "rstrip") and n == 0 {
+        return cv_method(recv, "trim", [])
+    }
+    if name == "startswith" {
+        return cv_method(recv, "starts_with", args)
+    }
+    if name == "endswith" {
+        return cv_method(recv, "ends_with", args)
+    }
+    if name == "split" and n == 0 {
+        return cv_method(recv, "split_whitespace", [])
+    }
+    if name == "index" and n == 1 {
+        return cv_method(recv, "index_of", args)
+    }
+    if name == "get" and n == 1 {
+        return cv_method(recv, "try_get", args)
+    }
+    if name == "isdigit" and n == 0 {
+        return cv_method(recv, "is_digits", [])
+    }
+    if name == "keys" or name == "values" or name == "items" {
+        return cv_method(recv, name, [])
+    }
+    if name == "format" {
+        return m
+    }
+    return m
+}
+
+fn cv_lower_rs_method(m: Expr, recv: Expr, name: str, args: [Expr]) -> Expr {
+    let n = args.len()
+    if (name == "iter" or name == "into_iter" or name == "iter_mut" or name == "cloned" or name == "copied" or name == "to_vec" or name == "as_str" or name == "as_ref" or name == "as_mut" or name == "borrow" or name == "borrow_mut" or name == "to_owned" or name == "clone" or name == "collect" or name == "chars" or name == "as_slice" or name == "bytes" or name == "into" or name == "by_ref" or name == "lock") and n == 0 {
+        return recv
+    }
+    if name == "to_string" and n == 0 {
+        if recv.kind == "str" or recv.kind == "fstr" {
+            return recv
+        }
+        return cv_call(cv_name("str"), [recv])
+    }
+    if name == "unwrap" or name == "expect" or name == "unwrap_unchecked" {
+        // parse::<T>() already became parse_int / parse_float, which return an optional
+        return cv_e("unwrap", "", [recv])
+    }
+    if name == "unwrap_or" and n == 1 {
+        return cv_bin("??", recv, args[0])
+    }
+    if name == "is_some" and n == 0 {
+        return cv_bin("!=", recv, cv_lit("nil", "nil"))
+    }
+    if name == "is_none" and n == 0 {
+        return cv_bin("==", recv, cv_lit("nil", "nil"))
+    }
+    if name == "to_uppercase" or name == "to_ascii_uppercase" {
+        return cv_method(recv, "upper", [])
+    }
+    if name == "to_lowercase" or name == "to_ascii_lowercase" {
+        return cv_method(recv, "lower", [])
+    }
+    if name == "abs" and n == 0 {
+        return cv_call(cv_name("abs"), [recv])
+    }
+    if name == "sqrt" and n == 0 {
+        return cv_call(cv_name("sqrt"), [recv])
+    }
+    if (name == "pow" or name == "powi" or name == "powf") and n == 1 {
+        return cv_bin("**", recv, args[0])
+    }
+    if (name == "min" or name == "max") and n == 1 {
+        return cv_call(cv_name(name), [recv, args[0]])
+    }
+    if name == "parse" and n == 0 {
+        if m.ty.name.starts_with("f") {
+            return cv_method(recv, "parse_float", [])
+        }
+        return cv_method(recv, "parse_int", [])
+    }
+    if name == "rev" and n == 0 {
+        return cv_method(recv, "reversed", [])
+    }
+    if name == "join" and n == 1 {
+        return cv_method(args[0], "join", [recv])
+    }
+    if name == "get" and n == 1 {
+        return cv_method(recv, "try_get", args)
+    }
+    if name == "contains_key" and n == 1 {
+        return cv_method(recv, "has", args)
+    }
+    if name == "sort_unstable" {
+        return cv_method(recv, "sort", [])
+    }
+    if name == "to_digit" {
+        return cv_method(recv, "to_int", [])
+    }
+    if name == "is_ascii_digit" or name == "is_numeric" {
+        return cv_method(recv, "is_digits", [])
+    }
+    return m
+}

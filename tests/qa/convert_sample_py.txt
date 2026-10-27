@@ -1,0 +1,30 @@
+from dataclasses import dataclass
+
+@dataclass
+class Item:
+    name: str
+    price: float
+
+def total(items: list[Item]) -> float:
+    s = 0.0
+    for it in items:
+        s += it.price
+    return s
+
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def main():
+    items = [Item("a", 1.5), Item("b", 2.25)]
+    print(f"total = {total(items):.2f}")
+    squares = [x * x for x in range(1, 6) if x % 2 == 1]
+    print(squares, fib(10))
+    counts = {}
+    for w in "a b a c".split():
+        counts[w] = counts.get(w, 0) + 1
+    print(counts)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,318 @@
+// infer.atf - a small type guesser.
+//
+// The writers need a few types: Python needs to know whether / is an integer division, Rust needs
+// casts between int and float, ATF needs a type on every parameter. The guess is simple: literals,
+// declared variables, known functions and fields. When it is unsure it answers "any".
+
+var cv_env: {str: Ty} = {}
+var cv_fn_rets: {str: Ty} = {}
+var cv_field_tys: {str: Ty} = {}
+
+fn cv_env_set(name: str, t: Ty) {
+    if name != "" and name != "_" {
+        cv_env[name] = t
+    }
+}
+
+fn cv_env_clear() {
+    cv_env = {}
+}
+
+fn cv_is_num(t: Ty) -> bool {
+    return t.name == "int" or t.name == "float" or t.name == "byte"
+}
+
+fn cv_ty_text(t: Ty) -> str {
+    if t.args.len() == 0 {
+        return t.name
+    }
+    var parts: [str] = []
+    for a in t.args {
+        parts.push(cv_ty_text(a))
+    }
+    return t.name + "<" + ", ".join(parts) + ">"
+}
+
+fn cv_infer(e: Expr) -> Ty {
+    let k = e.kind
+    if k == "int" {
+        return cv_ty("int")
+    }
+    if k == "float" {
+        return cv_ty("float")
+    }
+    if k == "str" or k == "fstr" {
+        return cv_ty("str")
+    }
+    if k == "bool" {
+        return cv_ty("bool")
+    }
+    if k == "byte" {
+        return cv_ty("byte")
+    }
+    if k == "name" {
+        if e.text in cv_env {
+            return cv_env[e.text]
+        }
+        if e.text == "PI" or e.text == "E" or e.text == "INF" {
+            return cv_ty("float")
+        }
+        if e.text == "INT_MAX" or e.text == "INT_MIN" {
+            return cv_ty("int")
+        }
+        return cv_ty("any")
+    }
+    if k == "paren" {
+        return cv_infer(e.kids[0])
+    }
+    if k == "bin" {
+        let op = e.text
+        if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "in" or op == "not in" {
+            return cv_ty("bool")
+        }
+        if op == "??" {
+            return cv_infer(e.kids[0])
+        }
+        let a = cv_infer(e.kids[0])
+        let b = cv_infer(e.kids[1])
+        if a.name == "str" or b.name == "str" {
+            if op == "+" or op == "*" {
+                return cv_ty("str")
+            }
+        }
+        if a.name == "array" and op == "+" {
+            return a
+        }
+        if a.name == "float" or b.name == "float" {
+            return cv_ty("float")
+        }
+        if a.name == "int" and b.name == "int" {
+            return cv_ty("int")
+        }
+        if op == "&" or op == "|" or op == "^" or op == "<<" or op == ">>" or op == ">>>" or op == "%" {
+            return cv_ty("int")
+        }
+        return cv_ty("any")
+    }
+    if k == "un" {
+        if e.text == "not" {
+            return cv_ty("bool")
+        }
+        return cv_infer(e.kids[0])
+    }
+    if k == "cast" {
+        return e.ty
+    }
+    if k == "array" {
+        if e.kids.len() > 0 {
+            return cv_ty1("array", cv_infer(e.kids[0]))
+        }
+        return cv_ty1("array", cv_ty("any"))
+    }
+    if k == "comp" {
+        return cv_ty1("array", cv_ty("any"))
+    }
+    if k == "map" {
+        if e.kids.len() >= 2 {
+            return cv_ty2("map", cv_infer(e.kids[0]), cv_infer(e.kids[1]))
+        }
+        return cv_ty2("map", cv_ty("any"), cv_ty("any"))
+    }
+    if k == "tuple" {
+        var items: [Ty] = []
+        for x in e.kids {
+            items.push(cv_infer(x))
+        }
+        return Ty("tuple", items)
+    }
+    if k == "range" {
+        return cv_ty1("array", cv_ty("int"))
+    }
+    if k == "structlit" {
+        return cv_ty(e.text)
+    }
+    if k == "if" {
+        let t = cv_infer(e.kids[1])
+        if t.name == "any" and e.kids.len() > 2 {
+            return cv_infer(e.kids[2])
+        }
+        return t
+    }
+    if k == "unwrap" or k == "try" {
+        let t = cv_infer(e.kids[0])
+        if (t.name == "opt" or t.name == "result") and t.args.len() > 0 {
+            return t.args[0]
+        }
+        return cv_ty("any")
+    }
+    if k == "field" {
+        if e.text in cv_field_tys {
+            return cv_field_tys[e.text]
+        }
+        let base = cv_infer(e.kids[0])
+        if base.name != "any" and (base.name + "." + e.text) in cv_field_tys {
+            return cv_field_tys[base.name + "." + e.text]
+        }
+        if cv_is_int_text(e.text) {
+            let b = cv_infer(e.kids[0])
+            if b.name == "tuple" and int(e.text) < b.args.len() {
+                return b.args[int(e.text)]
+            }
+        }
+        return cv_ty("any")
+    }
+    if k == "index" {
+        let b = cv_infer(e.kids[0])
+        if b.name == "array" and b.args.len() > 0 {
+            return b.args[0]
+        }
+        if b.name == "map" and b.args.len() > 1 {
+            return b.args[1]
+        }
+        if b.name == "str" {
+            return cv_ty("str")
+        }
+        return cv_ty("any")
+    }
+    if k == "slice" {
+        return cv_infer(e.kids[0])
+    }
+    if k == "call" {
+        return cv_infer_call(e)
+    }
+    if k == "method" {
+        return cv_infer_method(e)
+    }
+    return cv_ty("any")
+}
+
+fn cv_infer_call(e: Expr) -> Ty {
+    let callee = e.kids[0]
+    if callee.kind != "name" {
+        return cv_ty("any")
+    }
+    let n = callee.text
+    if n in cv_fn_rets {
+        return cv_fn_rets[n]
+    }
+    if n == "int" or n == "len" or n == "ord" or n == "rand_int" {
+        return cv_ty("int")
+    }
+    if n == "float" or n == "sqrt" or n == "rand_float" or n == "sin" or n == "cos" or n == "tan" or n == "exp" or n == "log" or n == "floor" or n == "ceil" {
+        return cv_ty("float")
+    }
+    if n == "str" or n == "input" or n == "chr" or n == "pad_left" or n == "pad_right" {
+        return cv_ty("str")
+    }
+    if (n == "abs" or n == "min" or n == "max") and e.kids.len() > 1 {
+        let t = cv_infer(e.kids[1])
+        if t.name == "any" and e.kids.len() > 2 {
+            return cv_infer(e.kids[2])
+        }
+        return t
+    }
+    if n == "copy" and e.kids.len() == 2 {
+        return cv_infer(e.kids[1])
+    }
+    if cv_is_upper_start(n) {
+        // Item(...) or Shape.Circle(..)
+        let parts = n.split(".")
+        return cv_ty(parts[0])
+    }
+    return cv_ty("any")
+}
+
+fn cv_infer_method(e: Expr) -> Ty {
+    let n = e.text
+    let recv = cv_infer(e.kids[0])
+    if n == "len" or n == "count" or n == "index_of" or n == "to_int" or n == "find" {
+        return cv_ty("int")
+    }
+    if n == "to_float" {
+        return cv_ty("float")
+    }
+    if n == "upper" or n == "lower" or n == "trim" or n == "replace" or n == "join" or n == "repeat" or n == "pad_left" or n == "pad_right" or n == "finish" or n == "reverse" and recv.name == "str" {
+        return cv_ty("str")
+    }
+    if n == "contains" or n == "starts_with" or n == "ends_with" or n == "is_empty" or n == "has" or n == "any" or n == "all" {
+        return cv_ty("bool")
+    }
+    if n == "split" or n == "lines" or n == "split_whitespace" {
+        return cv_ty1("array", cv_ty("str"))
+    }
+    if n == "parse_int" {
+        return cv_ty1("opt", cv_ty("int"))
+    }
+    if n == "parse_float" {
+        return cv_ty1("opt", cv_ty("float"))
+    }
+    if (n == "sum" or n == "min" or n == "max" or n == "first" or n == "last" or n == "pop") and recv.name == "array" and recv.args.len() > 0 {
+        return recv.args[0]
+    }
+    if (n == "sorted" or n == "reversed" or n == "filter" or n == "copy" or n == "unique" or n == "take" or n == "skip") and recv.name == "array" {
+        return recv
+    }
+    if n == "keys" and recv.name == "map" and recv.args.len() > 0 {
+        return cv_ty1("array", recv.args[0])
+    }
+    if n == "values" and recv.name == "map" and recv.args.len() > 1 {
+        return cv_ty1("array", recv.args[1])
+    }
+    if n == "get" and recv.name == "map" and recv.args.len() > 1 {
+        return recv.args[1]
+    }
+    if n == "try_get" and recv.name == "map" and recv.args.len() > 1 {
+        return cv_ty1("opt", recv.args[1])
+    }
+    if (recv.name + "." + n) in cv_fn_rets {
+        return cv_fn_rets[recv.name + "." + n]
+    }
+    if ("." + n) in cv_fn_rets {
+        return cv_fn_rets["." + n]
+    }
+    return cv_ty("any")
+}
+
+// the first return statement that has a value tells the return type of a function
+fn cv_guess_return(body: [Stmt]) -> Ty {
+    for s in body {
+        if s.kind == "return" and not cv_is_none(s.e) {
+            let t = cv_infer(s.e)
+            if t.name != "any" {
+                return t
+            }
+        }
+        if s.kind == "if" or s.kind == "while" or s.kind == "for" or s.kind == "loop" or s.kind == "iflet" {
+            let a = cv_guess_return(s.body)
+            if a.name != "any" {
+                return a
+            }
+            let b = cv_guess_return(s.els)
+            if b.name != "any" {
+                return b
+            }
+        }
+    }
+    return cv_ty("any")
+}
+
+fn cv_has_value_return(body: [Stmt]) -> bool {
+    for s in body {
+        if s.kind == "return" and not cv_is_none(s.e) {
+            return true
+        }
+        if s.kind == "if" or s.kind == "while" or s.kind == "for" or s.kind == "loop" or s.kind == "iflet" or s.kind == "whilelet" {
+            if cv_has_value_return(s.body) or cv_has_value_return(s.els) {
+                return true
+            }
+        }
+        if s.kind == "match" {
+            for a in s.arms {
+                if cv_has_value_return(a.body) {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
