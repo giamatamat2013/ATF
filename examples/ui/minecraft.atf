@@ -8,9 +8,9 @@
 
 import "std/ui"
 
-const MC_W = 384          // ray casting resolution; every cell is drawn as MC_S x MC_S pixels
-const MC_H = 216
-const MC_S = 3
+const MC_W = 576         // ray casting resolution; every cell is drawn as MC_S x MC_S pixels
+const MC_H = 324
+const MC_S = 2
 const MC_X = 48           // world size in blocks
 const MC_Y = 24
 const MC_Z = 48

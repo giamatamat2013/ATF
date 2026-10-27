@@ -6,9 +6,9 @@
 
 import "std/ui"
 
-const WF_W = 320        // ray casting resolution; the picture is scaled up smoothly by WF_S
-const WF_H = 200
-const WF_S = 3
+const WF_W = 960        // ray casting resolution; with WF_S above 1 the picture is scaled up smoothly
+const WF_H = 600
+const WF_S = 1
 const WF_N = 16
 
 let WF_MAP = [
