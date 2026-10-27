@@ -1,6 +1,6 @@
 # ATF tutorial
 
-Welcome! This tutorial teaches you **ATF** (source files end in `.atf`) step by step.
+Welcome! This tutorial teaches you **ATF** (*Accessible Typed Fast*; source files end in `.atf`) step by step.
 You do not need to know any other programming language, but if you do, most things will look familiar.
 
 ATF is a *compiled*, *statically typed* language: the compiler checks your program for mistakes

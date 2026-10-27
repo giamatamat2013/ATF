@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="256" height="256">
+<title>ATF</title>
+<defs><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="#fff"/><circle cx="34" cy="62" r="8" fill="#000"/></mask></defs>
+<rect width="100" height="100" rx="23" fill="#28181e"/>
+<g transform="rotate(180 50 50)"><g mask="url(#m)"><circle cx="34" cy="62" r="24" fill="#ffbe40"/><polygon points="33.50,48.00 45.64,46.90 45.09,32.55" fill="#ffbe40" stroke="#ffbe40" stroke-width="20" stroke-linejoin="round"/></g></g>
+<circle cx="34" cy="62" r="27" fill="#28181e"/><polygon points="33.50,48.00 45.64,46.90 45.09,32.55" fill="#28181e" stroke="#28181e" stroke-width="26" stroke-linejoin="round"/>
+<g mask="url(#m)"><circle cx="34" cy="62" r="24" fill="#ff6b4a"/><polygon points="33.50,48.00 45.64,46.90 45.09,32.55" fill="#ff6b4a" stroke="#ff6b4a" stroke-width="20" stroke-linejoin="round"/></g>
+</svg>

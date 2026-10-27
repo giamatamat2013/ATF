@@ -1,0 +1,42 @@
+# ATF for Visual Studio Code
+
+Language support for [ATF](https://github.com/tamat2013) (*Accessible Typed Fast*), a small compiled programming language (`.atf` files).
+
+Created by **TAMAT2013**.
+
+## Features
+
+- **Syntax highlighting** for ATF, including string interpolation, format specs, generics, lambdas and attributes. Also inside ```` ```atf ```` blocks in Markdown.
+- **Snippets** for functions, structs, enums, `impl`, `match`, loops and more.
+- **Compiler errors in the editor.** `atf check` runs when an `.atf` file is opened or saved, and the errors show up as red squiggles and in the Problems panel.
+- **Run and build commands** from the Command Palette:
+  - `ATF: Run File` (also `Ctrl+F5` and the play button in the editor title bar)
+  - `ATF: Build File`
+  - `ATF: Check File`
+- **Outline** and *Go to Symbol* for `fn`, `struct`, `enum`, `impl`, `type` and `const`.
+- Bracket matching, auto-closing pairs, comment toggling and indentation rules.
+
+## Requirements
+
+The ATF compiler. The extension looks for it in this order:
+
+1. the `atf.path` setting
+2. `bin\atf.exe` or `atf.cmd` in the workspace folder
+3. `atf` on your `PATH`
+
+Opening the ATF repository as the workspace is enough; running `install.cmd` from the repository puts `atf` on your `PATH`.
+
+## Settings
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `atf.path` | `""` | Path to the ATF compiler. |
+| `atf.checkOnSave` | `true` | Run `atf check` on open and save and show the errors in the editor. |
+
+## Install from source
+
+Copy this folder to `%USERPROFILE%\.vscode\extensions\tamat2013.atf-0.3.0` and reload VS Code, or package it with `npx @vscode/vsce package` and install the `.vsix`.
+
+## License
+
+PolyForm Noncommercial 1.0.0. See [LICENSE](LICENSE).

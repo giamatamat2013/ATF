@@ -1,9 +1,13 @@
 {
   "name": "atf",
   "displayName": "ATF",
-  "description": "Syntax highlighting, snippets, brackets and indentation for the ATF programming language (.atf files).",
-  "version": "0.2.0",
-  "publisher": "atf",
+  "description": "Syntax highlighting, snippets, compiler diagnostics, run/build commands and outline for ATF (Accessible Typed Fast), a small compiled programming language (.atf files).",
+  "version": "0.3.0",
+  "publisher": "tamat2013",
+  "author": {
+    "name": "TAMAT2013"
+  },
+  "icon": "icon.png",
   "license": "PolyForm-Noncommercial-1.0.0",
   "engines": {
     "vscode": "^1.60.0"
@@ -13,10 +17,41 @@
     "Snippets"
   ],
   "keywords": [
-    "atf",
     "atf"
   ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:atf"
+  ],
   "contributes": {
+    "commands": [
+      { "command": "atf.run", "title": "ATF: Run File", "icon": "$(play)" },
+      { "command": "atf.build", "title": "ATF: Build File" },
+      { "command": "atf.check", "title": "ATF: Check File" }
+    ],
+    "menus": {
+      "editor/title/run": [
+        { "command": "atf.run", "when": "resourceLangId == atf" }
+      ]
+    },
+    "keybindings": [
+      { "command": "atf.run", "key": "ctrl+f5", "when": "editorLangId == atf" }
+    ],
+    "configuration": {
+      "title": "ATF",
+      "properties": {
+        "atf.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the ATF compiler (atf.exe). Empty: bin/atf.exe or atf.cmd in the workspace, else `atf` from PATH."
+        },
+        "atf.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run `atf check` when an .atf file is opened or saved and show errors in the editor."
+        }
+      }
+    },
     "languages": [
       {
         "id": "atf",
@@ -28,6 +63,10 @@
           ".atf"
         ],
         "firstLine": "^#!.*\\batf\\b",
+        "icon": {
+          "light": "./atf-file.svg",
+          "dark": "./atf-file.svg"
+        },
         "configuration": "./language-configuration.json"
       }
     ],

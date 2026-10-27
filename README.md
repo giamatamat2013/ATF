@@ -1,6 +1,6 @@
 # ATF
 
-**ATF** is a small programming language that is easy to learn and compiles to fast native
+**ATF** (*Accessible Typed Fast*) is a small programming language that is easy to learn and compiles to fast native
 Windows programs. Its syntax is short and readable, the compiler explains mistakes in plain words, and
 the result is a stand-alone `.exe` that needs nothing else to run.
 
