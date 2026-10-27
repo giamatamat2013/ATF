@@ -13,7 +13,7 @@ from . import syntax as S
 HERE = os.path.dirname(os.path.abspath(__file__))
 STDLIB = os.path.join(HERE, "stdlib")                                   # prelude.atf lives here
 STD_MODULES = os.path.join(os.path.dirname(HERE), "stdlib")             # importable as  import "std/name"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def read_source(path):

@@ -11,7 +11,7 @@ Created by **TAMAT2013**.
 - **Automatic imports.** When you use a standard library name such as `json_parse`, `counter_from` or `button(...)`, the matching `import "std/..."` line is added at the top of the file.
 - **Compiler errors in the editor.** `atf check` runs when an `.atf` file is opened or saved, and the errors show up as red squiggles and in the Problems panel.
 - **Run and build commands** from the Command Palette:
-  - `ATF: Run File` (also `Ctrl+F5` and the play button in the editor title bar)
+  - `ATF: Run File` (also `F5`, `Ctrl+F5` and the play button in the editor title bar)
   - `ATF: Build File`
   - `ATF: Check File`
 - **Outline** and *Go to Symbol* for `fn`, `struct`, `enum`, `impl`, `type` and `const`.
