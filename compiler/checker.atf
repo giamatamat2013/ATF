@@ -787,7 +787,7 @@ impl Checker {
 }
 
 fn pos_text(p: Pos) -> str {
-    return "{p.file}:{p.line}:{p.col}"
+    return "{short_path(p.file)}:{p.line}:{p.col}"
 }
 
 // Checks a whole program given as parsed modules (prelude first); returns the typed program.

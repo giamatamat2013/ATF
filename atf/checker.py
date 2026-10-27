@@ -3,7 +3,7 @@ import difflib
 
 from . import syntax as S
 from . import tir as T
-from .errors import CompileError, Pos, NOPOS
+from .errors import CompileError, Pos, NOPOS, short_path
 from .semtypes import *
 
 
@@ -194,7 +194,8 @@ class Checker(ExprMixin, StmtMixin, SynthMixin, CallMixin):
             elif isinstance(it, S.FnDecl):
                 if it.name in self.fns:
                     raise CompileError("function '%s' is defined twice" % it.name, it.pos,
-                                       "first defined at %s" % self.fns[it.name].pos)
+                                       "first defined at %s:%d:%d" % (short_path(self.fns[it.name].pos.file),
+                                                                      self.fns[it.name].pos.line, self.fns[it.name].pos.col))
                 fi = FnInfo(it, prelude)
                 self.fns[it.name] = fi
                 if not prelude:

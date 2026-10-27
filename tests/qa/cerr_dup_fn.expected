@@ -3,4 +3,4 @@ error: function 'helper' is defined twice
   --> cerr_dup_fn.atf:2:1
  2 | fn helper() -> int { return 2 }
    | ^
-  hint: first defined at C:\Users\eitan_yxpa4wb\code\ATF\tests\qa\cerr_dup_fn.atf:1:1
+  hint: first defined at cerr_dup_fn.atf:1:1
