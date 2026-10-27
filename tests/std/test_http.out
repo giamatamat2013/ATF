@@ -1,0 +1,17 @@
+false example.com 80 /
+true example.com 443 /a/b?x=1
+false localhost 8080 /p
+true host.org 443 /?q=1
+ERROR the URL must start with http:// or https:// : ftp://x
+ERROR no host in the URL: http://:80/
+ERROR bad port in the URL: http://h:99999/
+a%20b%26c%3Dd%2F%C3%A9~_-.
+a b&c d%zz%4
+true
+a=1&b%20c=x%26y
+true text/plain 42 nil
+false
+true
+the URL must start with http:// or https:// : not a url
+true
+true

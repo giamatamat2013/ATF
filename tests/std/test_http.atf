@@ -1,0 +1,35 @@
+// tests for std/http (no internet needed: URL handling, encoding, and requests that must fail locally)
+import "std/http"
+
+fn show(r: Result<HttpUrl, str>) -> str {
+    return match r {
+        Result.Ok(u) => "{u.secure} {u.host} {u.port} {u.path}"
+        Result.Err(e) => "ERROR " + e
+    }
+}
+
+fn main() -> int {
+    println(show(http_parse_url("http://example.com")))
+    println(show(http_parse_url("https://example.com/a/b?x=1#frag")))
+    println(show(http_parse_url("http://localhost:8080/p")))
+    println(show(http_parse_url("https://user:pw@host.org?q=1")))
+    println(show(http_parse_url("ftp://x")))
+    println(show(http_parse_url("http://:80/")))
+    println(show(http_parse_url("http://h:99999/")))
+
+    println(http_url_encode("a b&c=d/é~_-."))
+    println(http_url_decode("a%20b%26c+d%zz%4"))
+    println(http_url_decode(http_url_encode("héllo wörld ☺")) == "héllo wörld ☺")
+    println(http_query([("a", "1"), ("b c", "x&y")]))
+
+    let r = HttpResponse{ status: 204, body: "", headers: "Content-Type: text/plain\nX-Id:  42 \n" }
+    println(r.ok(), r.header("content-type") ?? "nil", r.header("X-ID") ?? "nil", r.header("none") ?? "nil")
+    println(HttpResponse{ status: 404, body: "", headers: "" }.ok())
+
+    // nothing listens on port 1, so these fail quickly
+    println(http_get("http://127.0.0.1:1/", ["Accept: */*"]).is_err())
+    println(http_get("not a url").err() ?? "?")
+    println(http_post("http://127.0.0.1:1/", "x").is_err())
+    println(http_download("http://127.0.0.1:1/", temp_dir() + "atf_http_none").is_err())
+    return 0
+}

@@ -1,0 +1,145 @@
+// std/path - working with file paths as text (no file system access).
+//
+//   import "std/path"
+//   path_join("a", "b.txt")            == "a\\b.txt"
+//   path_basename("C:\\x\\y.tar.gz")   == "y.tar.gz"
+//   path_dirname("C:\\x\\y.txt")       == "C:\\x"
+//   path_ext("notes.md")               == ".md"
+//   path_stem("notes.md")              == "notes"
+//   path_normalize("a/./b/../c")       == "a\\c"
+//
+// Both / and \ are accepted as separators on input. Results use \ (the Windows separator).
+
+fn path_is_sep(c: byte) -> bool { return c == '/' or c == '\\' }
+
+// index of the last separator in p, or -1
+fn path_last_sep(p: str) -> int {
+    var i = p.len() - 1
+    while i >= 0 {
+        if path_is_sep(p.byte_at(i)) { return i }
+        i -= 1
+    }
+    return -1
+}
+
+// the last part of the path: path_basename("a\\b\\c.txt") == "c.txt"
+fn path_basename(p: str) -> str {
+    var end = p.len()
+    while end > 0 and path_is_sep(p.byte_at(end - 1)) { end -= 1 }
+    let t = p[0..end]
+    let i = path_last_sep(t)
+    return t[i + 1..]
+}
+
+// everything before the last part: path_dirname("a\\b\\c.txt") == "a\\b"; "" when there is no folder part
+fn path_dirname(p: str) -> str {
+    var end = p.len()
+    while end > 1 and path_is_sep(p.byte_at(end - 1)) { end -= 1 }
+    let t = p[0..end]
+    let i = path_last_sep(t)
+    if i < 0 { return "" }
+    if i == 0 { return t[0..1] }
+    // keep the root of a drive path: "C:\\x" -> "C:\\"
+    if i == 2 and t.byte_at(1) == ':' { return t[0..3] }
+    var e = i
+    while e > 1 and path_is_sep(t.byte_at(e - 1)) { e -= 1 }
+    return t[0..e]
+}
+
+// the extension of the last part including the dot, or "": path_ext("a.tar.gz") == ".gz"
+fn path_ext(p: str) -> str {
+    let b = path_basename(p)
+    var j = b.len() - 1
+    while j > 0 {
+        if b.byte_at(j) == '.' { return b[j..] }
+        j -= 1
+    }
+    return ""
+}
+
+// the last part without its extension: path_stem("a\\b.txt") == "b"
+fn path_stem(p: str) -> str {
+    let b = path_basename(p)
+    let e = path_ext(p)
+    return b[0..b.len() - e.len()]
+}
+
+// the path with another extension (give it with the dot, or "" to remove it)
+fn path_with_ext(p: str, ext: str) -> str {
+    let e = path_ext(p)
+    return p[0..p.len() - e.len()] + ext
+}
+
+// true for "C:\\x", "\\\\server\\share" and "\\x"
+fn path_is_absolute(p: str) -> bool {
+    if p.len() >= 1 and path_is_sep(p.byte_at(0)) { return true }
+    return p.len() >= 3 and p.byte_at(1) == ':' and path_is_sep(p.byte_at(2))
+}
+
+// joins parts with one separator between them; an absolute part restarts the path
+fn path_join(a: str, b: str) -> str {
+    if a == "" { return b }
+    if b == "" { return a }
+    if path_is_absolute(b) { return b }
+    if path_is_sep(a.byte_at(a.len() - 1)) { return a + b }
+    return a + "\\" + b
+}
+
+// joins any number of parts: path_join_all(["a", "b", "c"]) == "a\\b\\c"
+fn path_join_all(parts: [str]) -> str {
+    var r = ""
+    for p in parts { r = path_join(r, p) }
+    return r
+}
+
+// splits into parts at the separators; empty parts are dropped
+fn path_parts(p: str) -> [str] {
+    var out: [str] = []
+    var cur = str_builder()
+    var has = false
+    for i in 0..p.len() {
+        let c = p.byte_at(i)
+        if path_is_sep(c) {
+            if has { out.push(cur.finish()) }
+            cur = str_builder()
+            has = false
+        } else {
+            cur.add_byte(c)
+            has = true
+        }
+    }
+    if has { out.push(cur.finish()) }
+    return out
+}
+
+// removes "." parts, resolves ".." where it can and uses \ everywhere: path_normalize("a/./b/../c") == "a\\c"
+fn path_normalize(p: str) -> str {
+    let parts = path_parts(p)
+    var root = ""
+    var start = 0
+    if p.len() >= 2 and path_is_sep(p.byte_at(0)) and path_is_sep(p.byte_at(1)) {
+        root = "\\\\"
+    } else if p.len() >= 1 and path_is_sep(p.byte_at(0)) {
+        root = "\\"
+    } else if parts.len() > 0 and parts[0].len() == 2 and parts[0].byte_at(1) == ':' {
+        root = parts[0] + "\\"
+        start = 1
+    }
+    var out: [str] = []
+    for i in start..parts.len() {
+        let s = parts[i]
+        if s == "." { continue }
+        if s == ".." {
+            if out.len() > 0 and out.last() != ".." {
+                out.pop()
+            } else if root == "" {
+                out.push("..")
+            }
+            continue
+        }
+        out.push(s)
+    }
+    let r = root + "\\".join(out)
+    if r == "" { return "." }
+    return r
+}

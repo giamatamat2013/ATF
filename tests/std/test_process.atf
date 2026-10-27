@@ -1,0 +1,25 @@
+// tests for std/process
+import "std/process"
+
+fn main() -> int {
+    let r = proc_output("cmd /c echo hello")
+    println("echo:", r.0, quote_str(r.1))
+    let e = proc_output("cmd /c exit 7")
+    println("exit code:", e.0, quote_str(e.1))
+    let s = proc_output("cmd /c echo out& echo err 1>&2")
+    println("stdout and stderr:", s.0, s.1.lines())
+    let bad = proc_output("no_such_program_xyz")
+    println("missing program:", bad.0, quote_str(bad.1))
+    let a = proc_output_args("cmd", ["/c", "echo", "two words"])
+    println("args:", a.0, a.1.trim())
+    // a big output goes through the pipe in pieces
+    let big = proc_output("cmd /c for /l %i in (1,1,2000) do @echo line %i")
+    println("big:", big.0, big.1.lines().len())
+
+    println("setenv:", proc_setenv("ATF_TEST_VAR", "abc"), getenv("ATF_TEST_VAR") ?? "nil")
+    println("child sees it:", proc_output("cmd /c echo %ATF_TEST_VAR%").1.trim())
+    println("unsetenv:", proc_unsetenv("ATF_TEST_VAR"), getenv("ATF_TEST_VAR") == nil)
+    println("pid:", proc_pid() > 0)
+    println("cpus:", proc_cpu_count() >= 1)
+    return 0
+}

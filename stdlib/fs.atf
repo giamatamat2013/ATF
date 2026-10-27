@@ -1,0 +1,156 @@
+// std/fs - files and folders: listing, copying, moving, deleting, appending.
+//
+//   import "std/fs"
+//   fs_make_dirs("out\\logs\\today")
+//   fs_append_file("out\\logs\\today\\a.log", "started\n")
+//   for name in fs_list_dir("out\\logs\\today") { println(name) }
+//   fs_remove_all("out")
+//
+// read_file, write_file, file_exists, delete_file and make_dir are in the prelude.
+// Failures are reported with false or nil, like the prelude functions.
+
+extern "kernel32" fn GetFileAttributesA(name: ptr<byte>) -> i32
+extern "kernel32" fn FindFirstFileA(pattern: ptr<byte>, data: ptr<int>) -> int
+extern "kernel32" fn FindNextFileA(h: int, data: ptr<int>) -> i32
+extern "kernel32" fn SetFilePointerEx(h: int, dist: int, new_pos: int, method: int) -> i32
+extern "kernel32" fn FindClose(h: int) -> i32
+extern "kernel32" fn RemoveDirectoryA(name: ptr<byte>) -> i32
+extern "kernel32" fn CopyFileA(from: ptr<byte>, to: ptr<byte>, fail_if_exists: int) -> i32
+extern "kernel32" fn MoveFileExA(from: ptr<byte>, to: ptr<byte>, flags: int) -> i32
+extern "kernel32" fn GetCurrentDirectoryA(size: int, buf: ptr<byte>) -> i32
+extern "kernel32" fn SetCurrentDirectoryA(name: ptr<byte>) -> i32
+extern "kernel32" fn GetFullPathNameA(name: ptr<byte>, size: int, buf: ptr<byte>, file_part: int) -> i32
+
+// true when path is an existing folder
+fn fs_is_dir(path: str) -> bool {
+    let a = GetFileAttributesA(str_data(path)) & 0xFFFFFFFF
+    return a != 0xFFFFFFFF and (a & 0x10) != 0
+}
+
+// true when path is an existing file or folder
+fn fs_exists(path: str) -> bool {
+    return (GetFileAttributesA(str_data(path)) & 0xFFFFFFFF) != 0xFFFFFFFF
+}
+
+// size of a file in bytes, nil when it cannot be opened
+fn fs_size(path: str) -> int? {
+    let h = CreateFileA(str_data(path), 0x80000000, 1, 0, 3, 0x80, 0)
+    if h == -1 { return nil }
+    let sz = __alloc(8) as ptr<int>
+    let ok = GetFileSizeEx(h, sz)
+    CloseHandle(h)
+    if ok == 0 { return nil }
+    return sz[0]
+}
+
+// the names (not full paths) of the files and folders inside a folder, sorted; nil when it cannot be read
+fn fs_list_dir(path: str) -> [str]? {
+    var pat = path
+    if pat != "" and pat[pat.len() - 1..] != "\\" and pat[pat.len() - 1..] != "/" { pat = pat + "\\" }
+    pat = pat + "*"
+    let data = __alloc(320) as ptr<int>
+    let h = FindFirstFileA(str_data(pat), data)
+    if h == -1 { return nil }
+    var names: [str] = []
+    loop {
+        let base = data as ptr<byte>
+        var n = 0
+        while base[44 + n] != 0 { n += 1 }
+        let name = str_from_ptr(base + 44, n)
+        if name != "." and name != ".." { names.push(name) }
+        if FindNextFileA(h, data) == 0 { break }
+    }
+    FindClose(h)
+    names.sort()
+    return names
+}
+
+// creates a folder and any missing parents; true when the folder exists afterwards
+fn fs_make_dirs(path: str) -> bool {
+    if path == "" or fs_is_dir(path) { return path != "" }
+    var cut = path.len() - 1
+    while cut > 0 and path[cut..cut + 1] != "\\" and path[cut..cut + 1] != "/" { cut -= 1 }
+    if cut > 0 and path[cut - 1..cut] != ":" { fs_make_dirs(path[0..cut]) }
+    make_dir(path)
+    return fs_is_dir(path)
+}
+
+// removes an empty folder; false when that fails
+fn fs_remove_dir(path: str) -> bool { return RemoveDirectoryA(str_data(path)) != 0 }
+
+// removes a file, or a folder with everything in it; false when something could not be removed
+fn fs_remove_all(path: str) -> bool {
+    if not fs_exists(path) { return false }
+    if not fs_is_dir(path) { return delete_file(path) }
+    var ok = true
+    let names = fs_list_dir(path) ?? []
+    for n in names {
+        if not fs_remove_all(path + "\\" + n) { ok = false }
+    }
+    return fs_remove_dir(path) and ok
+}
+
+// copies a file, replacing the target; false when that fails
+fn fs_copy(from: str, to: str) -> bool { return CopyFileA(str_data(from), str_data(to), 0) != 0 }
+
+// moves or renames a file or folder, replacing a target file; false when that fails
+fn fs_move(from: str, to: str) -> bool { return MoveFileExA(str_data(from), str_data(to), 3) != 0 }
+
+// adds text to the end of a file, creating it when it does not exist; false when that fails
+fn fs_append_file(path: str, text: str) -> bool {
+    let h = CreateFileA(str_data(path), 0x00000004, 0, 0, 4, 0x80, 0)
+    if h == -1 { return false }
+    SetFilePointerEx(h, 0, 0, 2)
+    write_all(h, str_data(text), str_len(text))
+    CloseHandle(h)
+    return true
+}
+
+// the lines of a file without line endings, nil when it cannot be read
+fn fs_read_lines(path: str) -> [str]? {
+    let t = read_file(path)
+    if t == nil { return nil }
+    return t!.lines()
+}
+
+// writes the lines to a file, each followed by a newline; false when that fails
+fn fs_write_lines(path: str, lines: [str]) -> bool {
+    var sb = str_builder()
+    for l in lines {
+        sb.add(l)
+        sb.add("\n")
+    }
+    return write_file(path, sb.finish())
+}
+
+// the current folder of the program
+fn fs_cwd() -> str {
+    let buf = __alloc_atomic(4096)
+    let n = GetCurrentDirectoryA(4096, buf)
+    return str_from_ptr(buf, n)
+}
+
+// makes path the current folder; false when that fails
+fn fs_chdir(path: str) -> bool { return SetCurrentDirectoryA(str_data(path)) != 0 }
+
+// the absolute form of a path (relative to the current folder); the file does not have to exist
+fn fs_absolute(path: str) -> str {
+    let buf = __alloc_atomic(4096)
+    let n = GetFullPathNameA(str_data(path), 4096, buf, 0)
+    return str_from_ptr(buf, n)
+}
+
+// every file below a folder (not the folders), as paths that start with root; sorted
+fn fs_walk(root: str) -> [str] {
+    var out: [str] = []
+    let names = fs_list_dir(root) ?? []
+    for n in names {
+        let p = root + "\\" + n
+        if fs_is_dir(p) {
+            for f in fs_walk(p) { out.push(f) }
+        } else {
+            out.push(p)
+        }
+    }
+    return out
+}

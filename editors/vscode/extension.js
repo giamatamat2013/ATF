@@ -145,6 +145,9 @@ const symbolProvider = {
 const PREFIX_MODULES = [
   [/^b64_/, "base64"], [/^hex_/, "hex"], [/^hash_/, "hash"], [/^csv_/, "csv"],
   [/^dt_/, "datetime"], [/^json_/, "json"],
+  [/^path_/, "path"], [/^fs_/, "fs"], [/^proc_/, "process"], [/^toml_/, "toml"],
+  [/^(regex|regex_\w+|Regex|RxMatch)$/, "regex"], [/^(http_\w+|Http\w+)$/, "http"],
+  [/^(test|test_report|expect|expect_eq|expect_ne|expect_near|expect_panics|test_fail)$/, "test"],
   [/^(Stack|Deque|PriorityQueue|LinkedList|SortedMap|SortedSet|Counter|stack_new|deque_new|deque_from|pq_\w+|linked_list_\w+|sorted_map_\w+|sorted_set_\w+|counter_\w+)$/, "collections"],
   [/^(ui_\w+|Node|Style|Align|Justify|Cursor|Canvas|style|column|row|stack|grid|scroll|button|textbox|textarea|checkbox|toggle|slider|progress|select|tabs|menu|menu_item|menu_button|menu_bar|dropdown|modal|dialog|icon|canvas|clipboard_get|clipboard_set|message_box|confirm_box|open_file_dialog|save_file_dialog|focus_field|rgb|rgba|hex)$/, "ui"],
   [/^(app_dir|app_path|Settings|settings_open|settings_file|recent_add|recent_list)$/, "app"],

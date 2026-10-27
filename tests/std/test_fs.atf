@@ -1,0 +1,39 @@
+// tests for std/fs
+import "std/fs"
+import "std/path"
+
+fn main() -> int {
+    let root = temp_dir() + "atf_fs_test"
+    fs_remove_all(root)
+    println("make dirs:", fs_make_dirs(root + "\\a\\b\\c"), fs_is_dir(root + "\\a\\b"))
+    println("make dirs again:", fs_make_dirs(root + "\\a\\b\\c"))
+    println("is_dir file:", fs_is_dir(root + "\\nothing"), fs_exists(root + "\\nothing"))
+
+    let f = root + "\\a\\one.txt"
+    println("write:", write_file(f, "hello\n"))
+    println("append:", fs_append_file(f, "world\n"), fs_append_file(root + "\\a\\two.txt", "x"))
+    println("read:", quote_str(read_file(f) ?? "?"))
+    println("lines:", fs_read_lines(f) ?? [])
+    println("size:", fs_size(f) ?? -1, fs_size(root + "\\none") ?? -1)
+    println("write lines:", fs_write_lines(root + "\\lines.txt", ["x", "y", "z"]), fs_read_lines(root + "\\lines.txt") ?? [])
+
+    println("list:", fs_list_dir(root + "\\a") ?? [])
+    println("list missing:", fs_list_dir(root + "\\zzz") == nil)
+
+    println("copy:", fs_copy(f, root + "\\a\\b\\copy.txt"), file_exists(root + "\\a\\b\\copy.txt"))
+    println("move:", fs_move(root + "\\a\\two.txt", root + "\\moved.txt"), fs_exists(root + "\\a\\two.txt"), fs_exists(root + "\\moved.txt"))
+
+    var rel: [str] = []
+    for p in fs_walk(root) { rel.push(p[root.len() + 1..]) }
+    println("walk:", rel)
+
+    println("remove non-empty dir:", fs_remove_dir(root + "\\a"))
+    println("remove all:", fs_remove_all(root), fs_exists(root))
+    println("remove all missing:", fs_remove_all(root))
+
+    let here = fs_cwd()
+    println("cwd is absolute:", path_is_absolute(here))
+    println("chdir:", fs_chdir(temp_dir()), fs_chdir(here), fs_cwd() == here)
+    println("absolute:", fs_absolute("x.txt") == path_join(here, "x.txt"))
+    return 0
+}

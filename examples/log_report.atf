@@ -1,0 +1,31 @@
+// Reads a log with regular expressions, counts the levels and reads a TOML setting.
+import "std/regex"
+import "std/path"
+import "std/toml"
+
+let LOG = """2026-01-05 INFO  start app.exe
+2026-01-05 WARN  disk 91% full
+2026-01-06 ERROR failed to open C:\\data\\input.csv
+2026-01-06 INFO  done"""
+
+fn main() {
+    let line_re = regex("^(\\d+)-(\\d+)-(\\d+) (INFO|WARN|ERROR)\\s+(.*)$")
+    var counts: {str: int} = {}
+    for line in LOG.lines() {
+        if let m = line_re.find(line) {
+            let level = m.group(4)
+            counts[level] = counts.get(level, 0) + 1
+        }
+    }
+    println(counts)
+
+    let file_re = regex("[A-Z]:\\\\\\S+")
+    for m in file_re.find_all(LOG) {
+        println("file:", path_basename(m.text), "ext:", path_ext(m.text))
+    }
+
+    match toml_parse("[report]\nlevel = \"WARN\"\n") {
+        Result.Ok(v) => println("minimum level:", v.query("report.level"))
+        Result.Err(e) => println("bad config:", e)
+    }
+}

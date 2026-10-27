@@ -58,8 +58,10 @@ total: 5.25
   operator overloading, string interpolation with formatting, list comprehensions, modules, `defer`,
   labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
-  available; modules add JSON, CSV, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
-  collections (deque, priority queue, sorted map and set, counter, linked list), and program settings (`std/app`).
+  available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
+  collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),
+  regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
+  an HTTP/HTTPS client (`std/http`) and a test framework (`std/test`).
 - **Windows and design.** `std/ui` builds graphical programs the way HTML and CSS do, written as ATF code: a view function
   returns a tree of elements (`column`, `row`, `text`, `button`, `textbox`, ...), styled with chained methods
   (`.padding(8, 16).bg(hex("#4f46e5")).radius(12).shadow(..)`). It supports flexbox and grid layout, gradients, soft shadows,
@@ -163,7 +165,7 @@ error: 'abc' is not a number
 - [docs/TUTORIAL.he.md](docs/TUTORIAL.he.md) - מדריך בעברית
 - [docs/REFERENCE.md](docs/REFERENCE.md) - the exact rules of the language
 - [docs/STDLIB.md](docs/STDLIB.md) - every library function, method and module
-- [examples/](examples/) - 45 example programs, from `fizzbuzz` to a `bigint` calculator and a text adventure
+- [examples/](examples/) - 46 example programs, from `fizzbuzz` to a `bigint` calculator and a text adventure
 - [examples/ui/](examples/ui/) - window programs: a counter, a task list, an analytics dashboard and a complete notes editor (menus, files, shortcuts, saved settings)
 
 Every code sample in these documents is compiled and run by `python tests/check_docs.py`.

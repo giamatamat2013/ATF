@@ -438,5 +438,41 @@
       "settings.set(\"${2:theme}\", ${2:theme})",
       "settings.save()"
     ]
+  },
+  "Regex match": {
+    "prefix": "regex",
+    "description": "Find a regular expression in text with std/regex",
+    "body": [
+      "import \"std/regex\"",
+      "",
+      "let re = regex(\"${1:(\\\\d+)-(\\\\d+)}\")",
+      "if let m = re.find(${2:text}) {",
+      "\tprintln(m.text, m.group(1))",
+      "}"
+    ]
+  },
+  "Test": {
+    "prefix": "test",
+    "description": "Tests with std/test",
+    "body": [
+      "import \"std/test\"",
+      "",
+      "fn main() -> int {",
+      "\ttest(\"${1:name}\", || { expect_eq(${2:1 + 1}, ${3:2}) })",
+      "\treturn test_report()",
+      "}"
+    ]
+  },
+  "HTTP GET": {
+    "prefix": "httpget",
+    "description": "Download a page with std/http",
+    "body": [
+      "import \"std/http\"",
+      "",
+      "match http_get(\"${1:https://example.com/}\") {",
+      "\tResult.Ok(r) => println(r.status, r.body.len())",
+      "\tResult.Err(e) => println(\"request failed: \" + e)",
+      "}"
+    ]
   }
 }

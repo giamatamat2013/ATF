@@ -20,7 +20,7 @@ ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), st
    ```
 3. Compiler errors are precise (message, `file:line:col`, a caret, often a `hint:`). Read the hint and fix; do not rewrite blindly.
 4. When changing the language, compiler or library in the ATF repo, follow its `CLAUDE.md`: the same piece of work updates the tutorials (English and Hebrew), README, `docs/STDLIB.md`, this skill and the VS Code extension.
-5. When unsure about a library function, check `references/stdlib.md` (copy of the repo's docs/STDLIB.md) or the repo's `docs/TUTORIAL.md`, `atf/stdlib/prelude.atf` (the always-available library, in ATF), and `examples/` (45 tested programs). Prefer the repo copies if present: they are newer than this skill.
+5. When unsure about a library function, check `references/stdlib.md` (copy of the repo's docs/STDLIB.md) or the repo's `docs/TUTORIAL.md`, `atf/stdlib/prelude.atf` (the always-available library, in ATF), and `examples/` (46 tested programs). Prefer the repo copies if present: they are newer than this skill.
 
 ## Program shape
 
@@ -124,7 +124,7 @@ let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 
 ### I/O, modules, misc
 `println print eprintln eprint flush`; `input(prompt)`; `read_line()` -> `str?` (nil at EOF); `read_all_stdin()`; `read_file(p)` -> `str?`; `write_file(p, text)` -> bool; `file_exists delete_file make_dir temp_dir getenv exit run_command run_process`; `rand_seed rand_int(lo,hi) rand_float rand_choice shuffle clock`; math `sqrt abs min max PI E INT_MAX INT_MIN`; `chr ord range range_from zip same copy`; GC: `gc gc_runs gc_live_bytes`.
-Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also app, base64, collections, csv, datetime, hash, hex, ui). **One global namespace** across all files: give globals specific names; duplicate definitions are compile errors. `include_str("f.txt")` embeds a file at compile time.
+Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also app, base64, collections, csv, datetime, fs, hash, hex, http, path, process, regex, test, toml, ui). **One global namespace** across all files: give globals specific names; duplicate definitions are compile errors. `include_str("f.txt")` embeds a file at compile time.
 
 ### Windows and design (`import "std/ui"`)
 HTML/CSS ideas written as ATF. A view function returns a `Node` tree. It is rebuilt after every click, key press or timer tick, so handlers only change data.
@@ -160,6 +160,7 @@ fn main() { let app = App(); ui_run("Demo", 420, 300, || view(app)) }
   - `ui_shortcut("ctrl+s", fn())` (keys like `ctrl+shift+n`, `f5`, `delete`; a key without ctrl/alt is ignored while a text field is focused). Dialogs: `message_box(t, msg)`, `confirm_box(t, q) -> bool`, `open_file_dialog(title, "Text|*.txt|All|*.*") -> str?`, `save_file_dialog(title, filter, "txt") -> str?`. `clipboard_get() clipboard_set(s)`.
   - Popups, dialogs and tooltips are layers on top; they set their own light colours, so in a dark theme give `menu_bar(..)` and fields `.bg(..).color(..)` explicitly.
 - **Testing a UI program** (no window, no dialogs): `ui_headless(view, w, h)`, then `ui_click(x, y)`, `ui_click_text("Save")`, `ui_type("abc")`, `ui_keypress("ctrl+z")`, `ui_drag(..)`, `ui_mouse_move(x, y)`, `ui_answers(yes, path)` for the dialogs, `ui_last_dialog()`; check your own data afterwards. Keep the program's data in variables or structs the test can read.
+- **Text, files, programs, config, web, tests**: `std/path` (`path_basename path_dirname path_ext path_stem path_join path_normalize`, `\` is the separator); `std/fs` (`fs_exists fs_is_dir fs_list_dir fs_make_dirs fs_remove_all fs_copy fs_move fs_append_file fs_read_lines fs_write_lines fs_walk fs_cwd`); `std/process` (`proc_output(cmdline) -> (int, str)`, `proc_setenv`, `proc_pid`, `proc_cpu_count`); `std/regex` (`regex(p)` or `regex_compile(p)` -> `Regex` with `find` (returns `RxMatch?` with `.text .start .group(i)`), `find_all is_match full_match replace_all("$1") split`; **write `{` in a pattern as `\{`**, e.g. `"a\{2,3}"`, and backslashes doubled: `"\\d+"`); `std/toml` (`toml_parse(text) -> Result<JsonValue, str>`, `toml_stringify`); `std/http` (`http_get(url)`, `http_post(url, body, headers)`, `http_request`, `http_download` -> `Result<HttpResponse, str>`; any status is `Ok`, check `r.ok()`); `std/test` (`test(name, || {...})`, `expect expect_eq expect_ne expect_near expect_panics`, `return test_report()` from main).
 - **Saving settings and data** (`import "std/app"`): `settings_open("myapp")` -> `Settings` with `get(k, fallback) get_int get_bool set set_int set_bool remove save()`; `app_dir("myapp")` / `app_path("myapp", "data.json")` is the program's folder in APPDATA; `recent_add(s, path)`. Use `std/json` (`json_read_file`, `json_write_file`) for bigger data.
 - **Pitfalls**:
   - Names starting with `ui_` / `UI_` are taken by the library, and so are `Node`, `Style`, `Align`, `Justify`, `Cursor`, `Canvas`.

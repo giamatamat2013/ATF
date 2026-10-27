@@ -1,0 +1,20 @@
+make dirs: true true
+make dirs again: true
+is_dir file: false false
+write: true
+append: true true
+read: "hello\nworld\n"
+lines: ["hello", "world"]
+size: 12 -1
+write lines: true ["x", "y", "z"]
+list: ["b", "one.txt", "two.txt"]
+list missing: true
+copy: true true
+move: true false true
+walk: ["a\\b\\copy.txt", "a\\one.txt", "lines.txt", "moved.txt"]
+remove non-empty dir: false
+remove all: true false
+remove all missing: false
+cwd is absolute: true
+chdir: true true true
+absolute: true

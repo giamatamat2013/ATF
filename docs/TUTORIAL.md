@@ -2315,6 +2315,114 @@ Things to remember:
 * `include_str("file.txt")` puts the contents of a file into your program as a string when it is compiled (the path is
   relative to the source file). The program then does not need the file at run time.
 
+### More modules: text, files, programs, config, web and tests
+
+Besides `std/json`, `std/csv` and the other data modules, these modules cover everyday jobs. The complete list of functions
+is in [STDLIB.md](STDLIB.md).
+
+* `std/path` takes file names apart and joins them (`path_basename`, `path_stem`, `path_ext`, `path_join`, `path_normalize`).
+* `std/regex` is a regular-expression engine: `regex(pattern)` gives a `Regex` with `find`, `find_all`, `is_match`,
+  `replace_all` (use `$1` for a group) and `split`. Because `{` starts an interpolation in a string, write the repeat
+  `a{2,3}` as `"a\{2,3}"`.
+
+<!-- id: path-regex -->
+```atf
+import "std/path"
+import "std/regex"
+
+fn main() {
+    println(path_basename("C:\\work\\notes.tar.gz"), path_stem("notes.md"), path_join("a", "b.txt"))
+    let re = regex("(\\d+)-(\\d+)")
+    if let m = re.find("tel 12-345") {
+        println(m.text, m.group(1), m.start)
+    }
+    println(re.replace_all("1-2 and 3-4", "$2:$1"))
+    println(regex_split(",\\s*", "a, b,c"))
+}
+```
+```output
+notes.tar.gz notes a\b.txt
+12-345 12 4
+2:1 and 4:3
+["a", "b", "c"]
+```
+
+* `std/fs` lists, copies, moves and removes files and folders (`fs_list_dir`, `fs_make_dirs`, `fs_remove_all`,
+  `fs_append_file`, `fs_walk`, ...). `std/process` runs a program and captures what it prints (`proc_output`), and sets
+  environment variables.
+
+<!-- id: fs-process -->
+```atf
+import "std/fs"
+import "std/process"
+
+fn main() {
+    let dir = temp_dir() + "tutorial_fs"
+    fs_make_dirs(dir + "\\sub")
+    fs_append_file(dir + "\\sub\\a.log", "one\n")
+    fs_append_file(dir + "\\sub\\a.log", "two\n")
+    println(fs_read_lines(dir + "\\sub\\a.log") ?? [])
+    fs_remove_all(dir)
+
+    let r = proc_output("cmd /c echo hello")
+    println(r.0, r.1.trim())
+}
+```
+```output
+["one", "two"]
+0 hello
+```
+
+* `std/toml` reads and writes TOML configuration files. The result is a `JsonValue`, so `get_str`, `query` and the rest of
+  `std/json` work on it.
+
+<!-- id: toml-basic -->
+```atf
+import "std/toml"
+
+fn main() {
+    let r = toml_parse("name = \"app\"\n[server]\nport = 8080\nhosts = [\"a\", \"b\"]\n")
+    match r {
+        Result.Ok(v) => println(v.get_str("name", "?"), v.query("server.port"), v.query("server.hosts[1]"))
+        Result.Err(e) => println("bad toml: " + e)
+    }
+}
+```
+```output
+app 8080 "b"
+```
+
+* `std/http` is an HTTP and HTTPS client: `http_get(url)`, `http_post(url, body, headers)` and `http_request`. A reply with
+  any status is a normal `Ok`; check `r.ok()` or `r.status`.
+
+```atf nocheck
+import "std/http"
+
+fn main() {
+    match http_get("https://example.com/") {
+        Result.Ok(r) => println(r.status, r.body.len(), r.header("content-type") ?? "?")
+        Result.Err(e) => println("request failed: " + e)
+    }
+}
+```
+
+* `std/test` is a small test framework: `test(name, || { ... })` with `expect`, `expect_eq`, `expect_ne`, `expect_near`
+  and `expect_panics`, and `test_report()` for the summary and exit code.
+
+<!-- id: test-basic -->
+```atf
+import "std/test"
+
+fn main() -> int {
+    test("addition", || { expect_eq(1 + 1, 2) })
+    return test_report()
+}
+```
+```output
+ok   addition
+1 tests, all passed
+```
+
 ### Windows and design: `std/ui`
 
 `import "std/ui"` gives you windows with buttons, text boxes and the rest of a modern interface. The ideas come from HTML

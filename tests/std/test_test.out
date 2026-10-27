@@ -1,0 +1,13 @@
+ok   passes
+FAIL fails twice
+       got 1, want 2
+       custom message
+FAIL panics
+       panic: index 3 is out of range (length 0)
+ok   still running after a panic
+ok   division
+quiet
+FAIL no panic here
+       expected a panic, but there was none
+count: 6 failed: 3
+6 tests, 3 failed

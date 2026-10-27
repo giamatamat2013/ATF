@@ -1,0 +1,48 @@
+{"count":1000,"enabled":true,"exp":1000.0,"fruit":{"apple":{"color":"red\\n"}},"hex":255,"neg":-7,"ratio":3.5,"server":{"hosts":["a","b","c"],"port":8080,"tls":{"enabled":false}},"title":"ATF é","users":[{"name":"ann"},{"name":"bob","roles":["x"]}],"when":"1979-05-27T07:32:00Z","when2":"1979-05-27 07:32:00"}
+ATF é 8080 "c" "bob"
+255 1000.0 -7 "1979-05-27 07:32:00"
+{"a":{"b":{"c":1}},"t":{"p":1,"q":"z","r":[1,2]},"x y":2}
+{"l":"raw\\n\nnext","q":"say \"\"hi\"\"","s":"line1\nline2 joined"}
+{}
+{"a":{"b":{"x":1}},"c":{}}
+ERROR line 2: the key "a" is defined twice
+ERROR line 1: expected a value
+ERROR line 1: expected '=' after the key
+ERROR line 1: unexpected text after the value
+ERROR line 1: a one-line string cannot contain a newline
+ERROR line 1: missing ] after the table name
+ERROR line 2: expected ',' or ']' in an array
+ERROR line 2: the key "a" is already used for a value that is not a table
+ERROR line 1: bad value "tru"
+title = "ATF é"
+enabled = true
+count = 1000
+hex = 255
+ratio = 3.5
+exp = 1000.0
+neg = -7
+when = "1979-05-27T07:32:00Z"
+when2 = "1979-05-27 07:32:00"
+
+[server]
+port = 8080
+hosts = ["a", "b", "c"]
+
+[server.tls]
+enabled = false
+
+[[users]]
+name = "ann"
+
+[[users]]
+name = "bob"
+roles = ["x"]
+
+[fruit]
+
+[fruit.apple]
+color = "red\\n"
+round trip equal: true
+"x" key quoting: "a b" = 1
+n = 2.0
+s = "q\"\n"

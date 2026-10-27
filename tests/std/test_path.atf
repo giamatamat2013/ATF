@@ -1,0 +1,46 @@
+// tests for std/path
+import "std/path"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {quote_str(got)}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {quote_str(got)}, want {quote_str(want)}")
+    }
+}
+
+fn main() -> int {
+    check("basename", path_basename("C:\\x\\y.tar.gz"), "y.tar.gz")
+    check("basename slash", path_basename("a/b/c.txt"), "c.txt")
+    check("basename trailing", path_basename("a\\b\\"), "b")
+    check("basename plain", path_basename("file"), "file")
+    check("dirname", path_dirname("C:\\x\\y.txt"), "C:\\x")
+    check("dirname root", path_dirname("C:\\y.txt"), "C:\\")
+    check("dirname none", path_dirname("y.txt"), "")
+    check("dirname slash", path_dirname("a/b/c"), "a/b")
+    check("ext", path_ext("notes.md"), ".md")
+    check("ext last", path_ext("a.tar.gz"), ".gz")
+    check("ext none", path_ext("a\\b"), "")
+    check("ext dot folder", path_ext("a.d\\b"), "")
+    check("ext hidden", path_ext(".gitignore"), "")
+    check("stem", path_stem("a\\notes.md"), "notes")
+    check("with_ext", path_with_ext("a\\notes.md", ".txt"), "a\\notes.txt")
+    check("with_ext remove", path_with_ext("notes.md", ""), "notes")
+    check("join", path_join("a", "b.txt"), "a\\b.txt")
+    check("join sep", path_join("a\\", "b"), "a\\b")
+    check("join empty", path_join("", "b"), "b")
+    check("join absolute", path_join("a", "C:\\b"), "C:\\b")
+    check("join_all", path_join_all(["a", "b", "c"]), "a\\b\\c")
+    check("normalize", path_normalize("a/./b/../c"), "a\\c")
+    check("normalize up", path_normalize("../a/../../b"), "..\\..\\b")
+    check("normalize drive", path_normalize("C:/x/../y/"), "C:\\y")
+    check("normalize empty", path_normalize("a/.."), ".")
+    check("normalize root", path_normalize("/a/../.."), "\\")
+    println("absolute:", path_is_absolute("C:\\x"), path_is_absolute("x\\y"), path_is_absolute("\\x"))
+    println("parts:", path_parts("a//b\\c/"))
+    println("failures:", failures)
+    return failures
+}

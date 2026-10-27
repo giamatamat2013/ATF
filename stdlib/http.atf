@@ -1,0 +1,229 @@
+// std/http - an HTTP and HTTPS client (built on the Windows WinInet library, so it uses the system's proxy and certificates).
+//
+//   import "std/http"
+//
+//   match http_get("https://example.com/") {
+//       Result.Ok(r) => println(r.status, r.body.len(), r.header("content-type") ?? "?")
+//       Result.Err(e) => println("request failed: " + e)
+//   }
+//   let r = http_post("https://example.com/api", "\{\"x\": 1}", ["Content-Type: application/json"])
+//   println(http_url_encode("a b&c"))          // a%20b%26c
+//
+// A response with any status (404, 500, ...) is a normal Ok result: check r.ok() or r.status.
+// An Err means the request could not be made at all (bad URL, no network, refused connection).
+// Redirects are followed. The body is the raw bytes as a str.
+
+extern "wininet" fn InternetOpenA(agent: ptr<byte>, access: int, proxy: ptr<byte>, bypass: ptr<byte>, flags: int) -> int
+extern "wininet" fn InternetConnectA(h: int, host: ptr<byte>, port: int, user: ptr<byte>, pass: ptr<byte>, service: int, flags: int, ctx: int) -> int
+extern "wininet" fn HttpOpenRequestA(c: int, verb: ptr<byte>, path: ptr<byte>, version: ptr<byte>, referrer: ptr<byte>, accept: int, flags: int, ctx: int) -> int
+extern "wininet" fn HttpSendRequestA(req: int, headers: ptr<byte>, headers_len: int, body: ptr<byte>, body_len: int) -> i32
+extern "wininet" fn HttpQueryInfoA(req: int, level: int, buf: ptr<byte>, len: ptr<int>, index: int) -> i32
+extern "wininet" fn InternetReadFile(req: int, buf: ptr<byte>, size: int, read: ptr<int>) -> i32
+extern "wininet" fn InternetCloseHandle(h: int) -> i32
+extern "wininet" fn InternetSetOptionA(h: int, option: int, value: ptr<int>, size: int) -> i32
+
+// the answer to a request
+struct HttpResponse {
+    status: int        // 200, 404, ...
+    body: str
+    headers: str       // all response headers, one "Name: value" per line
+}
+
+impl HttpResponse {
+    // true for the statuses 200 to 299
+    fn ok(self) -> bool { return self.status >= 200 and self.status < 300 }
+
+    // the value of a response header (the name is not case-sensitive), nil when it is missing
+    fn header(self, name: str) -> str? {
+        let want = name.lower()
+        for line in self.headers.lines() {
+            let i = line.find(":")
+            if i > 0 and line[0..i].trim().lower() == want { return line[i + 1..].trim() }
+        }
+        return nil
+    }
+}
+
+// a URL taken apart
+struct HttpUrl {
+    secure: bool
+    host: str
+    port: int
+    path: str          // starts with /, includes the query
+}
+
+// splits "https://host:8080/path?q=1" into its parts (http and https only)
+fn http_parse_url(url: str) -> Result<HttpUrl, str> {
+    var rest = url
+    var secure = false
+    if rest.starts_with("https://") {
+        secure = true
+        rest = rest[8..]
+    } else if rest.starts_with("http://") {
+        rest = rest[7..]
+    } else {
+        return Result.Err("the URL must start with http:// or https:// : " + url)
+    }
+    var cut = rest.len()
+    for i in 0..rest.len() {
+        let c = rest.byte_at(i)
+        if c == '/' or c == '?' or c == '#' {
+            cut = i
+            break
+        }
+    }
+    var host = rest[0..cut]
+    var path = rest[cut..]
+    let hash = path.find("#")
+    if hash >= 0 { path = path[0..hash] }
+    if path == "" { path = "/" }
+    if path.starts_with("?") { path = "/" + path }
+    var port = if secure { 443 } else { 80 }
+    let at = host.find("@")
+    if at >= 0 { host = host[at + 1..] }
+    let colon = host.find(":")
+    if colon >= 0 {
+        let p = host[colon + 1..].parse_int()
+        if p == nil or p! <= 0 or p! > 65535 { return Result.Err("bad port in the URL: " + url) }
+        port = p!
+        host = host[0..colon]
+    }
+    if host == "" { return Result.Err("no host in the URL: " + url) }
+    return Result.Ok(HttpUrl{ secure: secure, host: host, port: port, path: path })
+}
+
+// Percent-encodes text for use in a URL: letters, digits and - _ . ~ stay, every other byte becomes %XX.
+fn http_url_encode(s: str) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '-' or c == '_' or c == '.' or c == '~' {
+            sb.add_byte(c)
+        } else {
+            sb.add("%" + pad_zero(int_to_HEX(int(c)), 2))
+        }
+    }
+    return sb.finish()
+}
+
+// Reverses http_url_encode; + becomes a space and a % that is not followed by two hex digits is kept as it is.
+fn http_url_decode(s: str) -> str {
+    var sb = str_builder()
+    var i = 0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '+' {
+            sb.add_byte(' ')
+            i += 1
+        } else if c == '%' and i + 2 < s.len() and http_hex_val(s.byte_at(i + 1)) >= 0 and http_hex_val(s.byte_at(i + 2)) >= 0 {
+            sb.add_byte(byte(http_hex_val(s.byte_at(i + 1)) * 16 + http_hex_val(s.byte_at(i + 2))))
+            i += 3
+        } else {
+            sb.add_byte(c)
+            i += 1
+        }
+    }
+    return sb.finish()
+}
+
+fn http_hex_val(c: byte) -> int {
+    if c >= '0' and c <= '9' { return int(c - '0') }
+    if c >= 'a' and c <= 'f' { return int(c - 'a') + 10 }
+    if c >= 'A' and c <= 'F' { return int(c - 'A') + 10 }
+    return -1
+}
+
+// "a=1&b=x%20y" from pairs: http_query([("a", "1"), ("b", "x y")])
+fn http_query(pairs: [(str, str)]) -> str {
+    var parts: [str] = []
+    for (k, v) in pairs { parts.push(http_url_encode(k) + "=" + http_url_encode(v)) }
+    return "&".join(parts)
+}
+
+fn http_query_info(req: int, level: int) -> str {
+    let buf = __alloc_atomic(65536)
+    let len = __alloc(8) as ptr<int>
+    len[0] = 65536
+    if HttpQueryInfoA(req, level, buf, len, 0) == 0 { return "" }
+    return str_from_ptr(buf, len[0])
+}
+
+// Sends a request. method is "GET", "POST", ...; headers are lines such as "Accept: text/html";
+// body may be "". timeout_ms limits each connect, send and receive step (0 means the system default).
+fn http_request(method: str, url: str, body: str = "", headers: [str] = [], timeout_ms: int = 30000) -> Result<HttpResponse, str> {
+    let parsed = http_parse_url(url)
+    if parsed.is_err() { return Result.Err(parsed.err()!) }
+    let u = parsed.unwrap()
+    let session = InternetOpenA(str_data("ATF"), 0, nil, nil, 0)
+    if session == 0 { return Result.Err("could not start the network library") }
+    if timeout_ms > 0 {
+        let t = __alloc(8) as ptr<int>
+        t[0] = timeout_ms
+        InternetSetOptionA(session, 2, t, 4)
+        InternetSetOptionA(session, 5, t, 4)
+        InternetSetOptionA(session, 6, t, 4)
+    }
+    let conn = InternetConnectA(session, str_data(u.host), u.port, nil, nil, 3, 0, 0)
+    if conn == 0 {
+        InternetCloseHandle(session)
+        return Result.Err("could not connect to " + u.host + ":" + str(u.port))
+    }
+    var flags = 0x80000000 | 0x04000000
+    if u.secure { flags = flags | 0x00800000 }
+    let req = HttpOpenRequestA(conn, str_data(method), str_data(u.path), nil, nil, 0, flags, 0)
+    if req == 0 {
+        InternetCloseHandle(conn)
+        InternetCloseHandle(session)
+        return Result.Err("could not open the request for " + url)
+    }
+    let hdr = "\r\n".join(headers)
+    var hp = nil as ptr<byte>
+    if hdr != "" { hp = str_data(hdr) }
+    var bp = nil as ptr<byte>
+    if body != "" { bp = str_data(body) }
+    let sent = HttpSendRequestA(req, hp, hdr.len(), bp, body.len())
+    if sent == 0 {
+        InternetCloseHandle(req)
+        InternetCloseHandle(conn)
+        InternetCloseHandle(session)
+        return Result.Err("the request to " + url + " failed (no connection, a timeout or a certificate problem)")
+    }
+    let st = __alloc(16) as ptr<int>
+    let stlen = __alloc(8) as ptr<int>
+    stlen[0] = 4
+    HttpQueryInfoA(req, 19 | 0x20000000, st as ptr<byte>, stlen, 0)
+    let status = st[0] & 0xFFFFFFFF
+    let raw_headers = http_query_info(req, 22).replace("\r\n", "\n")
+    var sb = str_builder()
+    let buf = __alloc_atomic(16384)
+    let got = __alloc(8) as ptr<int>
+    loop {
+        got[0] = 0
+        if InternetReadFile(req, buf, 16384, got) == 0 or got[0] <= 0 { break }
+        sb.add(str_from_ptr(buf, got[0]))
+    }
+    InternetCloseHandle(req)
+    InternetCloseHandle(conn)
+    InternetCloseHandle(session)
+    return Result.Ok(HttpResponse{ status: status, body: sb.finish(), headers: raw_headers })
+}
+
+// GET a URL
+fn http_get(url: str, headers: [str] = []) -> Result<HttpResponse, str> {
+    return http_request("GET", url, "", headers)
+}
+
+// POST body to a URL (add a Content-Type header to say what the body is)
+fn http_post(url: str, body: str, headers: [str] = []) -> Result<HttpResponse, str> {
+    return http_request("POST", url, body, headers)
+}
+
+// GET a URL and save the body to a file; Ok(bytes written) when the status is 2xx, otherwise Err
+fn http_download(url: str, path: str) -> Result<int, str> {
+    let r = http_get(url)
+    if r.is_err() { return Result.Err(r.err()!) }
+    let resp = r.unwrap()
+    if not resp.ok() { return Result.Err("the server answered with status " + str(resp.status)) }
+    if not write_file(path, resp.body) { return Result.Err("could not write " + path) }
+    return Result.Ok(resp.body.len())
+}

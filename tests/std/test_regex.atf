@@ -1,0 +1,93 @@
+// tests for std/regex
+import "std/regex"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {quote_str(got)}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {quote_str(got)}, want {quote_str(want)}")
+    }
+}
+
+fn found(pattern: str, s: str) -> str {
+    let m = regex(pattern).find(s)
+    if m == nil { return "nil" }
+    return m!.text + "@" + str(m!.start)
+}
+
+fn main() -> int {
+    check("literal", found("abc", "xxabcxx"), "abc@2")
+    check("dot", found("a.c", "a\nc abc"), "abc@4")
+    check("star greedy", found("a.*c", "abcabc"), "abcabc@0")
+    check("star lazy", found("a.*?c", "abcabc"), "abc@0")
+    check("plus", found("b+", "abbbc"), "bbb@1")
+    check("optional", found("colou?r", "my color"), "color@3")
+    check("count", found("a\{2,3}", "aaaa"), "aaa@0")
+    check("count exact", found("a\{2}", "a aa"), "aa@2")
+    check("count open", found("a\{2,}", "a aaaa"), "aaaa@2")
+    check("brace literal", found("a\{x", "a\{x"), "a\{x@0")
+    check("class", found("[a-c]+", "xxabcabd"), "abcab@2")
+    check("negated class", found("[^0-9]+", "12ab3"), "ab@2")
+    check("class escape", found("[\\d.]+", "v1.25b"), "1.25@1")
+    check("class dash", found("[a-]+", "x-a-"), "-a-@1")
+    check("digits", found("\\d+", "ab 2024 cd"), "2024@3")
+    check("word", found("\\w+", "  hello_1 x"), "hello_1@2")
+    check("space", found("\\s+", "a \t b"), " \t @1")
+    check("not digit", found("\\D+", "12ab34"), "ab@2")
+    check("anchors", found("^abc$", "abc"), "abc@0")
+    check("anchor miss", found("^abc$", "abcd"), "nil")
+    check("word edge", found("\\bcat\\b", "concat cat"), "cat@7")
+    check("not word edge", found("\\Bcat", "concat cat"), "cat@3")
+    check("alternation", found("cat|dog", "hotdog"), "dog@3")
+    check("group alt", found("(a|b)+c", "xabbac"), "abbac@1")
+    check("non capturing", found("(?:ab)+", "ababab"), "ababab@0")
+    check("escaped dot", found("a\\.b", "a.b axb"), "a.b@0")
+    check("newline escape", found("a\\nb", "a\nb"), "a\nb@0")
+    check("ignore case", str(regex("hello", ignore_case: true).find("Say HeLLo")!.start), "4")
+    check("ignore case class", str(regex("[a-c]+", ignore_case: true).find("xxABc")!.text.len()), "3")
+    check("backtrack", found("(a*)*b", "aaab"), "aaab@0")
+    check("empty", found("x*", "abc"), "@0")
+    check("nested repeat", found("(ab)\{2}","ababab"), "abab@0")
+    check("lazy group", found("(a+?)b", "aaab"), "aaab@0")
+
+    // groups
+    let re = regex("(\\d+)-(\\d+)(x)?")
+    let m = re.find("tel 12-345")!
+    println("groups:", m.groups, m.group(1), m.group(2), quote_str(m.group(3)), quote_str(m.group(9)), m.start, m.end)
+    println("is_match:", re.is_match("1-2"), re.is_match("12"))
+    println("full_match:", regex("a+").full_match("aaa"), regex("a+").full_match("aab"), regex("a|ab").full_match("ab"))
+
+    // find_all / replace / split
+    var texts: [str] = []
+    for x in regex("\\d+").find_all("a1 b22 c333") { texts.push(x.text) }
+    println("find_all:", texts)
+    println("find_all pairs:", regex_find_all("[a-z]\\d", "a1 b2 c"))
+    println("find_all empty:", regex("x*").find_all("ab").len())
+    println("find_from:", regex("a").find_from("aXa", 1)!.start)
+    check("replace", regex("(\\d+)-(\\d+)").replace("1-2 3-4", "$2:$1"), "2:1 3-4")
+    check("replace_all", regex("(\\d+)-(\\d+)").replace_all("1-2 3-4", "$2:$1"), "2:1 4:3")
+    check("replace dollar", regex_replace("a", "banana", "$$"), "b$n$n$")
+    check("replace whole", regex_replace("n", "banana", "[$0]"), "ba[n]a[n]a")
+    check("replace none", regex_replace("z", "banana", "!"), "banana")
+    check("replace_with", regex("\\d+").replace_with("a1b22", |x| "<" + str(x.text.to_int() * 2) + ">"), "a<2>b<44>")
+    println("split:", regex_split(",\\s*", "a, b,c"))
+    println("split none:", regex_split(",", "abc"))
+    println("split chars:", regex_split("", "abc"))
+    println("regex_match:", regex_match("^\\w+@\\w+\\.com$", "me@site.com"), regex_match("^\\w+@\\w+\\.com$", "me@site.org"))
+
+    // a long input does not overflow the stack for simple repeats
+    var sb = str_builder()
+    for i in 0..1000 { sb.add("ab") }
+    let long = sb.finish()
+    println("long:", regex("(?:ab)*c").is_match(long) == false, regex("[ab]*").find(long)!.end, regex("a.*b$").is_match(long))
+
+    // errors
+    for bad in ["(ab", "ab)", "[abc", "*a", "a**", "a\\", "(?=a)", "a\{3,1}", "[z-a]"] {
+        println("error:", regex_compile(bad).err())
+    }
+    println("failures:", failures)
+    return failures
+}

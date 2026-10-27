@@ -27,9 +27,16 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/collections](#stdcollections)
   - [std/csv](#stdcsv)
   - [std/datetime](#stddatetime)
+  - [std/fs](#stdfs)
   - [std/hash](#stdhash)
   - [std/hex](#stdhex)
+  - [std/http](#stdhttp)
   - [std/json](#stdjson)
+  - [std/path](#stdpath)
+  - [std/process](#stdprocess)
+  - [std/regex](#stdregex)
+  - [std/test](#stdtest)
+  - [std/toml](#stdtoml)
   - [std/ui](#stdui)
 
 ## Built-in functions
@@ -903,6 +910,40 @@ struct DateTime {
 - `.to_str() -> str`
 - `.format(fmt: str) -> str` - strftime-style formatting: %Y year  %y 2-digit year  %m month 01-12  %d day 01-31  %e day, space padded  %j day of year 001-366 %H hour 00-23  %I hour 01-12  %p AM/PM  %M minute  %S second  %f milliseconds 000-999 %B month name  %b short month name  %A weekday name  %a short weekday name %u weekday 1-7 (Monday = 1)  %w weekday 0-6 (Sunday = 0)  %V ISO week 01-53  %G ISO week year %z offset +hhmm  %Z offset as "UTC" or "+hh:mm"  %s Unix seconds  %F = %Y-%m-%d  %T = %H:%M:%S  %% a '%'
 
+## std/fs
+
+Files and folders: listing, copying, moving, deleting, appending.
+
+```text
+import "std/fs"
+fs_make_dirs("out\\logs\\today")
+fs_append_file("out\\logs\\today\\a.log", "started\n")
+for name in fs_list_dir("out\\logs\\today") { println(name) }
+fs_remove_all("out")
+```
+
+read_file, write_file, file_exists, delete_file and make_dir are in the prelude.
+Failures are reported with false or nil, like the prelude functions.
+
+**Functions**
+
+- `fn fs_is_dir(path: str) -> bool` - true when path is an existing folder
+- `fn fs_exists(path: str) -> bool` - true when path is an existing file or folder
+- `fn fs_size(path: str) -> int?` - size of a file in bytes, nil when it cannot be opened
+- `fn fs_list_dir(path: str) -> [str]?` - the names (not full paths) of the files and folders inside a folder, sorted; nil when it cannot be read
+- `fn fs_make_dirs(path: str) -> bool` - creates a folder and any missing parents; true when the folder exists afterwards
+- `fn fs_remove_dir(path: str) -> bool` - removes an empty folder; false when that fails
+- `fn fs_remove_all(path: str) -> bool` - removes a file, or a folder with everything in it; false when something could not be removed
+- `fn fs_copy(from: str, to: str) -> bool` - copies a file, replacing the target; false when that fails
+- `fn fs_move(from: str, to: str) -> bool` - moves or renames a file or folder, replacing a target file; false when that fails
+- `fn fs_append_file(path: str, text: str) -> bool` - adds text to the end of a file, creating it when it does not exist; false when that fails
+- `fn fs_read_lines(path: str) -> [str]?` - the lines of a file without line endings, nil when it cannot be read
+- `fn fs_write_lines(path: str, lines: [str]) -> bool` - writes the lines to a file, each followed by a newline; false when that fails
+- `fn fs_cwd() -> str` - the current folder of the program
+- `fn fs_chdir(path: str) -> bool` - makes path the current folder; false when that fails
+- `fn fs_absolute(path: str) -> str` - the absolute form of a path (relative to the current folder); the file does not have to exist
+- `fn fs_walk(root: str) -> [str]` - every file below a folder (not the folders), as paths that start with root; sorted
+
 ## std/hash
 
 Checksums and cryptographic hash functions.
@@ -981,6 +1022,67 @@ Text (str) is treated as raw bytes. Decoding returns Result<str, str> with a rea
 - `fn hex_decode(s: str) -> Result<str, str>` - Decodes hex text into bytes. Upper and lower case digits are accepted, an optional "0x" prefix is skipped, and whitespace between digit pairs is ignored ("de ad be ef" works).
 - `fn hex_decode_bytes(s: str) -> Result<[byte], str>` - like hex_decode, but returns a byte array
 - `fn hex_dump(s: str) -> str` - Classic hex dump: 8-digit offset, 16 bytes in hex (split in two groups of 8), and the printable ASCII characters ('.' for the others). Every line ends with a newline.
+
+## std/http
+
+An HTTP and HTTPS client (built on the Windows WinInet library, so it uses the system's proxy and certificates).
+
+```text
+import "std/http"
+
+match http_get("https://example.com/") {
+    Result.Ok(r) => println(r.status, r.body.len(), r.header("content-type") ?? "?")
+    Result.Err(e) => println("request failed: " + e)
+}
+let r = http_post("https://example.com/api", "\{\"x\": 1}", ["Content-Type: application/json"])
+println(http_url_encode("a b&c"))          // a%20b%26c
+```
+
+A response with any status (404, 500, ...) is a normal Ok result: check r.ok() or r.status.
+An Err means the request could not be made at all (bad URL, no network, refused connection).
+Redirects are followed. The body is the raw bytes as a str.
+
+**Types**
+
+the answer to a request
+
+```text
+struct HttpResponse {
+    status: int        // 200, 404, ...
+    body: str
+    headers: str       // all response headers, one "Name: value" per line
+}
+```
+
+a URL taken apart
+
+```text
+struct HttpUrl {
+    secure: bool
+    host: str
+    port: int
+    path: str          // starts with /, includes the query
+}
+```
+
+
+**Functions**
+
+- `fn http_parse_url(url: str) -> Result<HttpUrl, str>` - splits "https://host:8080/path?q=1" into its parts (http and https only)
+- `fn http_url_encode(s: str) -> str` - Percent-encodes text for use in a URL: letters, digits and - _ . ~ stay, every other byte becomes %XX.
+- `fn http_url_decode(s: str) -> str` - Reverses http_url_encode; + becomes a space and a % that is not followed by two hex digits is kept as it is.
+- `fn http_hex_val(c: byte) -> int`
+- `fn http_query(pairs: [(str, str)]) -> str` - "a=1&b=x%20y" from pairs: http_query([("a", "1"), ("b", "x y")])
+- `fn http_query_info(req: int, level: int) -> str`
+- `fn http_request(method: str, url: str, body: str = "", headers: [str] = [], timeout_ms: int = 30000) -> Result<HttpResponse, str>` - Sends a request. method is "GET", "POST", ...; headers are lines such as "Accept: text/html"; body may be "". timeout_ms limits each connect, send and receive step (0 means the system default).
+- `fn http_get(url: str, headers: [str] = []) -> Result<HttpResponse, str>` - GET a URL
+- `fn http_post(url: str, body: str, headers: [str] = []) -> Result<HttpResponse, str>` - POST body to a URL (add a Content-Type header to say what the body is)
+- `fn http_download(url: str, path: str) -> Result<int, str>` - GET a URL and save the body to a file; Ok(bytes written) when the status is 2xx, otherwise Err
+
+**Methods of `HttpResponse`**
+
+- `.ok() -> bool` - true for the statuses 200 to 299
+- `.header(name: str) -> str?` - the value of a response header (the name is not case-sensitive), nil when it is missing
 
 ## std/json
 
@@ -1081,6 +1183,276 @@ enum JsonValue {
 - `.remove(key: str) -> bool` - removes a member of an object; true if it was there
 - `.push(v: JsonValue)` - appends to an array (does nothing for other values)
 - `.to_str() -> str` - compact JSON text (used by println and string interpolation)
+
+## std/path
+
+Working with file paths as text (no file system access).
+
+```text
+import "std/path"
+path_join("a", "b.txt")            == "a\\b.txt"
+path_basename("C:\\x\\y.tar.gz")   == "y.tar.gz"
+path_dirname("C:\\x\\y.txt")       == "C:\\x"
+path_ext("notes.md")               == ".md"
+path_stem("notes.md")              == "notes"
+path_normalize("a/./b/../c")       == "a\\c"
+```
+
+Both / and \ are accepted as separators on input. Results use \ (the Windows separator).
+
+**Functions**
+
+- `fn path_is_sep(c: byte) -> bool`
+- `fn path_last_sep(p: str) -> int` - index of the last separator in p, or -1
+- `fn path_basename(p: str) -> str` - the last part of the path: path_basename("a\\b\\c.txt") == "c.txt"
+- `fn path_dirname(p: str) -> str` - everything before the last part: path_dirname("a\\b\\c.txt") == "a\\b"; "" when there is no folder part
+- `fn path_ext(p: str) -> str` - the extension of the last part including the dot, or "": path_ext("a.tar.gz") == ".gz"
+- `fn path_stem(p: str) -> str` - the last part without its extension: path_stem("a\\b.txt") == "b"
+- `fn path_with_ext(p: str, ext: str) -> str` - the path with another extension (give it with the dot, or "" to remove it)
+- `fn path_is_absolute(p: str) -> bool` - true for "C:\\x", "\\\\server\\share" and "\\x"
+- `fn path_join(a: str, b: str) -> str` - joins parts with one separator between them; an absolute part restarts the path
+- `fn path_join_all(parts: [str]) -> str` - joins any number of parts: path_join_all(["a", "b", "c"]) == "a\\b\\c"
+- `fn path_parts(p: str) -> [str]` - splits into parts at the separators; empty parts are dropped
+- `fn path_normalize(p: str) -> str` - removes "." parts, resolves ".." where it can and uses \ everywhere: path_normalize("a/./b/../c") == "a\\c"
+
+## std/process
+
+Running programs and capturing what they print, environment variables, process info.
+
+```text
+import "std/process"
+let r = proc_output("cmd /c echo hi")
+println(r.0, r.1)                     // 0 "hi\r\n"
+proc_setenv("MODE", "fast")
+println(proc_pid(), proc_cpu_count())
+```
+
+run_command and run_process (the prelude) run a program with its output on the console;
+proc_output and proc_output_args capture it as text instead.
+
+**Functions**
+
+- `fn proc_output(cmdline: str) -> (int, str)` - Runs a command line, waits for it and returns (exit code, everything it wrote to stdout and stderr). The exit code is -1 and the text empty when the program could not be started.
+- `fn proc_output_args(path: str, args: [str]) -> (int, str)` - like proc_output, for a program and its arguments (they are quoted for you)
+- `fn proc_setenv(name: str, value: str) -> bool` - sets an environment variable for this program and the programs it starts; false when that fails
+- `fn proc_unsetenv(name: str) -> bool` - removes an environment variable
+- `fn proc_pid() -> int` - the id of this process
+- `fn proc_cpu_count() -> int` - the number of logical processors
+
+## std/regex
+
+Regular expressions (a backtracking matcher working on bytes).
+
+```text
+import "std/regex"
+let re = regex_compile("(\\d+)-(\\d+)").unwrap()
+if let m = re.find("tel 12-345") { println(m.text, m.group(1), m.group(2), m.start) }   // 12-345 12 345 4
+println(re.is_match("no digits"))                          // false
+println(re.replace_all("1-2 and 3-4", "$2:$1"))            // 2:1 and 4:3
+println(regex_split(",\\s*", "a, b,c"))                    // ["a", "b", "c"]
+```
+
+Supported: literals, . (any byte except newline), classes [a-z0-9_] and [^...], \d \w \s and their
+upper-case negations, \b \B, anchors ^ $, groups (...) and (?:...), alternation a|b, and the
+repeats * + ? {n} {n,} {n,m} (add ? after one for the lazy form). Escape a special character with \.
+Not supported: look-around, back-references and named groups.
+Text is matched byte by byte, so . matches one byte of a multi-byte character.
+
+**Types**
+
+```text
+struct RxNode {
+    kind: int          // 0 char, 1 any, 2 set, 3 sequence, 4 alternation, 5 repeat, 6 group, 7 start, 8 end, 9 word edge, 10 not word edge, 11 empty
+    ch: int            // the byte of a char node, the number of a group node
+    set: [bool]
+    kids: [RxNode]
+    min: int
+    max: int           // -1 means no limit
+    lazy: bool
+}
+```
+
+a compiled regular expression
+
+```text
+struct Regex {
+    pattern: str
+    root: RxNode
+    groups: int        // number of capture groups
+}
+```
+
+one match: the byte range [start, end), its text and the text of every group (index 0 is the whole match, "" for a group that did not take part)
+
+```text
+struct RxMatch {
+    start: int
+    end: int
+    text: str
+    groups: [str]
+}
+```
+
+```text
+struct RxParser {
+    p: str
+    i: int
+    ngroups: int
+    err: str
+    icase: bool
+}
+```
+
+```text
+struct RxState {
+    s: str
+    caps: [int]
+    end: int
+}
+```
+
+
+**Functions**
+
+- `fn rx_node(kind: int) -> RxNode`
+- `fn rx_is_word(c: int) -> bool`
+- `fn rx_class_set(c: byte) -> [bool]`
+- `fn rx_escape_byte(c: byte) -> int`
+- `fn rx_fail(ps: RxParser, msg: str)`
+- `fn rx_peek(ps: RxParser) -> int`
+- `fn rx_icase_set(set: [bool])`
+- `fn rx_char_node(ps: RxParser, c: int) -> RxNode`
+- `fn rx_parse_class(ps: RxParser) -> RxNode`
+- `fn rx_parse_atom(ps: RxParser) -> RxNode`
+- `fn rx_parse_braces(ps: RxParser, n: RxNode) -> bool` - reads {n}, {n,} or {n,m} at ps.i (which is on the {); returns false and leaves ps.i alone when it is not one
+- `fn rx_parse_seq(ps: RxParser) -> RxNode`
+- `fn rx_parse_alt(ps: RxParser) -> RxNode`
+- `fn regex_compile(pattern: str, ignore_case: bool = false) -> Result<Regex, str>` - Compiles a pattern. The error text says what is wrong and where. With ignore_case, letters match in both cases.
+- `fn regex(pattern: str, ignore_case: bool = false) -> Regex` - the compiled pattern; panics when it is not valid
+- `fn rx_one(n: RxNode, s: str, i: int) -> bool`
+- `fn rx_accept(st: RxState, j: int) -> bool`
+- `fn rx_seq(kids: [RxNode], idx: int, st: RxState, i: int, k: fn(int) -> bool) -> bool`
+- `fn rx_rep(n: RxNode, st: RxState, i: int, count: int, k: fn(int) -> bool) -> bool`
+- `fn rx_m(n: RxNode, st: RxState, i: int, k: fn(int) -> bool) -> bool`
+- `fn rx_find_at(re: Regex, s: str, from: int) -> RxMatch?`
+- `fn regex_anchored(re: Regex, s: str) -> bool` - true when some match of re covers the whole of s (tries the pattern at 0 with a required end)
+- `fn rx_expand(repl: str, m: RxMatch) -> str`
+- `fn regex_match(pattern: str, s: str) -> bool` - true when the pattern matches somewhere in s; panics when the pattern is not valid
+- `fn regex_split(pattern: str, s: str) -> [str]` - the pieces of s between the matches of the pattern; panics when the pattern is not valid
+- `fn regex_replace(pattern: str, s: str, repl: str) -> str` - replaces every match of the pattern in s (see Regex.replace for $1); panics when the pattern is not valid
+- `fn regex_find_all(pattern: str, s: str) -> [str]` - the text of every match of the pattern in s; panics when the pattern is not valid
+
+**Methods of `RxMatch`**
+
+- `.group(i: int) -> str` - the text of group i (0 is the whole match); "" when there is no such group
+
+**Methods of `Regex`**
+
+- `.find(s: str) -> RxMatch?` - the first match in s, or nil
+- `.find_from(s: str, from: int) -> RxMatch?` - the first match that starts at byte position from or later, or nil
+- `.is_match(s: str) -> bool` - true when the pattern matches somewhere in s
+- `.full_match(s: str) -> bool` - true when the pattern matches the whole of s
+- `.find_all(s: str) -> [RxMatch]` - all the matches, left to right, not overlapping
+- `.replace(s: str, repl: str) -> str` - replaces the first match; in repl, $0 is the whole match, $1 to $9 are groups and $$ is a dollar sign
+- `.replace_all(s: str, repl: str) -> str` - replaces every match (see replace for $1)
+- `.replace_with(s: str, f: fn(RxMatch) -> str) -> str` - replaces every match with whatever f returns for it
+- `.split(s: str) -> [str]` - the pieces of s between the matches
+
+## std/test
+
+A small test framework for ATF programs.
+
+```text
+import "std/test"
+
+fn main() -> int {
+    test("addition", || {
+        expect_eq(1 + 1, 2)
+        expect(2 > 1, "two is bigger")
+    })
+    test("a panic is a failure", || { expect_eq([1, 2][0], 1) })
+    expect_panics("division by zero", || { let z = 0; println(1 / z) })
+    return test_report()          // prints a summary, returns 0 when everything passed (else 1)
+}
+```
+
+A failed expectation is recorded and the test goes on; a panic inside a test fails that test
+and the next test still runs. Every test prints one line, "ok" or "FAIL" followed by the reasons.
+
+**Functions**
+
+- `fn test_fail(msg: str)` - records a failure for the running test
+- `fn test(name: str, f: fn())` - Runs f as a test called name and prints "ok   name" or "FAIL name" with the reasons.
+- `fn expect(cond: bool, msg: str = "expectation failed")` - fails the test when cond is false
+- `fn expect_eq<T>(got: T, want: T)` - fails the test when got != want, showing both values
+- `fn expect_ne<T>(got: T, other: T)` - fails the test when got == other
+- `fn expect_near(got: float, want: float, eps: float = 0.000001)` - fails the test when two floats differ by more than eps
+- `fn expect_panics(name: str, f: fn())` - Runs f as a test called name that passes only when f panics.
+- `fn test_report() -> int` - prints how many tests ran and failed; returns 0 when all passed and 1 otherwise (use it as the exit code of main)
+
+## std/toml
+
+Reading and writing TOML (the configuration file format).
+
+```text
+import "std/toml"
+
+let r = toml_parse("name = \"app\"\n[server]\nport = 8080\nhosts = [\"a\", \"b\"]\n")
+match r {
+    Result.Ok(v) => println(v.get_str("name", "?"), v.query("server.port"), v.query("server.hosts[1]"))
+    Result.Err(e) => println("bad toml: " + e)          // e.g. "line 3: expected '=' after the key"
+}
+println(toml_stringify(doc))
+```
+
+A document becomes a JsonValue (from std/json, which this module imports): tables are objects,
+arrays are arrays, integers are Int, floats are Float. Dates and times are kept as Str.
+Supported: comments, bare / quoted / dotted keys, [tables], [[arrays of tables]], inline tables,
+multi-line arrays, basic and literal strings (also the multi-line forms), numbers with _ and 0x 0o 0b.
+Not supported: inf and nan values.
+
+**Types**
+
+```text
+struct TomlParser {
+    s: str
+    i: int
+    err: str
+}
+```
+
+
+**Functions**
+
+- `fn toml_line_of(p: TomlParser) -> int`
+- `fn toml_fail(p: TomlParser, msg: str)`
+- `fn toml_peek(p: TomlParser) -> int`
+- `fn toml_at(p: TomlParser, t: str) -> bool`
+- `fn toml_skip_ws(p: TomlParser)` - skips spaces and tabs
+- `fn toml_skip_comment(p: TomlParser)` - skips to the end of a comment (not past the newline)
+- `fn toml_skip_blank(p: TomlParser)` - skips spaces, comments and newlines
+- `fn toml_utf8(sb: StrBuilder, cp: int)`
+- `fn toml_hex_value(p: TomlParser, digits: int) -> int`
+- `fn toml_parse_string(p: TomlParser) -> str` - a string starting at the opening quote; handles """ ''' and the one-line forms
+- `fn toml_is_bare(c: int) -> bool`
+- `fn toml_parse_key_part(p: TomlParser) -> str` - one key part: bare, "quoted" or 'literal'
+- `fn toml_parse_key(p: TomlParser) -> [str]` - a dotted key such as a.b."c d"
+- `fn toml_looks_like_date(tok: str) -> bool`
+- `fn toml_parse_scalar(p: TomlParser) -> JsonValue`
+- `fn toml_parse_value(p: TomlParser) -> JsonValue`
+- `fn toml_object_of(v: JsonValue) -> {str: JsonValue}?`
+- `fn toml_descend(p: TomlParser, m: {str: JsonValue}, key: str) -> {str: JsonValue}` - the table named key inside m (created when missing); an array of tables gives its last table
+- `fn toml_set(p: TomlParser, m: {str: JsonValue}, key: [str], v: JsonValue)`
+- `fn toml_end_of_line(p: TomlParser)`
+- `fn toml_parse(text: str) -> Result<JsonValue, str>` - Reads a TOML document. The error text starts with the line number.
+- `fn toml_quote(s: str) -> str`
+- `fn toml_key_text(k: str) -> str`
+- `fn toml_is_table_array(v: JsonValue) -> bool`
+- `fn toml_inline(v: JsonValue) -> str`
+- `fn toml_inline_table(o: {str: JsonValue}) -> str`
+- `fn toml_float(f: float) -> str`
+- `fn toml_write_table(sb: StrBuilder, o: {str: JsonValue}, path: [str])`
+- `fn toml_stringify(v: JsonValue) -> str` - Writes a document (a JsonValue object) as TOML text. Plain values come first in each table, then its sub-tables. Null values are written as empty strings, since TOML has no null. Panics when v is not an object.
 
 ## std/ui
 

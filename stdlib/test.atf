@@ -1,0 +1,80 @@
+// std/test - a small test framework for ATF programs.
+//
+//   import "std/test"
+//
+//   fn main() -> int {
+//       test("addition", || {
+//           expect_eq(1 + 1, 2)
+//           expect(2 > 1, "two is bigger")
+//       })
+//       test("a panic is a failure", || { expect_eq([1, 2][0], 1) })
+//       expect_panics("division by zero", || { let z = 0; println(1 / z) })
+//       return test_report()          // prints a summary, returns 0 when everything passed (else 1)
+//   }
+//
+// A failed expectation is recorded and the test goes on; a panic inside a test fails that test
+// and the next test still runs. Every test prints one line, "ok" or "FAIL" followed by the reasons.
+
+var test_count = 0
+var test_failed_count = 0
+var test_current_failures: [str] = []
+
+// records a failure for the running test
+fn test_fail(msg: str) { test_current_failures.push(msg) }
+
+// Runs f as a test called name and prints "ok   name" or "FAIL name" with the reasons.
+fn test(name: str, f: fn()) {
+    test_count += 1
+    test_current_failures = []
+    let p = catch_panic(f)
+    if p != nil { test_fail("panic: " + p!) }
+    if test_current_failures.len() == 0 {
+        println("ok   {name}")
+    } else {
+        test_failed_count += 1
+        println("FAIL {name}")
+        for m in test_current_failures { println("       {m}") }
+    }
+}
+
+// fails the test when cond is false
+fn expect(cond: bool, msg: str = "expectation failed") {
+    if not cond { test_fail(msg) }
+}
+
+// fails the test when got != want, showing both values
+fn expect_eq<T>(got: T, want: T) {
+    if got != want { test_fail("got {got}, want {want}") }
+}
+
+// fails the test when got == other
+fn expect_ne<T>(got: T, other: T) {
+    if got == other { test_fail("got {got}, expected something else") }
+}
+
+// fails the test when two floats differ by more than eps
+fn expect_near(got: float, want: float, eps: float = 0.000001) {
+    if fabs(got - want) > eps { test_fail("got {got}, want {want} (within {eps})") }
+}
+
+// Runs f as a test called name that passes only when f panics.
+fn expect_panics(name: str, f: fn()) {
+    test_count += 1
+    if catch_panic(f) == nil {
+        test_failed_count += 1
+        println("FAIL {name}")
+        println("       expected a panic, but there was none")
+    } else {
+        println("ok   {name}")
+    }
+}
+
+// prints how many tests ran and failed; returns 0 when all passed and 1 otherwise (use it as the exit code of main)
+fn test_report() -> int {
+    if test_failed_count == 0 {
+        println("{test_count} tests, all passed")
+        return 0
+    }
+    println("{test_count} tests, {test_failed_count} failed")
+    return 1
+}

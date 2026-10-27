@@ -2233,6 +2233,7 @@ fn main() {
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
+* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/http`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, HTTP ובדיקות (ראו בהמשך הפרק).
 * `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
 * `std/app` - תיקייה והגדרות לתוכנית שנשמרות בין הרצות (ראו בהמשך הפרק).
 
@@ -2335,6 +2336,107 @@ fn main() {
 
 * `include_str("file.txt")` מכניס את התוכן של קובץ טקסט לתוך התוכנית בזמן ההידור, כמחרוזת (הנתיב יחסי לקובץ המקור).
   כך אפשר לצרף נתונים לקובץ ה-`.exe` עצמו.
+
+### עוד מודולים: טקסט, קבצים, תוכניות, הגדרות, אינטרנט ובדיקות
+
+מלבד `std/json`, `std/csv` ושאר מודולי הנתונים, יש מודולים לעבודות יומיומיות. רשימת הפונקציות המלאה נמצאת ב-[STDLIB.md](STDLIB.md).
+
+* `std/path` מפרק ומחבר שמות קבצים (`path_basename`, `path_stem`, `path_ext`, `path_join`, `path_normalize`).
+* `std/regex` הוא מנוע ביטויים רגולריים: `regex(pattern)` מחזיר `Regex` עם `find`, `find_all`, `is_match`,
+  `replace_all` (כותבים `$1` לקבוצה) ו-`split`. כיוון ש-`{` פותח אינטרפולציה במחרוזת, את החזרה
+  `a{2,3}` כותבים `"a\{2,3}"`.
+
+```atf
+import "std/path"
+import "std/regex"
+
+fn main() {
+    println(path_basename("C:\\work\\notes.tar.gz"), path_stem("notes.md"), path_join("a", "b.txt"))
+    let re = regex("(\\d+)-(\\d+)")
+    if let m = re.find("tel 12-345") {
+        println(m.text, m.group(1), m.start)
+    }
+    println(re.replace_all("1-2 and 3-4", "$2:$1"))
+    println(regex_split(",\\s*", "a, b,c"))
+}
+```
+```output
+notes.tar.gz notes a\b.txt
+12-345 12 4
+2:1 and 4:3
+["a", "b", "c"]
+```
+
+* `std/fs` מציג, מעתיק, מעביר ומוחק קבצים ותיקיות (`fs_list_dir`, `fs_make_dirs`, `fs_remove_all`,
+  `fs_append_file`, `fs_walk` ועוד). `std/process` מריץ תוכנית ותופס את מה שהיא מדפיסה (`proc_output`), וקובע משתני סביבה.
+
+```atf
+import "std/fs"
+import "std/process"
+
+fn main() {
+    let dir = temp_dir() + "tutorial_fs"
+    fs_make_dirs(dir + "\\sub")
+    fs_append_file(dir + "\\sub\\a.log", "one\n")
+    fs_append_file(dir + "\\sub\\a.log", "two\n")
+    println(fs_read_lines(dir + "\\sub\\a.log") ?? [])
+    fs_remove_all(dir)
+
+    let r = proc_output("cmd /c echo hello")
+    println(r.0, r.1.trim())
+}
+```
+```output
+["one", "two"]
+0 hello
+```
+
+* `std/toml` קורא וכותב קובצי הגדרות TOML. התוצאה היא `JsonValue`, ולכן `get_str`, `query` ושאר הפונקציות של `std/json` עובדות עליה.
+
+```atf
+import "std/toml"
+
+fn main() {
+    let r = toml_parse("name = \"app\"\n[server]\nport = 8080\nhosts = [\"a\", \"b\"]\n")
+    match r {
+        Result.Ok(v) => println(v.get_str("name", "?"), v.query("server.port"), v.query("server.hosts[1]"))
+        Result.Err(e) => println("bad toml: " + e)
+    }
+}
+```
+```output
+app 8080 "b"
+```
+
+* `std/http` הוא לקוח HTTP ו-HTTPS: `http_get(url)`, `http_post(url, body, headers)` ו-`http_request`. תשובה עם כל סטטוס היא `Ok`
+  רגיל; בודקים `r.ok()` או `r.status`.
+
+```atf nocheck
+import "std/http"
+
+fn main() {
+    match http_get("https://example.com/") {
+        Result.Ok(r) => println(r.status, r.body.len(), r.header("content-type") ?? "?")
+        Result.Err(e) => println("request failed: " + e)
+    }
+}
+```
+
+* `std/test` היא מסגרת בדיקות קטנה: `test(name, || { ... })` עם `expect`, `expect_eq`, `expect_ne`, `expect_near`
+  ו-`expect_panics`, ו-`test_report()` לסיכום ולקוד היציאה.
+
+```atf
+import "std/test"
+
+fn main() -> int {
+    test("addition", || { expect_eq(1 + 1, 2) })
+    return test_report()
+}
+```
+```output
+ok   addition
+1 tests, all passed
+```
 
 ### חלונות ועיצוב: `std/ui`
 

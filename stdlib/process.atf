@@ -1,0 +1,87 @@
+// std/process - running programs and capturing what they print, environment variables, process info.
+//
+//   import "std/process"
+//   let r = proc_output("cmd /c echo hi")
+//   println(r.0, r.1)                     // 0 "hi\r\n"
+//   proc_setenv("MODE", "fast")
+//   println(proc_pid(), proc_cpu_count())
+//
+// run_command and run_process (the prelude) run a program with its output on the console;
+// proc_output and proc_output_args capture it as text instead.
+
+extern "kernel32" fn CreatePipe(read: ptr<int>, write: ptr<int>, sa: ptr<int>, size: int) -> i32
+extern "kernel32" fn SetHandleInformation(h: int, mask: int, flags: int) -> i32
+extern "kernel32" fn SetEnvironmentVariableA(name: ptr<byte>, value: ptr<byte>) -> i32
+extern "kernel32" fn GetCurrentProcessId() -> i32
+extern "kernel32" fn GetSystemInfo(info: ptr<int>)
+
+// Runs a command line, waits for it and returns (exit code, everything it wrote to stdout and stderr).
+// The exit code is -1 and the text empty when the program could not be started.
+fn proc_output(cmdline: str) -> (int, str) {
+    flush()
+    let sa = __alloc(24) as ptr<int>
+    sa[0] = 24
+    sa[2] = 1
+    let ends = __alloc(16) as ptr<int>
+    if CreatePipe(ends, ends + 1, sa, 0) == 0 { return (-1, "") }
+    let rd = ends[0]
+    let wr = ends[1]
+    SetHandleInformation(rd, 1, 0)
+    let si = __alloc(104) as ptr<int>
+    si[0] = 104
+    si[7] = 0x100 << 32
+    si[11] = wr
+    si[12] = wr
+    let pi = __alloc(24) as ptr<int>
+    if CreateProcessA(nil, str_data(cmdline), 0, 0, 1, 0x08000000, 0, 0, si, pi) == 0 {
+        CloseHandle(rd)
+        CloseHandle(wr)
+        return (-1, "")
+    }
+    CloseHandle(wr)
+    var sb = str_builder()
+    let buf = __alloc_atomic(4096)
+    let got = __alloc(8) as ptr<int>
+    loop {
+        got[0] = 0
+        if ReadFile(rd, buf, 4096, got, 0) == 0 or got[0] <= 0 { break }
+        sb.add(str_from_ptr(buf, got[0]))
+    }
+    CloseHandle(rd)
+    WaitForSingleObject(pi[0], -1)
+    let code = __alloc(8) as ptr<int>
+    GetExitCodeProcess(pi[0], code)
+    CloseHandle(pi[0])
+    CloseHandle(pi[1])
+    var c = code[0] & 0xFFFFFFFF
+    if c >= 0x80000000 { c -= 0x100000000 }
+    return (c, sb.finish())
+}
+
+// like proc_output, for a program and its arguments (they are quoted for you)
+fn proc_output_args(path: str, args: [str]) -> (int, str) {
+    var cmd = quote_arg(path)
+    for a in args { cmd = cmd + " " + quote_arg(a) }
+    return proc_output(cmd)
+}
+
+// sets an environment variable for this program and the programs it starts; false when that fails
+fn proc_setenv(name: str, value: str) -> bool {
+    return SetEnvironmentVariableA(str_data(name), str_data(value)) != 0
+}
+
+// removes an environment variable
+fn proc_unsetenv(name: str) -> bool {
+    return SetEnvironmentVariableA(str_data(name), 0 as ptr<byte>) != 0
+}
+
+// the id of this process
+fn proc_pid() -> int { return GetCurrentProcessId() }
+
+// the number of logical processors
+fn proc_cpu_count() -> int {
+    let info = __alloc(48) as ptr<int>
+    GetSystemInfo(info)
+    // dwNumberOfProcessors is the 32-bit field at byte offset 32
+    return info[4] & 0xFFFFFFFF
+}

@@ -1,0 +1,11 @@
+echo: 0 "hello\r\n"
+exit code: 7 ""
+stdout and stderr: 0 ["out", "err "]
+missing program: -1 ""
+args: 0 "two words"
+big: 0 2000
+setenv: true abc
+child sees it: abc
+unsetenv: true true
+pid: true
+cpus: true

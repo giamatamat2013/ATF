@@ -1,0 +1,30 @@
+// tests for std/test (the framework tests itself: failing tests are expected, so the exit code is 0 only when the counts are right)
+import "std/test"
+
+fn main() -> int {
+    test("passes", || {
+        expect_eq(1 + 1, 2)
+        expect(true)
+        expect_ne("a", "b")
+        expect_near(0.1 + 0.2, 0.3)
+        expect_eq([1, 2], [1, 2])
+    })
+    test("fails twice", || {
+        expect_eq(1, 2)
+        expect(false, "custom message")
+    })
+    test("panics", || {
+        let a: [int] = []
+        println(a[3])
+    })
+    test("still running after a panic", || { expect_eq("x", "x") })
+    expect_panics("division", || {
+        let z = 0
+        println(1 / z)
+    })
+    expect_panics("no panic here", || { println("quiet") })
+    println("count:", test_count, "failed:", test_failed_count)
+    let code = test_report()
+    if test_count == 6 and test_failed_count == 3 and code == 1 { return 0 }
+    return 1
+}

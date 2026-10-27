@@ -1,0 +1,42 @@
+// tests for std/toml
+import "std/toml"
+
+fn show(r: Result<JsonValue, str>) -> str {
+    return match r {
+        Result.Ok(v) => json_stringify(v, 0, true)
+        Result.Err(e) => "ERROR " + e
+    }
+}
+
+fn main() -> int {
+    let doc = "# a config\ntitle = \"ATF \\u00e9\"  # comment\nenabled = true\ncount = 1_000\nhex = 0xFF\nratio = 3.5\nexp = 1e3\nneg = -7\nwhen = 1979-05-27T07:32:00Z\nwhen2 = 1979-05-27 07:32:00\n\n[server]\nport = 8080\nhosts = [\"a\", \"b\",\n  \"c\"]\n\n[server.tls]\nenabled = false\n\n[[users]]\nname = \"ann\"\n\n[[users]]\nname = \"bob\"\nroles = [\"x\"]\n\n[fruit.apple]\ncolor = 'red\\n'\n"
+    let r = toml_parse(doc)
+    println(show(r))
+    let v = r.unwrap()
+    println(v.get_str("title", "?"), v.query("server.port"), v.query("server.hosts[2]"), v.query("users[1].name"))
+    println(v.query("hex"), v.query("exp"), v.query("neg"), v.query("when2"))
+
+    println(show(toml_parse("a.b.c = 1\n\"x y\" = 2\nt = \{ p = 1, q = \"z\", r = [1, 2] }\n")))
+    println(show(toml_parse("s = \"\"\"\nline1\nline2 \\\n   joined\"\"\"\nl = '''raw\\n\nnext'''\nq = \"\"\"say \"\"hi\"\"\"\"\"")))
+    println(show(toml_parse("")))
+    println(show(toml_parse("[a]\n[a.b]\nx = 1\n[c]\n")))
+
+    // errors
+    println(show(toml_parse("a = 1\na = 2\n")))
+    println(show(toml_parse("a = \n")))
+    println(show(toml_parse("a 1\n")))
+    println(show(toml_parse("a = 1 2\n")))
+    println(show(toml_parse("a = \"open\n")))
+    println(show(toml_parse("[a\nb = 1\n")))
+    println(show(toml_parse("a = [1, 2\n")))
+    println(show(toml_parse("a = 1\n[a]\nb = 2\n")))
+    println(show(toml_parse("x = tru\n")))
+
+    // writing, and a round trip
+    let out = toml_stringify(v)
+    print(out)
+    let again = toml_parse(out)
+    println("round trip equal:", show(again) == show(r))
+    println("\"x\" key quoting:", toml_stringify(json_object_of({"a b": JsonValue.Int(1), "n": JsonValue.Float(2.0), "s": JsonValue.Str("q\"\n")})).trim())
+    return 0
+}

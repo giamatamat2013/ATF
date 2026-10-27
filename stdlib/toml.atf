@@ -1,0 +1,592 @@
+// std/toml - reading and writing TOML (the configuration file format).
+//
+//   import "std/toml"
+//
+//   let r = toml_parse("name = \"app\"\n[server]\nport = 8080\nhosts = [\"a\", \"b\"]\n")
+//   match r {
+//       Result.Ok(v) => println(v.get_str("name", "?"), v.query("server.port"), v.query("server.hosts[1]"))
+//       Result.Err(e) => println("bad toml: " + e)          // e.g. "line 3: expected '=' after the key"
+//   }
+//   println(toml_stringify(doc))
+//
+// A document becomes a JsonValue (from std/json, which this module imports): tables are objects,
+// arrays are arrays, integers are Int, floats are Float. Dates and times are kept as Str.
+// Supported: comments, bare / quoted / dotted keys, [tables], [[arrays of tables]], inline tables,
+// multi-line arrays, basic and literal strings (also the multi-line forms), numbers with _ and 0x 0o 0b.
+// Not supported: inf and nan values.
+
+import "std/json"
+
+struct TomlParser {
+    s: str
+    i: int
+    err: str
+}
+
+fn toml_line_of(p: TomlParser) -> int {
+    var line = 1
+    for k in 0..p.i {
+        if k < p.s.len() and p.s.byte_at(k) == 10 { line += 1 }
+    }
+    return line
+}
+
+fn toml_fail(p: TomlParser, msg: str) {
+    if p.err == "" { p.err = "line {toml_line_of(p)}: {msg}" }
+}
+
+fn toml_peek(p: TomlParser) -> int {
+    if p.i >= p.s.len() { return -1 }
+    return int(p.s.byte_at(p.i))
+}
+
+fn toml_at(p: TomlParser, t: str) -> bool {
+    return p.i + t.len() <= p.s.len() and p.s[p.i..p.i + t.len()] == t
+}
+
+// skips spaces and tabs
+fn toml_skip_ws(p: TomlParser) {
+    while p.i < p.s.len() and (p.s.byte_at(p.i) == ' ' or p.s.byte_at(p.i) == 9) { p.i += 1 }
+}
+
+// skips to the end of a comment (not past the newline)
+fn toml_skip_comment(p: TomlParser) {
+    if toml_peek(p) == '#' {
+        while p.i < p.s.len() and p.s.byte_at(p.i) != 10 { p.i += 1 }
+    }
+}
+
+// skips spaces, comments and newlines
+fn toml_skip_blank(p: TomlParser) {
+    loop {
+        toml_skip_ws(p)
+        toml_skip_comment(p)
+        let c = toml_peek(p)
+        if c == 10 or c == 13 { p.i += 1 } else { break }
+    }
+}
+
+fn toml_utf8(sb: StrBuilder, cp: int) {
+    if cp < 0x80 {
+        sb.add_byte(byte(cp))
+    } else if cp < 0x800 {
+        sb.add_byte(byte(0xC0 | (cp >> 6)))
+        sb.add_byte(byte(0x80 | (cp & 0x3F)))
+    } else if cp < 0x10000 {
+        sb.add_byte(byte(0xE0 | (cp >> 12)))
+        sb.add_byte(byte(0x80 | ((cp >> 6) & 0x3F)))
+        sb.add_byte(byte(0x80 | (cp & 0x3F)))
+    } else {
+        sb.add_byte(byte(0xF0 | (cp >> 18)))
+        sb.add_byte(byte(0x80 | ((cp >> 12) & 0x3F)))
+        sb.add_byte(byte(0x80 | ((cp >> 6) & 0x3F)))
+        sb.add_byte(byte(0x80 | (cp & 0x3F)))
+    }
+}
+
+fn toml_hex_value(p: TomlParser, digits: int) -> int {
+    var v = 0
+    for k in 0..digits {
+        if p.i >= p.s.len() {
+            toml_fail(p, "unfinished \\u escape")
+            return 0
+        }
+        let c = p.s.byte_at(p.i)
+        var d = -1
+        if c >= '0' and c <= '9' { d = int(c - '0') }
+        if c >= 'a' and c <= 'f' { d = int(c - 'a') + 10 }
+        if c >= 'A' and c <= 'F' { d = int(c - 'A') + 10 }
+        if d < 0 {
+            toml_fail(p, "bad hex digit in a \\u escape")
+            return 0
+        }
+        v = v * 16 + d
+        p.i += 1
+    }
+    return v
+}
+
+// a string starting at the opening quote; handles """ ''' and the one-line forms
+fn toml_parse_string(p: TomlParser) -> str {
+    let q = p.s.byte_at(p.i)
+    let literal = q == '\''
+    var multi = false
+    if toml_at(p, if literal { "'''" } else { "\"\"\"" }) {
+        multi = true
+        p.i += 3
+        // a newline right after the opening quotes is dropped
+        if toml_peek(p) == 13 { p.i += 1 }
+        if toml_peek(p) == 10 { p.i += 1 }
+    } else {
+        p.i += 1
+    }
+    var sb = str_builder()
+    while p.err == "" {
+        if p.i >= p.s.len() {
+            toml_fail(p, "unterminated string")
+            break
+        }
+        let c = p.s.byte_at(p.i)
+        if multi {
+            if toml_at(p, if literal { "'''" } else { "\"\"\"" }) {
+                p.i += 3
+                // up to two extra quotes belong to the string
+                var extra = 0
+                while extra < 2 and toml_peek(p) == int(q) {
+                    sb.add_byte(q)
+                    p.i += 1
+                    extra += 1
+                }
+                return sb.finish()
+            }
+        } else {
+            if c == q {
+                p.i += 1
+                return sb.finish()
+            }
+            if c == 10 {
+                toml_fail(p, "a one-line string cannot contain a newline")
+                break
+            }
+        }
+        if c == '\\' and not literal {
+            p.i += 1
+            if p.i >= p.s.len() {
+                toml_fail(p, "unterminated string")
+                break
+            }
+            let e = p.s.byte_at(p.i)
+            p.i += 1
+            if e == 'n' {
+                sb.add_byte(10)
+            } else if e == 't' {
+                sb.add_byte(9)
+            } else if e == 'r' {
+                sb.add_byte(13)
+            } else if e == 'b' {
+                sb.add_byte(8)
+            } else if e == 'f' {
+                sb.add_byte(12)
+            } else if e == '"' {
+                sb.add_byte('"')
+            } else if e == '\\' {
+                sb.add_byte('\\')
+            } else if e == 'u' {
+                toml_utf8(sb, toml_hex_value(p, 4))
+            } else if e == 'U' {
+                toml_utf8(sb, toml_hex_value(p, 8))
+            } else if multi and (e == 10 or e == 13 or e == ' ' or e == 9) {
+                // a backslash at the end of a line removes the newline and the blanks after it
+                p.i -= 1
+                while p.i < p.s.len() and (p.s.byte_at(p.i) == ' ' or p.s.byte_at(p.i) == 9 or p.s.byte_at(p.i) == 10 or p.s.byte_at(p.i) == 13) { p.i += 1 }
+            } else {
+                toml_fail(p, "unknown escape \\" + char_str(e))
+            }
+            continue
+        }
+        sb.add_byte(c)
+        p.i += 1
+    }
+    return ""
+}
+
+fn toml_is_bare(c: int) -> bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '-'
+}
+
+// one key part: bare, "quoted" or 'literal'
+fn toml_parse_key_part(p: TomlParser) -> str {
+    toml_skip_ws(p)
+    let c = toml_peek(p)
+    if c == '"' or c == '\'' { return toml_parse_string(p) }
+    let start = p.i
+    while toml_is_bare(toml_peek(p)) { p.i += 1 }
+    if p.i == start {
+        toml_fail(p, "expected a key")
+        return ""
+    }
+    return p.s[start..p.i]
+}
+
+// a dotted key such as a.b."c d"
+fn toml_parse_key(p: TomlParser) -> [str] {
+    var parts: [str] = [toml_parse_key_part(p)]
+    loop {
+        toml_skip_ws(p)
+        if toml_peek(p) == '.' and p.err == "" {
+            p.i += 1
+            parts.push(toml_parse_key_part(p))
+        } else {
+            break
+        }
+    }
+    return parts
+}
+
+fn toml_looks_like_date(tok: str) -> bool {
+    if tok.len() >= 10 and tok.byte_at(4) == '-' and tok.byte_at(7) == '-' { return true }
+    return tok.len() >= 5 and tok.byte_at(2) == ':'
+}
+
+fn toml_parse_scalar(p: TomlParser) -> JsonValue {
+    var start = p.i
+    while p.i < p.s.len() {
+        let c = p.s.byte_at(p.i)
+        if c == ' ' or c == 9 or c == 10 or c == 13 or c == ',' or c == ']' or c == '}' or c == '#' { break }
+        p.i += 1
+    }
+    var tok = p.s[start..p.i]
+    // "1979-05-27 07:32:00": the time after a space belongs to the date
+    if tok.len() == 10 and toml_looks_like_date(tok) and toml_peek(p) == ' ' and p.i + 1 < p.s.len() and p.s.byte_at(p.i + 1) >= '0' and p.s.byte_at(p.i + 1) <= '9' {
+        p.i += 1
+        let s2 = p.i
+        while p.i < p.s.len() {
+            let c = p.s.byte_at(p.i)
+            if c == ' ' or c == 9 or c == 10 or c == 13 or c == ',' or c == ']' or c == '}' or c == '#' { break }
+            p.i += 1
+        }
+        tok = tok + " " + p.s[s2..p.i]
+    }
+    if tok == "true" { return JsonValue.Bool(true) }
+    if tok == "false" { return JsonValue.Bool(false) }
+    if tok == "" {
+        toml_fail(p, "expected a value")
+        return JsonValue.Null
+    }
+    if toml_looks_like_date(tok) { return JsonValue.Str(tok) }
+    let t = tok.replace("_", "")
+    var neg = false
+    var body = t
+    if body.starts_with("+") {
+        body = body[1..]
+    } else if body.starts_with("-") {
+        neg = true
+        body = body[1..]
+    }
+    var base = 10
+    if body.starts_with("0x") { base = 16 }
+    if body.starts_with("0o") { base = 8 }
+    if body.starts_with("0b") { base = 2 }
+    if base != 10 {
+        var v = 0
+        for k in 2..body.len() {
+            let c = body.byte_at(k)
+            var d = -1
+            if c >= '0' and c <= '9' { d = int(c - '0') }
+            if c >= 'a' and c <= 'f' { d = int(c - 'a') + 10 }
+            if c >= 'A' and c <= 'F' { d = int(c - 'A') + 10 }
+            if d < 0 or d >= base {
+                toml_fail(p, "bad number " + quote_str(tok))
+                return JsonValue.Null
+            }
+            v = v * base + d
+        }
+        if body.len() <= 2 {
+            toml_fail(p, "bad number " + quote_str(tok))
+            return JsonValue.Null
+        }
+        if neg { v = -v }
+        return JsonValue.Int(v)
+    }
+    if body.contains(".") or body.contains("e") or body.contains("E") {
+        let f = t.parse_float()
+        if f == nil {
+            toml_fail(p, "bad number " + quote_str(tok))
+            return JsonValue.Null
+        }
+        return JsonValue.Float(f!)
+    }
+    let n = t.parse_int()
+    if n == nil {
+        toml_fail(p, "bad value " + quote_str(tok))
+        return JsonValue.Null
+    }
+    return JsonValue.Int(n!)
+}
+
+fn toml_parse_value(p: TomlParser) -> JsonValue {
+    toml_skip_ws(p)
+    let c = toml_peek(p)
+    if c == '"' or c == '\'' { return JsonValue.Str(toml_parse_string(p)) }
+    if c == '[' {
+        p.i += 1
+        let items: [JsonValue] = []
+        loop {
+            toml_skip_blank(p)
+            if toml_peek(p) == ']' {
+                p.i += 1
+                break
+            }
+            if p.err != "" or p.i >= p.s.len() {
+                toml_fail(p, "missing ] at the end of an array")
+                break
+            }
+            items.push(toml_parse_value(p))
+            toml_skip_blank(p)
+            if toml_peek(p) == ',' {
+                p.i += 1
+            } else if toml_peek(p) != ']' {
+                toml_fail(p, "expected ',' or ']' in an array")
+                break
+            }
+        }
+        return JsonValue.Array(items)
+    }
+    if c == '{' {
+        p.i += 1
+        let m: {str: JsonValue} = {}
+        toml_skip_ws(p)
+        if toml_peek(p) == '}' {
+            p.i += 1
+            return JsonValue.Object(m)
+        }
+        loop {
+            let key = toml_parse_key(p)
+            toml_skip_ws(p)
+            if toml_peek(p) != '=' {
+                toml_fail(p, "expected '=' after the key")
+                break
+            }
+            p.i += 1
+            let v = toml_parse_value(p)
+            if p.err != "" { break }
+            toml_set(p, m, key, v)
+            toml_skip_ws(p)
+            if toml_peek(p) == ',' {
+                p.i += 1
+            } else if toml_peek(p) == '}' {
+                p.i += 1
+                break
+            } else {
+                toml_fail(p, "expected ',' or '}' in an inline table")
+                break
+            }
+        }
+        return JsonValue.Object(m)
+    }
+    return toml_parse_scalar(p)
+}
+
+fn toml_object_of(v: JsonValue) -> {str: JsonValue}? {
+    match v {
+        JsonValue.Object(o) => return o
+        _ => return nil
+    }
+}
+
+// the table named key inside m (created when missing); an array of tables gives its last table
+fn toml_descend(p: TomlParser, m: {str: JsonValue}, key: str) -> {str: JsonValue} {
+    if key in m {
+        let cur = m[key]
+        let o = toml_object_of(cur)
+        if o != nil { return o! }
+        match cur {
+            JsonValue.Array(a) => {
+                if a.len() > 0 {
+                    let last = toml_object_of(a[a.len() - 1])
+                    if last != nil { return last! }
+                }
+            }
+            _ => {}
+        }
+        toml_fail(p, "the key " + quote_str(key) + " is already used for a value that is not a table")
+        let dummy: {str: JsonValue} = {}
+        return dummy
+    }
+    let n: {str: JsonValue} = {}
+    m[key] = JsonValue.Object(n)
+    return n
+}
+
+fn toml_set(p: TomlParser, m: {str: JsonValue}, key: [str], v: JsonValue) {
+    var cur = m
+    for k in 0..key.len() - 1 { cur = toml_descend(p, cur, key[k]) }
+    let last = key[key.len() - 1]
+    if last in cur {
+        toml_fail(p, "the key " + quote_str(last) + " is defined twice")
+        return
+    }
+    cur[last] = v
+}
+
+fn toml_end_of_line(p: TomlParser) {
+    toml_skip_ws(p)
+    toml_skip_comment(p)
+    let c = toml_peek(p)
+    if c == -1 { return }
+    if c == 13 { p.i += 1 }
+    if toml_peek(p) == 10 {
+        p.i += 1
+        return
+    }
+    toml_fail(p, "unexpected text after the value")
+}
+
+// Reads a TOML document. The error text starts with the line number.
+fn toml_parse(text: str) -> Result<JsonValue, str> {
+    let p = TomlParser{ s: text, i: 0, err: "" }
+    if text.starts_with("\xEF\xBB\xBF") { p.i = 3 }
+    let root: {str: JsonValue} = {}
+    var cur = root
+    while p.err == "" {
+        toml_skip_blank(p)
+        if p.i >= p.s.len() { break }
+        if toml_peek(p) == '[' {
+            let array_table = toml_at(p, "[[")
+            if array_table { p.i += 2 } else { p.i += 1 }
+            let path = toml_parse_key(p)
+            toml_skip_ws(p)
+            if p.err != "" { break }
+            if not toml_at(p, if array_table { "]]" } else { "]" }) {
+                toml_fail(p, "missing ] after the table name")
+                break
+            }
+            p.i += if array_table { 2 } else { 1 }
+            var t = root
+            for k in 0..path.len() - 1 { t = toml_descend(p, t, path[k]) }
+            let last = path[path.len() - 1]
+            if array_table {
+                let n: {str: JsonValue} = {}
+                if last in t {
+                    match t[last] {
+                        JsonValue.Array(a) => a.push(JsonValue.Object(n))
+                        _ => toml_fail(p, "the key " + quote_str(last) + " is not an array of tables")
+                    }
+                } else {
+                    let a: [JsonValue] = [JsonValue.Object(n)]
+                    t[last] = JsonValue.Array(a)
+                }
+                cur = n
+            } else {
+                cur = toml_descend(p, t, last)
+            }
+            toml_end_of_line(p)
+            continue
+        }
+        let key = toml_parse_key(p)
+        toml_skip_ws(p)
+        if p.err != "" { break }
+        if toml_peek(p) != '=' {
+            toml_fail(p, "expected '=' after the key")
+            break
+        }
+        p.i += 1
+        let v = toml_parse_value(p)
+        if p.err != "" { break }
+        toml_set(p, cur, key, v)
+        toml_end_of_line(p)
+    }
+    if p.err != "" { return Result.Err(p.err) }
+    return Result.Ok(JsonValue.Object(root))
+}
+
+// ---------------------------------------------------------------- writing
+fn toml_quote(s: str) -> str {
+    var sb = str_builder()
+    sb.add("\"")
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == '"' {
+            sb.add("\\\"")
+        } else if c == '\\' {
+            sb.add("\\\\")
+        } else if c == 10 {
+            sb.add("\\n")
+        } else if c == 9 {
+            sb.add("\\t")
+        } else if c == 13 {
+            sb.add("\\r")
+        } else if c < 32 or c == 127 {
+            sb.add("\\u" + pad_zero(int_to_hex(int(c)), 4))
+        } else {
+            sb.add_byte(c)
+        }
+    }
+    sb.add("\"")
+    return sb.finish()
+}
+
+fn toml_key_text(k: str) -> str {
+    if k == "" { return "\"\"" }
+    for i in 0..k.len() {
+        if not toml_is_bare(int(k.byte_at(i))) { return toml_quote(k) }
+    }
+    return k
+}
+
+fn toml_is_table_array(v: JsonValue) -> bool {
+    match v {
+        JsonValue.Array(a) => {
+            if a.len() == 0 { return false }
+            for x in a {
+                if not x.is_object() { return false }
+            }
+            return true
+        }
+        _ => return false
+    }
+}
+
+fn toml_inline(v: JsonValue) -> str {
+    return match v {
+        JsonValue.Null => "\"\""
+        JsonValue.Bool(b) => if b { "true" } else { "false" }
+        JsonValue.Int(i) => str(i)
+        JsonValue.Float(f) => toml_float(f)
+        JsonValue.Str(s) => toml_quote(s)
+        JsonValue.Array(a) => "[" + ", ".join(a.map(|x| toml_inline(x))) + "]"
+        JsonValue.Object(o) => toml_inline_table(o)
+    }
+}
+
+fn toml_inline_table(o: {str: JsonValue}) -> str {
+    var parts: [str] = []
+    for k, x in o { parts.push(toml_key_text(k) + " = " + toml_inline(x)) }
+    if parts.len() == 0 { return "\{}" }
+    return "\{ " + ", ".join(parts) + " }"
+}
+
+fn toml_float(f: float) -> str {
+    let t = str(f)
+    if t.contains(".") or t.contains("e") or t.contains("E") or t.contains("n") { return t }
+    return t + ".0"
+}
+
+fn toml_write_table(sb: StrBuilder, o: {str: JsonValue}, path: [str]) {
+    // plain values first, then the tables, so the output is valid whatever the key order
+    for k, v in o {
+        if v.is_object() or toml_is_table_array(v) { continue }
+        sb.add(toml_key_text(k) + " = " + toml_inline(v) + "\n")
+    }
+    for k, v in o {
+        var sub = copy(path)
+        sub.push(toml_key_text(k))
+        if v.is_object() {
+            let m = toml_object_of(v)!
+            sb.add("\n[" + ".".join(sub) + "]\n")
+            toml_write_table(sb, m, sub)
+        } else if toml_is_table_array(v) {
+            match v {
+                JsonValue.Array(a) => {
+                    for x in a {
+                        sb.add("\n[[" + ".".join(sub) + "]]\n")
+                        toml_write_table(sb, toml_object_of(x)!, sub)
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// Writes a document (a JsonValue object) as TOML text. Plain values come first in each table, then its sub-tables.
+// Null values are written as empty strings, since TOML has no null. Panics when v is not an object.
+fn toml_stringify(v: JsonValue) -> str {
+    let o = toml_object_of(v)
+    if o == nil { panic("toml_stringify needs an object at the top level") }
+    let sb = str_builder()
+    toml_write_table(sb, o!, [])
+    var t = sb.finish()
+    if t.starts_with("\n") { t = t[1..] }
+    return t
+}
