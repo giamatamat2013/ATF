@@ -45,6 +45,11 @@
           "default": "",
           "description": "Path to the ATF compiler (atf.exe). Empty: bin/atf.exe or atf.cmd in the workspace, else `atf` from PATH."
         },
+        "atf.autoImport": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically add `import \"std/...\"` at the top of the file when you use a function or type from a standard library module."
+        },
         "atf.checkOnSave": {
           "type": "boolean",
           "default": true,
