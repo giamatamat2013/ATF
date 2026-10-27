@@ -58,6 +58,11 @@ extern "user32" fn SetWindowTextW(h: int, s: ptr<byte>) -> i32
 extern "user32" fn SetCapture(h: int) -> int
 extern "user32" fn ReleaseCapture() -> i32
 extern "user32" fn GetKeyState(vk: int) -> i32
+extern "user32" fn GetAsyncKeyState(vk: int) -> i32
+extern "user32" fn GetForegroundWindow() -> int
+extern "user32" fn GetCursorPos(p: ptr<int>) -> i32
+extern "user32" fn SetCursorPos(x: int, y: int) -> i32
+extern "user32" fn ClientToScreen(h: int, p: ptr<int>) -> i32
 extern "user32" fn TrackMouseEvent(t: ptr<int>) -> i32
 extern "user32" fn OpenClipboard(h: int) -> i32
 extern "user32" fn CloseClipboard() -> i32
@@ -981,6 +986,27 @@ impl Canvas {
         t.size = size
         t.weight = if bold { 700 } else { 400 }
         return int(float(ui_text_w(ui_font(t), s)) / ui_scale + 0.5)
+    }
+    // Draw a picture from an array of 0xRRGGBB ints (pw * ph pixels, row by row), stretched to w x h pixels
+    // with the nearest pixel. Much faster than one rect per pixel: use it for software rendered scenes.
+    fn pixels(self, x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int) {
+        let dw = ui_sc(w)
+        let dh = ui_sc(h)
+        if dw <= 0 or dh <= 0 or pw <= 0 or ph <= 0 or pix.len() < pw * ph { return }
+        let fb = ui_fb as ptr<int>
+        let dx0 = self.ox + ui_sc(x)
+        let dy0 = self.oy + ui_sc(y)
+        let x0 = max(dx0, ui_cx0)
+        let x1 = min(dx0 + dw, ui_cx1)
+        let y0 = max(dy0, ui_cy0)
+        let y1 = min(dy0 + dh, ui_cy1)
+        for yy in y0..y1 {
+            let srow = ((yy - dy0) * ph / dh) * pw
+            let row = yy * ui_fbw
+            for xx in x0..x1 {
+                fb[row + xx] = pix[srow + (xx - dx0) * pw / dw] & 0xFFFFFF
+            }
+        }
     }
 }
 
@@ -2683,6 +2709,61 @@ fn ui_title(title: str) {
     if ui_hwnd != 0 { SetWindowTextW(ui_hwnd, ui_wide(title)) }
 }
 
+// ---------------------------------------------------------------- games: held keys and mouse look
+var ui_captured = false
+
+// true while the key is held down and this window is the active one. Names as in ui_shortcut:
+// ui_key_down("w"), ui_key_down("space"), ui_key_down("left").
+fn ui_key_down(name: str) -> bool {
+    if ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd { return false }
+    let vk = ui_key_code(name.lower())
+    if vk == 0 { return false }
+    return GetAsyncKeyState(vk) & 0x8000 != 0
+}
+
+// true while a mouse button is held down over an active window: 0 = left, 1 = right, 2 = middle
+fn ui_mouse_held(button: int) -> bool {
+    if ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd or button < 0 or button > 2 { return false }
+    return GetAsyncKeyState([1, 2, 4][button]) & 0x8000 != 0
+}
+
+fn ui_signed32(v: int) -> int {
+    let u = v & 0xFFFFFFFF
+    return if u >= 0x80000000 { u - 0x100000000 } else { u }
+}
+
+// the middle of the window on the screen
+fn ui_screen_center() -> (int, int) {
+    let p = __alloc_atomic(16) as ptr<int>
+    p[0] = (ui_winw / 2) | ((ui_winh / 2) << 32)
+    ClientToScreen(ui_hwnd, p)
+    return (ui_signed32(p[0]), ui_signed32(p[0] >> 32))
+}
+
+// Mouse look: hide the pointer and keep it in the middle of the window. Read how far it moved with
+// ui_mouse_delta(). Turn it off with ui_mouse_capture(false).
+fn ui_mouse_capture(on: bool) {
+    ui_captured = on
+    if on and ui_hwnd != 0 {
+        let (cx, cy) = ui_screen_center()
+        SetCursorPos(cx, cy)
+    }
+    if ui_hwnd != 0 { SetCursor(if on { 0 } else { LoadCursorW(0, ui_cursor_id) }) }
+}
+
+// how many pixels the mouse moved since the last call (right and down are positive).
+// Only works after ui_mouse_capture(true) and while the window is active.
+fn ui_mouse_delta() -> (int, int) {
+    if not ui_captured or ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd { return (0, 0) }
+    let p = __alloc_atomic(16) as ptr<int>
+    GetCursorPos(p)
+    let (cx, cy) = ui_screen_center()
+    let dx = ui_signed32(p[0]) - cx
+    let dy = ui_signed32(p[0] >> 32) - cy
+    if dx != 0 or dy != 0 { SetCursorPos(cx, cy) }
+    return (dx, dy)
+}
+
 // run f every ms milliseconds while the window is open; the view is rebuilt after each call
 fn ui_every(ms: int, f: fn()) {
     ui_timers.push(f)
@@ -3482,7 +3563,7 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
         return 0
     } else if m == 32 {
         if lp & 0xFFFF == 1 {
-            SetCursor(LoadCursorW(0, ui_cursor_id))
+            SetCursor(if ui_captured { 0 } else { LoadCursorW(0, ui_cursor_id) })
             return 1
         }
     } else if m == 256 {

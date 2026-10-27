@@ -1,0 +1,377 @@
+// minecraft.atf - a tiny first-person block world: walk, jump, break and place blocks.
+// Shows: canvas drawing, a software ray caster (voxel DDA), a timer game loop with ui_every,
+//        held keys through GetAsyncKeyState, ui_shortcut for single key presses.
+// Controls: W A S D move, the mouse (or the arrow keys) looks around, Space jump,
+//           left click (or Q) breaks the block in the crosshair, right click (or E) places the selected block,
+//           1-6 choose a block, Esc quit.
+// Run:   atf run examples/ui/minecraft.atf
+
+import "std/ui"
+
+const MC_W = 384          // ray casting resolution; every cell is drawn as MC_S x MC_S pixels
+const MC_H = 216
+const MC_S = 3
+const MC_X = 48           // world size in blocks
+const MC_Y = 24
+const MC_Z = 48
+const MC_REACH = 6.0
+const MC_FAR = 40.0
+
+// block ids: 0 air, 1 grass, 2 dirt, 3 stone, 4 wood, 5 leaves, 6 planks
+let MC_NAMES = ["Air", "Grass", "Dirt", "Stone", "Wood", "Leaves", "Planks"]
+let MC_R = [0, 96, 134, 125, 102, 52, 188]
+let MC_G = [0, 160, 96, 125, 81, 130, 152]
+let MC_B = [0, 56, 67, 125, 50, 40, 98]
+
+var mc_blocks: [int] = []
+var mc_px = 0.0
+var mc_py = 0.0
+var mc_pz = 0.0
+var mc_vy = 0.0
+var mc_on_ground = false
+var mc_yaw = 0.0
+var mc_pitch = 0.0
+var mc_sel = 1
+var mc_cool = 0.0                      // seconds until the next block can be broken or placed
+var mc_buf: [int] = []                 // the picture, 0xRRGGBB per pixel
+
+// result of the last mc_cast: the block that was hit, the cell it is in, the empty cell in front of it,
+// the face (0 = x, 1 = y, 2 = z) and the distance
+var mc_hit = 0
+var mc_hx = 0
+var mc_hy = 0
+var mc_hz = 0
+var mc_ex = 0
+var mc_ey = 0
+var mc_ez = 0
+var mc_face = 0
+var mc_dist = 0.0
+
+fn mc_index(x: int, y: int, z: int) -> int { return (y * MC_Z + z) * MC_X + x }
+
+fn mc_inside(x: int, y: int, z: int) -> bool {
+    return x >= 0 and x < MC_X and y >= 0 and y < MC_Y and z >= 0 and z < MC_Z
+}
+
+fn mc_get(x: int, y: int, z: int) -> int {
+    if not mc_inside(x, y, z) { return 0 }
+    return mc_blocks[mc_index(x, y, z)]
+}
+
+fn mc_set(x: int, y: int, z: int, b: int) {
+    if mc_inside(x, y, z) { mc_blocks[mc_index(x, y, z)] = b }
+}
+
+fn mc_height(x: int, z: int) -> int {
+    let fx = float(x)
+    let fz = float(z)
+    let h = 8.0 + 3.0 * sin(fx * 0.25) + 3.0 * cos(fz * 0.2) + 2.0 * sin((fx + fz) * 0.13)
+    return clamp(int(h), 2, MC_Y - 8)
+}
+
+fn mc_generate() {
+    mc_blocks = array_make::<int>(MC_X * MC_Y * MC_Z)
+    for x in 0..MC_X {
+        for z in 0..MC_Z {
+            let h = mc_height(x, z)
+            for y in 0..h {
+                var b = 3
+                if y >= h - 3 { b = 2 }
+                if y == h - 1 { b = 1 }
+                mc_set(x, y, z, b)
+            }
+        }
+    }
+    // trees
+    rand_seed(7)
+    for i in 0..40 {
+        let tx = rand_int(3, MC_X - 4)
+        let tz = rand_int(3, MC_Z - 4)
+        let h = mc_height(tx, tz)
+        for y in h..h + 4 { mc_set(tx, y, tz, 4) }
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                for dy in 3..=5 {
+                    let corner = abs(dx) == 2 and abs(dz) == 2
+                    let top = dy == 5 and (abs(dx) > 1 or abs(dz) > 1)
+                    if not corner and not top and mc_get(tx + dx, h + dy, tz + dz) == 0 {
+                        mc_set(tx + dx, h + dy, tz + dz, 5)
+                    }
+                }
+            }
+        }
+    }
+    // the player starts in the middle of the world
+    mc_px = float(MC_X / 2) + 0.5
+    mc_pz = float(MC_Z / 2) + 0.5
+    mc_py = float(mc_height(MC_X / 2, MC_Z / 2)) + 0.01
+    mc_vy = 0.0
+    mc_yaw = 0.6
+    mc_pitch = -0.25
+}
+
+// walk a ray through the blocks (DDA); true when a block is hit within maxd, the details are in mc_*
+fn mc_cast(ox: float, oy: float, oz: float, dx: float, dy: float, dz: float, maxd: float) -> bool {
+    var cx = int(floor(ox))
+    var cy = int(floor(oy))
+    var cz = int(floor(oz))
+    let big = 1000000000.0
+    let ddx = if dx == 0.0 { big } else { abs(1.0 / dx) }
+    let ddy = if dy == 0.0 { big } else { abs(1.0 / dy) }
+    let ddz = if dz == 0.0 { big } else { abs(1.0 / dz) }
+    let sx = if dx < 0.0 { -1 } else { 1 }
+    let sy = if dy < 0.0 { -1 } else { 1 }
+    let sz = if dz < 0.0 { -1 } else { 1 }
+    var nx = if dx < 0.0 { (ox - float(cx)) * ddx } else { (float(cx + 1) - ox) * ddx }
+    var ny = if dy < 0.0 { (oy - float(cy)) * ddy } else { (float(cy + 1) - oy) * ddy }
+    var nz = if dz < 0.0 { (oz - float(cz)) * ddz } else { (float(cz + 1) - oz) * ddz }
+    var t = 0.0
+    var face = 0
+    while t < maxd {
+        let px = cx
+        let py = cy
+        let pz = cz
+        if nx < ny and nx < nz {
+            t = nx
+            nx += ddx
+            cx += sx
+            face = 0
+        } else if ny < nz {
+            t = ny
+            ny += ddy
+            cy += sy
+            face = 1
+        } else {
+            t = nz
+            nz += ddz
+            cz += sz
+            face = 2
+        }
+        if cx < 0 or cx >= MC_X or cz < 0 or cz >= MC_Z { return false }
+        if cy < 0 { return false }
+        if cy >= MC_Y and dy >= 0.0 { return false }
+        let b = mc_get(cx, cy, cz)
+        if b != 0 {
+            mc_hit = b
+            mc_hx = cx
+            mc_hy = cy
+            mc_hz = cz
+            mc_ex = px
+            mc_ey = py
+            mc_ez = pz
+            mc_face = face
+            mc_dist = t
+            return true
+        }
+    }
+    return false
+}
+
+// ---------------------------------------------------------------- player
+
+
+// does a player standing with his feet at (x, y, z) overlap a block?
+fn mc_blocked(x: float, y: float, z: float) -> bool {
+    for ox in [-0.3, 0.3] {
+        for oz in [-0.3, 0.3] {
+            for h in [0.0, 0.9, 1.79] {
+                if mc_get(int(floor(x + ox)), int(floor(y + h)), int(floor(z + oz))) != 0 { return true }
+                if x + ox < 0.0 or z + oz < 0.0 or x + ox >= float(MC_X) or z + oz >= float(MC_Z) { return true }
+            }
+        }
+    }
+    return false
+}
+
+fn mc_step() {
+    let dt = 0.03
+    let (mdx, mdy) = ui_mouse_delta()
+    mc_yaw += float(mdx) * 0.0025
+    mc_pitch -= float(mdy) * 0.0025
+    if ui_key_down("left") { mc_yaw -= 1.8 * dt }
+    if ui_key_down("right") { mc_yaw += 1.8 * dt }
+    if ui_key_down("up") { mc_pitch += 1.4 * dt }
+    if ui_key_down("down") { mc_pitch -= 1.4 * dt }
+    mc_cool -= dt
+    if mc_cool <= 0.0 {
+        if ui_mouse_held(0) {
+            mc_break()
+            mc_cool = 0.22
+        } else if ui_mouse_held(1) {
+            mc_place()
+            mc_cool = 0.22
+        }
+    }
+    mc_pitch = clamp(mc_pitch, -1.4, 1.4)
+
+    var fwd = 0.0
+    var side = 0.0
+    if ui_key_down("w") { fwd += 1.0 }
+    if ui_key_down("s") { fwd -= 1.0 }
+    if ui_key_down("d") { side += 1.0 }
+    if ui_key_down("a") { side -= 1.0 }
+    let speed = 4.5 * dt
+    let mx = (sin(mc_yaw) * fwd + cos(mc_yaw) * side) * speed
+    let mz = (cos(mc_yaw) * fwd - sin(mc_yaw) * side) * speed
+    if not mc_blocked(mc_px + mx, mc_py, mc_pz) { mc_px += mx }
+    if not mc_blocked(mc_px, mc_py, mc_pz + mz) { mc_pz += mz }
+
+    if ui_key_down("space") and mc_on_ground { mc_vy = 7.5 }
+    mc_vy -= 22.0 * dt
+    let ny = mc_py + mc_vy * dt
+    mc_on_ground = false
+    if mc_blocked(mc_px, ny, mc_pz) {
+        if mc_vy < 0.0 {
+            mc_on_ground = true
+            mc_py = floor(ny) + 1.001
+        }
+        mc_vy = 0.0
+    } else {
+        mc_py = ny
+    }
+    if mc_py < -10.0 { mc_py = float(MC_Y) }   // fell out of the world
+}
+
+fn mc_look() -> bool {
+    let cp = cos(mc_pitch)
+    return mc_cast(mc_px, mc_py + 1.6, mc_pz, sin(mc_yaw) * cp, sin(mc_pitch), cos(mc_yaw) * cp, MC_REACH)
+}
+
+fn mc_break() {
+    if mc_look() and mc_hy > 0 { mc_set(mc_hx, mc_hy, mc_hz, 0) }
+}
+
+fn mc_place() {
+    if mc_look() {
+        mc_set(mc_ex, mc_ey, mc_ez, mc_sel)
+        if mc_blocked(mc_px, mc_py, mc_pz) { mc_set(mc_ex, mc_ey, mc_ez, 0) }   // do not build inside yourself
+    }
+}
+
+// ---------------------------------------------------------------- drawing
+
+// a repeatable number from a block face position, 0..15: gives every block surface some texture
+fn mc_noise(a: int, b: int, c: int, d: int) -> int {
+    var h = a * 73856093 + b * 19349663 + c * 83492791 + d * 2654435761
+    h = (h ^ (h >> 13)) * 1274126177
+    return (h >> 8) & 15
+}
+
+fn mc_shade(x: int, y: int, ox: float, oy: float, oz: float, dx: float, dy: float, dz: float) {
+    var r = 0.0
+    var g = 0.0
+    var b = 0.0
+    // sky
+    let len = sqrt(dx * dx + dy * dy + dz * dz)
+    let k = clamp(dy / len * 2.0, 0.0, 1.0)
+    let sky_r = 175.0 - 85.0 * k
+    let sky_g = 214.0 - 64.0 * k
+    let sky_b = 250.0 - 15.0 * k
+    if mc_cast(ox, oy, oz, dx, dy, dz, MC_FAR) {
+        let t = mc_dist
+        let hx = ox + dx * t
+        let hy = oy + dy * t
+        let hz = oz + dz * t
+        var u = 0.0
+        var v = 0.0
+        var light = 0.7
+        if mc_face == 0 {
+            u = hz - floor(hz)
+            v = hy - floor(hy)
+            light = 0.8
+        } else if mc_face == 1 {
+            u = hx - floor(hx)
+            v = hz - floor(hz)
+            light = if dy < 0.0 { 1.0 } else { 0.5 }
+        } else {
+            u = hx - floor(hx)
+            v = hy - floor(hy)
+            light = 0.65
+        }
+        var id = mc_hit
+        // grass: only the top is green, the sides are dirt with a green edge
+        if id == 1 and mc_face != 1 and v < 0.75 { id = 2 }
+        let n = mc_noise(mc_hx, mc_hy + mc_face, mc_hz, int(u * 8.0) * 8 + int(v * 8.0))
+        let tex = 0.88 + float(n) * 0.016
+        let f = light * tex
+        r = float(MC_R[id]) * f
+        g = float(MC_G[id]) * f
+        b = float(MC_B[id]) * f
+        let fog = clamp((t - 12.0) / (MC_FAR - 12.0), 0.0, 1.0)
+        r += (sky_r - r) * fog
+        g += (sky_g - g) * fog
+        b += (sky_b - b) * fog
+    } else {
+        r = sky_r
+        g = sky_g
+        b = sky_b
+    }
+    mc_buf[y * MC_W + x] = (clamp(int(r), 0, 255) << 16) | (clamp(int(g), 0, 255) << 8) | clamp(int(b), 0, 255)
+}
+
+fn mc_draw(c: Canvas) {
+    let sy = sin(mc_yaw)
+    let cy = cos(mc_yaw)
+    let sp = sin(mc_pitch)
+    let cp = cos(mc_pitch)
+    // camera basis: forward, right, up
+    let fx = sy * cp
+    let fy = sp
+    let fz = cy * cp
+    let rx = cy
+    let rz = -sy
+    let ux = -sy * sp
+    let uy = cp
+    let uz = -cy * sp
+    let tan_fov = 0.75
+    if mc_buf.len() != MC_W * MC_H { mc_buf = array_make::<int>(MC_W * MC_H) }
+    let aspect = float(MC_W) / float(MC_H)
+    let ex = mc_px
+    let ey = mc_py + 1.6
+    let ez = mc_pz
+    for y in 0..MC_H {
+        let v = (1.0 - (float(y) + 0.5) / float(MC_H) * 2.0) * tan_fov
+        for x in 0..MC_W {
+            let u = ((float(x) + 0.5) / float(MC_W) * 2.0 - 1.0) * tan_fov * aspect
+            mc_shade(x, y, ex, ey, ez, fx + rx * u + ux * v, fy + uy * v, fz + rz * u + uz * v)
+        }
+    }
+
+    c.pixels(0, 0, MC_W * MC_S, MC_H * MC_S, mc_buf, MC_W, MC_H)
+
+    // crosshair
+    let mx = MC_W * MC_S / 2
+    let my = MC_H * MC_S / 2
+    c.rect(mx - 9, my - 1, 18, 2, WHITE)
+    c.rect(mx - 1, my - 9, 2, 18, WHITE)
+
+    // hotbar
+    let total = 6 * 46
+    let left = (MC_W * MC_S - total) / 2
+    let top = MC_H * MC_S - 56
+    for i in 1..=6 {
+        let bx = left + (i - 1) * 46
+        c.rect(bx, top, 42, 42, rgba(0, 0, 0, 0.45))
+        c.rect(bx + 7, top + 7, 28, 28, rgb(MC_R[i], MC_G[i], MC_B[i]))
+        c.text(bx + 4, top + 2, "{i}", WHITE, 12)
+        if i == mc_sel { c.outline(bx - 1, top - 1, 44, 44, 0, 3, WHITE) }
+    }
+    c.text(8, 8, "{MC_NAMES[mc_sel]}   WASD move   mouse look   Space jump   left click break   right click place   1-6 block   Esc quit", WHITE, 14)
+}
+
+fn view() -> Node {
+    return canvas(|c| { mc_draw(c) }).size(MC_W * MC_S, MC_H * MC_S)
+}
+
+fn main() {
+    mc_generate()
+    ui_mouse_capture(true)
+    ui_every(30, || { mc_step() })
+    ui_shortcut("q", || { mc_break() })
+    ui_shortcut("e", || { mc_place() })
+    ui_shortcut("esc", || { ui_quit() })
+    for i in 1..=6 {
+        ui_shortcut("{i}", || { mc_sel = i })
+    }
+    ui_run("ATF Minecraft", MC_W * MC_S, MC_H * MC_S, view)
+}

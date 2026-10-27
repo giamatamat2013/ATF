@@ -48,6 +48,9 @@ dialog closed by Esc false
 dialog closed by its button false
 canvas
 #ff0000 #ffffff #0000ff #ffffff
+pixels and mouse look
+#ff0000 #00ff00 #0000ff #ffffff
+0 0 false false
 shortcuts and dialogs
 save2 run del  false
 false Sure? true
