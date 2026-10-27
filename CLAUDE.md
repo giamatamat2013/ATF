@@ -8,6 +8,7 @@ ATF is a statically typed language that compiles to native Windows x64 `.exe` fi
 - `examples/`: the example programs.
 - `tools/`: tools written in ATF.
 - `editors/vscode/`: the VS Code extension.
+- `demos.html`: a single-page demo gallery (ATF vs Python). It must be kept up to date regularly, see the rule below.
 
 Before writing or changing ATF code, load the `atf` skill (`.claude/skills/atf`).
 
@@ -27,6 +28,7 @@ Go through this list for every change. Update whatever the change touches:
 | `.claude/skills/atf/references/stdlib.md` | A copy of `docs/STDLIB.md`. Copy it again after you regenerate. |
 | `editors/vscode/` | `snippets/atf.json`. The grammar in `syntaxes/` for new keywords. `PREFIX_MODULES` and the auto-import in `extension.js` for new module functions. `README.md` for anything user-facing. |
 | `examples/` | Add or adjust an example when the feature deserves one. Every top-level `examples/*.atf` needs a matching `.out` file. Window programs go in `examples/ui/`. |
+| `demos.html` | The demo page (ATF next to Python, with output). Add a demo to the `demos` array when a feature deserves one, and fix any demo whose code or output the change affects. Take the output from a real run (`bin/atf.exe run`), never from memory. Keep each ATF sample runnable. |
 | `tests/` | Add a regression test: `tests/*.atf` + `.out`, or `tests/std/test_<module>.atf` + `.out` |
 
 When you finish, say which of these files you updated. If you skipped any that the change touches, say which and why.

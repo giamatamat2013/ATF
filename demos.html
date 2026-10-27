@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>הדגמות ATF ו-Python</title>
+<title>מדריך ATF</title>
 <style>
   :root {
     --bg: #f6f7f9;
@@ -49,7 +49,7 @@
     background: var(--bg);
     color: var(--text);
     font-family: "Segoe UI", Arial, sans-serif;
-    line-height: 1.5;
+    line-height: 1.6;
   }
   header {
     padding: 24px 16px 8px;
@@ -63,13 +63,25 @@
     margin: 0 auto;
     padding: 16px;
     display: grid;
-    grid-template-columns: 220px 1fr;
+    grid-template-columns: 240px 1fr;
     gap: 16px;
+    align-items: start;
   }
   nav {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    position: sticky;
+    top: 12px;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
+  nav .chapter {
+    margin: 10px 0 2px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--muted);
+    letter-spacing: 0.02em;
   }
   nav button {
     text-align: right;
@@ -77,7 +89,7 @@
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 10px 12px;
+    padding: 8px 12px;
     font: inherit;
     cursor: pointer;
   }
@@ -91,23 +103,28 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 16px;
+    padding: 20px;
   }
-  .card h2 { margin: 0 0 4px; font-size: 1.3rem; }
-  .card > p { margin: 0 0 12px; color: var(--muted); }
-  .pair {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
+  .kicker { color: var(--accent); font-size: 0.85rem; font-weight: 600; }
+  .card h2 { margin: 2px 0 10px; font-size: 1.4rem; }
+  .card p { margin: 0 0 10px; }
+  .card code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 4px;
+    font: 0.9em Consolas, "Courier New", monospace;
+    direction: ltr;
+    unicode-bidi: embed;
   }
-  .pair > div { min-width: 0; }
   .label {
     font-size: 0.85rem;
     font-weight: 600;
-    margin-bottom: 4px;
+    margin: 14px 0 4px;
   }
   .label.atf { color: var(--atf); }
   .label.py { color: var(--py); }
+  .label.out { color: var(--muted); }
   pre {
     margin: 0;
     background: var(--code-bg);
@@ -119,13 +136,15 @@
     text-align: left;
     font: 0.88rem/1.5 Consolas, "Courier New", monospace;
   }
-  .output { margin-top: 12px; }
-  .output .label { color: var(--muted); }
+  details { margin-top: 14px; }
+  details summary { cursor: pointer; color: var(--py); font-weight: 600; }
+  details pre { margin-top: 8px; }
   .toolbar {
     display: flex;
     gap: 8px;
-    margin-top: 14px;
+    margin-top: 16px;
     align-items: center;
+    flex-wrap: wrap;
   }
   .toolbar button {
     background: var(--accent);
@@ -141,232 +160,218 @@
     color: var(--text);
     border: 1px solid var(--border);
   }
+  .toolbar button:disabled { opacity: 0.4; cursor: default; }
   .toolbar .status { color: var(--muted); font-size: 0.9rem; }
+  .toolbar .spacer { flex: 1; }
   @media (max-width: 760px) {
     .layout { grid-template-columns: 1fr; }
-    nav { flex-direction: row; flex-wrap: wrap; }
+    nav { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; }
+    nav .chapter { flex-basis: 100%; }
     nav button { flex: 1 1 auto; text-align: center; }
-    .pair { grid-template-columns: 1fr; }
   }
 </style>
 </head>
 <body>
 <header>
-  <h1>הדגמות: ATF מול Python</h1>
-  <p>אותו סקריפט בשתי השפות, עם הפלט שלו. בחרו הדגמה מהתפריט.</p>
+  <h1>מדריך ATF</h1>
+  <p>שיעור אחרי שיעור: הסבר, קוד שאפשר להריץ והפלט האמיתי שלו. בסוף כל שיעור אפשר לראות איך אותו דבר נראה ב-Python.</p>
 </header>
 
 <div class="layout">
   <nav id="nav"></nav>
   <main>
-    <section class="card" id="demo"></section>
+    <section class="card" id="lesson"></section>
   </main>
 </div>
 
 <script>
-const demos = [
+// LESSONS-START
+const lessons = [
   {
-    title: "שלום עולם",
-    desc: "הדפסה בסיסית של שורה אחת.",
-    atf: `fn main() {
-    println("Hello, world!")
-}`,
-    py: `print("Hello, world!")`,
-    output: `Hello, world!`
+    "chapter": "בסיס השפה",
+    "title": "שלום עולם",
+    "text": [
+      "כל תוכנית ATF מתחילה בפונקציה `main`. `println` מדפיסה שורה ומסיימת אותה.",
+      "מריצים עם `atf run file.atf`, או בונים קובץ `.exe` עצמאי עם `atf build file.atf -o file.exe`."
+    ],
+    "atf": "fn main() {\n    println(\"Hello, world!\")\n}",
+    "py": "print(\"Hello, world!\")",
+    "output": "Hello, world!"
   },
   {
-    title: "ברכה עם קלט",
-    desc: "קריאת שם מהמשתמש והדפסה עם שילוב משתנה במחרוזת.",
-    atf: `fn main() {
-    let name = input("What is your name? ")
-    println("Hello, {name}!")
-}`,
-    py: `name = input("What is your name? ")
-print(f"Hello, {name}!")`,
-    output: `What is your name? Ada
-Hello, Ada!`
+    "chapter": "בסיס השפה",
+    "title": "משתנים וטיפוסים",
+    "text": [
+      "`let` יוצר משתנה שאי אפשר לשנות, `var` יוצר משתנה שאפשר לשנות. הטיפוס נקבע לבד לפי הערך.",
+      "הטיפוסים הבסיסיים: `int`, `float`, `str`, `bool`. המרות הן תמיד מפורשות: `int(3.9)`, `float(7)`, `str(42)`.",
+      "בתוך מחרוזת, `{ביטוי}` מוחלף בערך שלו, ואפשר להוסיף עיצוב כמו `{pi:.2f}` לשתי ספרות אחרי הנקודה."
+    ],
+    "atf": "fn main() {\n    let name = \"Ada\"\n    var age = 36\n    age += 1\n    let pi = 3.14159\n    let ok = true\n    println(\"{name} is {age}, pi = {pi:.2f}, ok = {ok}\")\n    println(int(3.9), float(7), str(42) + \"!\")\n}",
+    "py": "name = \"Ada\"\nage = 36\nage += 1\npi = 3.14159\nok = True\nprint(f\"{name} is {age}, pi = {pi:.2f}, ok = {ok}\")\nprint(int(3.9), float(7), str(42) + \"!\")",
+    "output": "Ada is 37, pi = 3.14, ok = true\n3 7.0 42!"
   },
   {
-    title: "סדרת פיבונאצ'י",
-    desc: "פונקציה רקורסיבית שמחשבת את האיברים הראשונים בסדרה.",
-    atf: `fn fib(n: int) -> int {
-    if n < 2 { return n }
-    return fib(n - 1) + fib(n - 2)
-}
-
-fn main() {
-    for i in 0..10 {
-        println(i, fib(i))
-    }
-}`,
-    py: `def fib(n):
-    if n < 2:
-        return n
-    return fib(n - 1) + fib(n - 2)
-
-for i in range(10):
-    print(i, fib(i))`,
-    output: `0 0
-1 1
-2 1
-3 2
-4 3
-5 5
-6 8
-7 13
-8 21
-9 34`
+    "chapter": "בסיס השפה",
+    "title": "קלט מהמשתמש",
+    "text": [
+      "`input(\"שאלה\")` מדפיסה את השאלה וקוראת שורה מהמקלדת. בדוגמה למטה המשתמש הקליד `Ada`."
+    ],
+    "atf": "fn main() {\n    let name = input(\"What is your name? \")\n    println(\"Hello, {name}!\")\n}",
+    "py": "name = input(\"What is your name? \")\nprint(f\"Hello, {name}!\")",
+    "output": "What is your name? Hello, Ada!"
   },
   {
-    title: "ספירת מילים",
-    desc: "מילון שסופר כמה פעמים מופיעה כל מילה במשפט.",
-    atf: `fn main() {
-    var counts: {str: int} = {}
-    for w in "the cat and the hat".split(" ") {
-        counts[w] = counts.get(w, 0) + 1
-    }
-    println(counts)
-}`,
-    py: `counts = {}
-for w in "the cat and the hat".split(" "):
-    counts[w] = counts.get(w, 0) + 1
-print(counts)`,
-    output: `{"the": 2, "cat": 1, "and": 1, "hat": 1}   (ATF)
-{'the': 2, 'cat': 1, 'and': 1, 'hat': 1}   (Python)`
+    "chapter": "בסיס השפה",
+    "title": "תנאים",
+    "text": [
+      "התנאי ב-`if` חייב להיות `bool`. אין ערכי אמת כמו ב-Python: `if 1 {}` היא שגיאת קומפילציה.",
+      "`if` הוא גם ביטוי: אפשר לכתוב `let x = if ... { a } else { b }`."
+    ],
+    "atf": "fn grade(score: int) -> str {\n    if score >= 90 {\n        return \"A\"\n    } else if score >= 80 {\n        return \"B\"\n    }\n    return \"C\"\n}\n\nfn main() {\n    for s in [95, 85, 70] {\n        println(s, grade(s))\n    }\n    let label = if 7 % 2 == 0 { \"even\" } else { \"odd\" }\n    println(label)\n}",
+    "py": "def grade(score):\n    if score >= 90:\n        return \"A\"\n    elif score >= 80:\n        return \"B\"\n    return \"C\"\n\nfor s in [95, 85, 70]:\n    print(s, grade(s))\nlabel = \"even\" if 7 % 2 == 0 else \"odd\"\nprint(label)",
+    "output": "95 A\n85 B\n70 C\nodd"
   },
   {
-    title: "רשימה מסוננת",
-    desc: "הפקת ריבועים של מספרים זוגיים בעזרת list comprehension.",
-    atf: `fn main() {
-    let squares = [x * x for x in 1..=6 if x % 2 == 0]
-    println(squares)
-}`,
-    py: `squares = [x * x for x in range(1, 7) if x % 2 == 0]
-print(squares)`,
-    output: `[4, 16, 36]`
+    "chapter": "בסיס השפה",
+    "title": "לולאות",
+    "text": [
+      "`for i in 0..3` רץ על 0, 1, 2. `0..=20` כולל את הקצה, ו-`step` קובע גודל קפיצה.",
+      "`while` רץ כל עוד התנאי נכון. ב-`for i, x in רשימה` מקבלים גם את המקום וגם את הערך."
+    ],
+    "atf": "fn main() {\n    for i in 0..3 {\n        println(\"i =\", i)\n    }\n    for i in 0..=20 step 10 {\n        println(\"step\", i)\n    }\n    var n = 1\n    while n < 100 {\n        n *= 3\n    }\n    println(\"n =\", n)\n    for i, ch in [\"a\", \"b\", \"c\"] {\n        println(i, ch)\n    }\n}",
+    "py": "for i in range(3):\n    print(\"i =\", i)\nfor i in range(0, 21, 10):\n    print(\"step\", i)\nn = 1\nwhile n < 100:\n    n *= 3\nprint(\"n =\", n)\nfor i, ch in enumerate([\"a\", \"b\", \"c\"]):\n    print(i, ch)",
+    "output": "i = 0\ni = 1\ni = 2\nstep 0\nstep 10\nstep 20\nn = 243\n0 a\n1 b\n2 c"
   },
   {
-    title: "צורות וחישוב שטח",
-    desc: "טיפוס מסוג enum עם נתונים, וחישוב שטח לפי סוג הצורה.",
-    atf: `enum Shape {
-    Circle(float),
-    Rect(float, float)
-}
-
-fn area(s: Shape) -> float {
-    return match s {
-        Shape.Circle(r) => PI * r * r
-        Shape.Rect(w, h) => w * h
-    }
-}
-
-fn main() {
-    let shapes = [Shape.Circle(1.0), Shape.Rect(2.0, 3.5)]
-    for s in shapes { println(s, "area {area(s):.3}") }
-}`,
-    py: `import math
-
-def area(s):
-    match s:
-        case ("Circle", r):
-            return math.pi * r * r
-        case ("Rect", w, h):
-            return w * h
-
-shapes = [("Circle", 1.0), ("Rect", 2.0, 3.5)]
-for s in shapes:
-    print(s, f"area {area(s):.3f}")`,
-    output: `Shape.Circle(1.0) area 3.142    (ATF)
-Shape.Rect(2.0, 3.5) area 7.000
-
-("Circle", 1.0) area 3.142      (Python)
-("Rect", 2.0, 3.5) area 7.000`
+    "chapter": "בסיס השפה",
+    "title": "פונקציות",
+    "text": [
+      "כל פרמטר מקבל טיפוס, והטיפוס המוחזר בא אחרי `->`. אפשר ערכי ברירת מחדל וקריאה בשמות הפרמטרים.",
+      "פונקציה יכולה להחזיר כמה ערכים בעזרת טאפל ולפרק אותם: `let (lo, hi) = ...`.",
+      "רקורסיה עובדת כרגיל. הנה גם סדרת פיבונאצ'י."
+    ],
+    "atf": "fn power(base: int, exp: int = 2) -> int {\n    return base ** exp\n}\n\nfn minmax(a: [int]) -> (int, int) {\n    return (a.min(), a.max())\n}\n\nfn fib(n: int) -> int {\n    if n < 2 { return n }\n    return fib(n - 1) + fib(n - 2)\n}\n\nfn main() {\n    println(power(5), power(2, 10), power(exp: 3, base: 2))\n    let (lo, hi) = minmax([4, 9, 1, 7])\n    println(lo, hi)\n    for i in 0..10 {\n        print(fib(i), \"\")\n    }\n    println(\"\")\n}",
+    "py": "def power(base, exp=2):\n    return base ** exp\n\ndef minmax(a):\n    return min(a), max(a)\n\ndef fib(n):\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\n\nprint(power(5), power(2, 10), power(exp=3, base=2))\nlo, hi = minmax([4, 9, 1, 7])\nprint(lo, hi)\nprint(*[fib(i) for i in range(10)])",
+    "output": "25 1024 8\n1 9\n0 1 1 2 3 5 8 13 21 34 "
   },
   {
-    title: "קלט עם בדיקת שגיאות",
-    desc: "המרת טקסט למספר, וטיפול בשגיאות בלי להפיל את התוכנית.",
-    atf: `fn parse_age(text: str) -> Result<int, str> {
-    let n = text.parse_int()
-    if n == nil { return Result.Err("'{text}' is not a number") }
-    if n! < 0 { return Result.Err("an age cannot be negative") }
-    return Result.Ok(n!)
-}
-
-fn main() {
-    for t in ["42", "-3", "abc"] {
-        match parse_age(t) {
-            Result.Ok(a) => println("age", a)
-            Result.Err(e) => println("error:", e)
-        }
-    }
-}`,
-    py: `def parse_age(text):
-    try:
-        n = int(text)
-    except ValueError:
-        raise ValueError(f"'{text}' is not a number")
-    if n < 0:
-        raise ValueError("an age cannot be negative")
-    return n
-
-for t in ["42", "-3", "abc"]:
-    try:
-        print("age", parse_age(t))
-    except ValueError as e:
-        print("error:", e)`,
-    output: `age 42
-error: an age cannot be negative
-error: 'abc' is not a number`
+    "chapter": "מבני נתונים",
+    "title": "מערכים",
+    "text": [
+      "מערך הוא רשימה מסוג אחד. יש לו שיטות רבות: `push`, `sorted`, `map`, `filter`, `sum` ועוד.",
+      "אפשר לכתוב תבנית יצירה (comprehension) כמו ב-Python, וגם לחתוך חלק עם `xs[1..3]`."
+    ],
+    "atf": "fn main() {\n    var xs = [5, 3, 8]\n    xs.push(1)\n    println(xs, xs.len(), xs.sorted())\n    println(xs.map(|x| x * 2), xs.filter(|x| x > 3), xs.sum())\n    println([x * x for x in 1..=6 if x % 2 == 0])\n    println(xs[1..3])\n}",
+    "py": "xs = [5, 3, 8]\nxs.append(1)\nprint(xs, len(xs), sorted(xs))\nprint([x * 2 for x in xs], [x for x in xs if x > 3], sum(xs))\nprint([x * x for x in range(1, 7) if x % 2 == 0])\nprint(xs[1:3])",
+    "output": "[5, 3, 8, 1] 4 [1, 3, 5, 8]\n[10, 6, 16, 2] [5, 8] 17\n[4, 16, 36]\n[3, 8]"
   },
   {
-    title: "עגלת קניות",
-    desc: "מבנה נתונים עם ערכי ברירת מחדל, חישוב סכום, ועיצוב טקסט בטבלה.",
-    atf: `struct Item {
-    name: str,
-    price: float,
-    count: int = 1
-}
-
-fn total(items: [Item]) -> float {
-    return items.map(|it| it.price * float(it.count)).sum()
-}
-
-fn main() {
-    let cart = [Item{ name: "apple", price: 0.5, count: 6 }, Item{ name: "bread", price: 2.25 }]
-    for it in cart {
-        println("{it.name:<8} x{it.count}  {it.price * float(it.count):>6.2}")
-    }
-    println("total: {total(cart):.2}")
-}`,
-    py: `from dataclasses import dataclass
-
-@dataclass
-class Item:
-    name: str
-    price: float
-    count: int = 1
-
-def total(items):
-    return sum(it.price * it.count for it in items)
-
-cart = [Item("apple", 0.5, 6), Item("bread", 2.25)]
-for it in cart:
-    print(f"{it.name:<8} x{it.count}  {it.price * it.count:>6.2f}")
-print(f"total: {total(cart):.2f}")`,
-    output: `apple    x6    3.00
-bread    x1    2.25
-total: 5.25`
+    "chapter": "מבני נתונים",
+    "title": "מילונים",
+    "text": [
+      "מילון ממפה מפתחות לערכים. `counts.get(w, 0)` מחזיר 0 אם המפתח עוד לא קיים, ופנייה למפתח שחסר ישירות גורמת לשגיאה.",
+      "הסדר שבו הוכנסו המפתחות נשמר."
+    ],
+    "atf": "fn main() {\n    var counts: {str: int} = {}\n    for w in \"the cat and the hat\".split(\" \") {\n        counts[w] = counts.get(w, 0) + 1\n    }\n    println(counts)\n    for k, v in counts {\n        println(k, v)\n    }\n}",
+    "py": "counts = {}\nfor w in \"the cat and the hat\".split(\" \"):\n    counts[w] = counts.get(w, 0) + 1\nprint(counts)\nfor k, v in counts.items():\n    print(k, v)",
+    "output": "{\"the\": 2, \"cat\": 1, \"and\": 1, \"hat\": 1}\nthe 2\ncat 1\nand 1\nhat 1"
+  },
+  {
+    "chapter": "מבני נתונים",
+    "title": "מבנים ומתודות",
+    "text": [
+      "`struct` מגדיר רשומה עם שדות, ואפשר לתת להם ערכי ברירת מחדל. `impl` מוסיף לה מתודות.",
+      "אפשר ליצור מופע בשמות השדות (`Item{ name: ... }`) או לפי הסדר."
+    ],
+    "atf": "struct Item {\n    name: str,\n    price: float,\n    count: int = 1\n}\n\nimpl Item {\n    fn total(self) -> float {\n        return self.price * float(self.count)\n    }\n}\n\nfn main() {\n    let cart = [Item{ name: \"apple\", price: 0.5, count: 6 }, Item{ name: \"bread\", price: 2.25 }]\n    var sum = 0.0\n    for it in cart {\n        println(\"{it.name:<8} x{it.count}  {it.total():>6.2}\")\n        sum += it.total()\n    }\n    println(\"total: {sum:.2}\")\n}",
+    "py": "from dataclasses import dataclass\n\n@dataclass\nclass Item:\n    name: str\n    price: float\n    count: int = 1\n\n    def total(self):\n        return self.price * self.count\n\ncart = [Item(\"apple\", 0.5, 6), Item(\"bread\", 2.25)]\ntotal = 0.0\nfor it in cart:\n    print(f\"{it.name:<8} x{it.count}  {it.total():>6.2f}\")\n    total += it.total()\nprint(f\"total: {total:.2f}\")",
+    "output": "apple    x6    3.00\nbread    x1    2.25\ntotal: 5.25"
+  },
+  {
+    "chapter": "מבני נתונים",
+    "title": "enum ו-match",
+    "text": [
+      "`enum` יכול לשאת נתונים בכל וריאנט. `match` בודק את כל האפשרויות, ואם שכחתם אחת הקומפיילר מתריע.",
+      "התבניות ב-`match` יכולות לחלץ את הנתונים: `Shape.Rect(w, h)`."
+    ],
+    "atf": "enum Shape {\n    Circle(float),\n    Rect(float, float)\n}\n\nfn area(s: Shape) -> float {\n    return match s {\n        Shape.Circle(r) => PI * r * r\n        Shape.Rect(w, h) => w * h\n    }\n}\n\nfn main() {\n    let shapes = [Shape.Circle(1.0), Shape.Rect(2.0, 3.5)]\n    for s in shapes {\n        println(s, \"area {area(s):.3}\")\n    }\n}",
+    "py": "import math\n\ndef area(s):\n    match s:\n        case (\"Circle\", r):\n            return math.pi * r * r\n        case (\"Rect\", w, h):\n            return w * h\n\nfor s in [(\"Circle\", 1.0), (\"Rect\", 2.0, 3.5)]:\n    print(s, f\"area {area(s):.3f}\")",
+    "output": "Shape.Circle(1.0) area 3.142\nShape.Rect(2.0, 3.5) area 7.000"
+  },
+  {
+    "chapter": "תכונות מתקדמות",
+    "title": "ערכים אופציונליים וטיפול בשגיאות",
+    "text": [
+      "טיפוס כמו `int?` יכול להחזיק מספר או `nil`. אי אפשר להשתמש בו כמו מספר רגיל לפני שפותחים אותו: `x!`, `x ?? ברירת מחדל`, או `if let`.",
+      "`Result<T, E>` מחזיר הצלחה (`Ok`) או שגיאה (`Err`) בלי חריגות. כך הפונקציה מצהירה בחתימה שלה שהיא עלולה להיכשל."
+    ],
+    "atf": "fn parse_age(text: str) -> Result<int, str> {\n    let n = text.parse_int()\n    if n == nil { return Result.Err(\"'{text}' is not a number\") }\n    if n! < 0 { return Result.Err(\"an age cannot be negative\") }\n    return Result.Ok(n!)\n}\n\nfn main() {\n    for t in [\"42\", \"-3\", \"abc\"] {\n        match parse_age(t) {\n            Result.Ok(a) => println(\"age\", a)\n            Result.Err(e) => println(\"error:\", e)\n        }\n    }\n    println(\"12\".parse_int() ?? -1, \"x\".parse_int() ?? -1)\n}",
+    "py": "def parse_age(text):\n    try:\n        n = int(text)\n    except ValueError:\n        raise ValueError(f\"'{text}' is not a number\")\n    if n < 0:\n        raise ValueError(\"an age cannot be negative\")\n    return n\n\nfor t in [\"42\", \"-3\", \"abc\"]:\n    try:\n        print(\"age\", parse_age(t))\n    except ValueError as e:\n        print(\"error:\", e)",
+    "output": "age 42\nerror: an age cannot be negative\nerror: 'abc' is not a number\n12 -1"
+  },
+  {
+    "chapter": "תכונות מתקדמות",
+    "title": "פונקציות אנונימיות",
+    "text": [
+      "`|x| x * 2` היא פונקציה בלי שם. היא יכולה לשמור ולשנות משתנים מסביבתה, ולכן קל ליצור מונים ומצבים קטנים.",
+      "`reduce` מקבלת ערך התחלתי ופונקציה שמאחדת את הערך הצבור עם הפריט הבא."
+    ],
+    "atf": "fn make_counter() -> fn() -> int {\n    var n = 0\n    return || {\n        n += 1\n        return n\n    }\n}\n\nfn main() {\n    let next = make_counter()\n    println(next(), next(), next())\n    println([1, 2, 3, 4].reduce(0, |acc, x| acc + x))\n    println([3, 1, 2].sorted().reversed())\n}",
+    "py": "def make_counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    return inc\n\nfrom functools import reduce\nnxt = make_counter()\nprint(nxt(), nxt(), nxt())\nprint(reduce(lambda acc, x: acc + x, [1, 2, 3, 4], 0))\nprint(sorted([3, 1, 2], reverse=True))",
+    "output": "1 2 3\n10\n[3, 2, 1]"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "עוד שיטות למערכים",
+    "text": [
+      "בלי לייבא כלום יש `unique` (בלי כפילויות), `chunks(n)` (חלוקה לקבוצות) ו-`partition(f)` (פיצול לשתי רשימות לפי תנאי)."
+    ],
+    "atf": "fn main() {\n    let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3]\n    println(nums.unique())\n    println(nums.chunks(4))\n    let (even, odd) = nums.partition(|x| x % 2 == 0)\n    println(even, odd)\n}",
+    "py": null,
+    "output": "[3, 1, 4, 5, 9, 2, 6]\n[[3, 1, 4, 1], [5, 9, 2, 6], [5, 3]]\n[4, 2, 6] [3, 1, 1, 5, 9, 5, 3]"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/algo",
+    "text": [
+      "מודולים מהספרייה הסטנדרטית מייבאים עם `import \"std/שם\"`. `std/algo` מכיל אלגוריתמים בסגנון C++ ו-itertools, ושמות הפונקציות שלו מתחילים ב-`algo_`.",
+      "כאן `algo_group_by` מקבצת ערכים לפי מפתח, ו-`algo_permutations` מחזירה את כל הסידורים האפשריים."
+    ],
+    "atf": "import \"std/algo\"\n\nfn main() {\n    let words = [\"apple\", \"avocado\", \"banana\", \"blueberry\", \"cherry\"]\n    let groups = algo_group_by(words, |w| w[0..1])\n    for k, v in groups {\n        println(k, v)\n    }\n    println(algo_permutations([1, 2, 3]).len())\n}",
+    "py": null,
+    "output": "a [\"apple\", \"avocado\"]\nb [\"banana\", \"blueberry\"]\nc [\"cherry\"]\n6"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/math ו-std/bits",
+    "text": [
+      "`std/math` מביא מתמטיקה וסטטיסטיקה: מספרים ראשוניים, עצרת, ממוצע וחציון. `std/bits` עוזר לעבוד עם סיביות, למשל להציג מספר בבינארי."
+    ],
+    "atf": "import \"std/math\"\nimport \"std/bits\"\n\nfn main() {\n    println(math_primes(30))\n    println(math_factorial(10))\n    println(stats_mean([2.0, 4.0, 9.0]))\n    println(bits_to_str(10, 8))\n}",
+    "py": null,
+    "output": "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]\n3628800\n5.0\n00001010"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/text",
+    "text": [
+      "`std/text` מטפל בטקסט: כותרות, `snake_case`, גלישת שורות וטבלאות מיושרות."
+    ],
+    "atf": "import \"std/text\"\n\nfn main() {\n    println(text_title(\"hello brave new world\"))\n    println(text_snake_case(\"Hello Brave World\"))\n    let rows = [[\"name\", \"qty\"], [\"apple\", \"6\"], [\"bread\", \"1\"]]\n    println(text_table(rows))\n}",
+    "py": null,
+    "output": "Hello Brave New World\nhello_brave_world\nname   qty\napple  6\nbread  1"
   }
 ];
+// LESSONS-END
 
 const nav = document.getElementById("nav");
-const view = document.getElementById("demo");
-const savedKey = "atf-demo-index";
+const view = document.getElementById("lesson");
+const savedKey = "atf-tutorial-index";
 
 function readSaved() {
   try {
     const v = Number(localStorage.getItem(savedKey));
-    return Number.isInteger(v) && v >= 0 && v < demos.length ? v : 0;
+    return Number.isInteger(v) && v >= 0 && v < lessons.length ? v : 0;
   } catch (e) {
     return 0;
   }
@@ -376,79 +381,87 @@ function saveIndex(i) {
   try { localStorage.setItem(savedKey, String(i)); } catch (e) { /* ignore */ }
 }
 
-function block(text, cls) {
-  const pre = document.createElement("pre");
-  pre.textContent = text;
-  pre.className = cls || "";
-  return pre;
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
 }
 
-function labeled(labelText, labelCls, text) {
-  const wrap = document.createElement("div");
-  const label = document.createElement("div");
-  label.className = "label " + labelCls;
-  label.textContent = labelText;
-  wrap.appendChild(label);
-  wrap.appendChild(block(text));
-  return wrap;
+function code(text) {
+  return el("pre", "", text);
+}
+
+// `x` inside a paragraph becomes <code>x</code>
+function paragraph(text) {
+  const p = el("p");
+  text.split("`").forEach((part, i) => {
+    p.appendChild(i % 2 ? el("code", "", part) : document.createTextNode(part));
+  });
+  return p;
 }
 
 function show(i) {
-  const d = demos[i];
+  const d = lessons[i];
   view.textContent = "";
 
-  const h = document.createElement("h2");
-  h.textContent = d.title;
-  const p = document.createElement("p");
-  p.textContent = d.desc;
-  view.append(h, p);
+  view.appendChild(el("div", "kicker", d.chapter + " · שיעור " + (i + 1) + " מתוך " + lessons.length));
+  view.appendChild(el("h2", "", d.title));
+  d.text.forEach(t => view.appendChild(paragraph(t)));
 
-  const pair = document.createElement("div");
-  pair.className = "pair";
-  pair.append(labeled("ATF", "atf", d.atf), labeled("Python", "py", d.py));
-  view.appendChild(pair);
+  view.appendChild(el("div", "label atf", "קוד ATF"));
+  view.appendChild(code(d.atf));
 
-  const out = document.createElement("div");
-  out.className = "output";
-  const outLabel = document.createElement("div");
-  outLabel.className = "label";
-  outLabel.textContent = "פלט";
-  out.append(outLabel, block(d.output));
-  view.appendChild(out);
+  view.appendChild(el("div", "label out", "פלט"));
+  view.appendChild(code(d.output));
 
-  const bar = document.createElement("div");
-  bar.className = "toolbar";
-  const copyAtf = document.createElement("button");
-  copyAtf.textContent = "העתק ATF";
-  const copyPy = document.createElement("button");
-  copyPy.textContent = "העתק Python";
-  copyPy.className = "secondary";
-  const status = document.createElement("span");
-  status.className = "status";
+  if (d.py) {
+    const det = el("details");
+    det.appendChild(el("summary", "", "השוואה ל-Python"));
+    det.appendChild(code(d.py));
+    view.appendChild(det);
+  }
 
-  const copy = (text, label) => {
-    const done = () => { status.textContent = label + " הועתק"; };
+  const bar = el("div", "toolbar");
+  const prev = el("button", "secondary", "→ השיעור הקודם");
+  const next = el("button", "", "השיעור הבא ←");
+  prev.disabled = i === 0;
+  next.disabled = i === lessons.length - 1;
+  prev.addEventListener("click", () => go(i - 1));
+  next.addEventListener("click", () => go(i + 1));
+  const status = el("span", "status");
+  const copyAtf = el("button", "secondary", "העתק ATF");
+  copyAtf.addEventListener("click", () => {
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(done, () => { status.textContent = "העתקה נכשלה"; });
+      navigator.clipboard.writeText(d.atf).then(
+        () => { status.textContent = "הועתק"; },
+        () => { status.textContent = "העתקה נכשלה"; });
     } else {
       status.textContent = "הדפדפן לא תומך בהעתקה";
     }
-  };
-  copyAtf.addEventListener("click", () => copy(d.atf, "ATF"));
-  copyPy.addEventListener("click", () => copy(d.py, "Python"));
-
-  bar.append(copyAtf, copyPy, status);
+  });
+  bar.append(prev, next, el("span", "spacer"), copyAtf, status);
   view.appendChild(bar);
 
-  [...nav.children].forEach((b, idx) => {
+  [...nav.querySelectorAll("button")].forEach((b, idx) => {
     b.setAttribute("aria-current", idx === i ? "true" : "false");
   });
 }
 
-demos.forEach((d, i) => {
-  const b = document.createElement("button");
-  b.textContent = d.title;
-  b.addEventListener("click", () => { show(i); saveIndex(i); });
+function go(i) {
+  show(i);
+  saveIndex(i);
+  view.scrollIntoView({ block: "start" });
+}
+
+let lastChapter = null;
+lessons.forEach((d, i) => {
+  if (d.chapter !== lastChapter) {
+    nav.appendChild(el("div", "chapter", d.chapter));
+    lastChapter = d.chapter;
+  }
+  const b = el("button", "", (i + 1) + ". " + d.title);
+  b.addEventListener("click", () => go(i));
   nav.appendChild(b);
 });
 
