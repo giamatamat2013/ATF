@@ -1,0 +1,53 @@
+// tests for std/ini
+import "std/ini"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {quote_str(got)}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {quote_str(got)}, want {quote_str(want)}")
+    }
+}
+
+fn main() -> int {
+    let text = "; settings\nname = app\nlevel: 3\n\n[server]\nport = 8080\nhost = \"local host\"\nverbose = yes\nratio = 1.5\n# note\n[empty]\n[server]\nport = 9090\n"
+    let d = ini_parse(text).unwrap()
+    check("global", d.get("", "name") ?? "nil", "app")
+    check("colon", d.get("", "level") ?? "nil", "3")
+    check("repeat key", d.get("server", "port") ?? "nil", "9090")
+    check("quotes", d.get("server", "host") ?? "nil", "local host")
+    check("missing key", d.get("server", "zzz") ?? "nil", "nil")
+    check("missing section", d.get("nope", "x") ?? "nil", "nil")
+    check("get_int", str(d.get_int("server", "port", 1)), "9090")
+    check("get_int default", str(d.get_int("server", "host", 7)), "7")
+    check("get_float", str(d.get_float("server", "ratio", 0.0)), "1.5")
+    check("get_bool", str(d.get_bool("server", "verbose", false)), "true")
+    check("get_bool default", str(d.get_bool("server", "port", false)), "false")
+    check("sections", ", ".join(d.section_names()), "server, empty")
+    check("keys", ", ".join(d.keys("server")), "port, host, verbose, ratio")
+    check("has_section", str(d.has_section("empty")), "true")
+
+    d.set("server", "port", "1")
+    d.set("new", "k", " padded ")
+    d.remove("server", "ratio")
+    check("stringify", ini_stringify(d),
+        "name = app\nlevel = 3\n\n[server]\nport = 1\nhost = local host\nverbose = yes\n\n[empty]\n\n[new]\nk = \" padded \"\n")
+
+    let again = ini_parse(ini_stringify(d)).unwrap()
+    check("round trip", ini_stringify(again), ini_stringify(d))
+
+    check("bad line", match ini_parse("a = 1\nnonsense\n") {
+        Result.Ok(_) => "Ok"
+        Result.Err(e) => e
+    }, "line 2: expected key = value")
+    check("bad section", match ini_parse("[open\n") {
+        Result.Ok(_) => "Ok"
+        Result.Err(e) => e
+    }, "line 1: the section is missing its ]")
+
+    println("failures: {failures}")
+    return failures
+}

@@ -1,0 +1,23 @@
+ok   star: true
+ok   star no: false
+ok   star not across folders: false
+ok   question: true
+ok   question short: false
+ok   set: true
+ok   set no: false
+ok   negated set: true
+ok   set list: true
+ok   deep: true
+ok   deep zero folders: true
+ok   deep tail: true
+ok   single star in folders: false
+ok   case insensitive: true
+ok   backslash: true
+ok   empty: true
+ok   star empty: true
+ok   unclosed set is a letter: true
+["a.atf"]
+["a.atf", "sub/c.atf", "sub/deep/d.atf"]
+["sub/c.atf", "sub/deep"]
+[]
+failures: 0

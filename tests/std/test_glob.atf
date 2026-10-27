@@ -1,0 +1,51 @@
+// tests for std/glob
+import "std/glob"
+import "std/fs"
+
+var failures = 0
+
+fn check(label: str, got: bool, want: bool) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn main() -> int {
+    check("star", glob_match("*.atf", "main.atf"), true)
+    check("star no", glob_match("*.atf", "main.txt"), false)
+    check("star not across folders", glob_match("*.atf", "a/main.atf"), false)
+    check("question", glob_match("file?.c", "file1.c"), true)
+    check("question short", glob_match("file?.c", "file.c"), false)
+    check("set", glob_match("file[0-9].c", "file7.c"), true)
+    check("set no", glob_match("file[0-9].c", "filex.c"), false)
+    check("negated set", glob_match("file[!0-9].c", "filex.c"), true)
+    check("set list", glob_match("a.[ch]", "a.h"), true)
+    check("deep", glob_match("src/**/*.atf", "src/a/b/c.atf"), true)
+    check("deep zero folders", glob_match("src/**/*.atf", "src/c.atf"), true)
+    check("deep tail", glob_match("src/**", "src/a/b"), true)
+    check("single star in folders", glob_match("src/*/x.atf", "src/a/b/x.atf"), false)
+    check("case insensitive", glob_match("*.ATF", "Main.atf"), true)
+    check("backslash", glob_match("src/*.atf", "src" + chr(92) + "a.atf"), true)
+    check("empty", glob_match("", ""), true)
+    check("star empty", glob_match("*", ""), true)
+    check("unclosed set is a letter", glob_match("a[b", "a[b"), true)
+
+    let dir = temp_dir() + "/atf_glob_test"
+    fs_remove_all(dir)
+    fs_make_dirs(dir + "/sub/deep")
+    write_file(dir + "/a.atf", "")
+    write_file(dir + "/b.txt", "")
+    write_file(dir + "/sub/c.atf", "")
+    write_file(dir + "/sub/deep/d.atf", "")
+    println(glob_find(dir, "*.atf"))
+    println(glob_find(dir, "**/*.atf"))
+    println(glob_find(dir, "sub/*"))
+    println(glob_find(dir, "*.zzz"))
+    fs_remove_all(dir)
+
+    println("failures: {failures}")
+    return failures
+}

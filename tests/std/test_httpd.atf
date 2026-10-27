@@ -1,0 +1,58 @@
+// tests for std/httpd: the server is driven by hand with serve_one, in one thread
+import "std/httpd"
+import "std/net"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {quote_str(got)}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {quote_str(got)}, want {quote_str(want)}")
+    }
+}
+
+// sends one raw request and returns the whole answer
+fn ask(server: HttpServer, handler: fn(HttpRequest) -> HttpReply, raw: str) -> str {
+    let c = tcp_connect("127.0.0.1", server.port).unwrap()
+    c.write(raw)
+    server.serve_one(handler)
+    let answer = c.read_all()
+    c.close()
+    return answer
+}
+
+fn main() -> int {
+    var app = router_new()
+    app.get("/", |req| http_html("<h1>home</h1>"))
+    app.get("/users/:id", |req| http_text("user " + req.params["id"]))
+    app.post("/echo", |req| http_text(req.method + ":" + req.body))
+    app.get("/search", |req| http_text((req.param("q") ?? "none") + "," + (req.header("X-Test") ?? "-")))
+    app.get("/files/*", |req| http_text(req.params["*"]))
+    app.get("/go", |req| http_redirect("/"))
+    let handler = |req: HttpRequest| app.handle(req)
+
+    let server = http_listen(0).unwrap()
+    check("port", str(server.port > 0), "true")
+
+    check("home", ask(server, handler, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"),
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<h1>home</h1>")
+    check("param", ask(server, handler, "GET /users/42 HTTP/1.1\r\n\r\n").split("\r\n\r\n")[1], "user 42")
+    check("post", ask(server, handler, "POST /echo HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello").split("\r\n\r\n")[1], "POST:hello")
+    check("query", ask(server, handler, "GET /search?q=a%20b HTTP/1.1\r\nX-Test: yes\r\n\r\n").split("\r\n\r\n")[1], "a b,yes")
+    check("wildcard", ask(server, handler, "GET /files/a/b.txt HTTP/1.1\r\n\r\n").split("\r\n\r\n")[1], "a/b.txt")
+    check("redirect", ask(server, handler, "GET /go HTTP/1.1\r\n\r\n").split("\r\n")[0], "HTTP/1.1 302 Found")
+    check("404", ask(server, handler, "GET /nothing HTTP/1.1\r\n\r\n").split("\r\n")[0], "HTTP/1.1 404 Not Found")
+    check("405", ask(server, handler, "POST /users/1 HTTP/1.1\r\nContent-Length: 0\r\n\r\n").split("\r\n")[0], "HTTP/1.1 405 Method Not Allowed")
+    check("head", ask(server, handler, "HEAD / HTTP/1.1\r\n\r\n").split("\r\n\r\n")[1], "")
+    check("bad", ask(server, handler, "nonsense\r\n\r\n").split("\r\n")[0], "HTTP/1.1 400 Bad Request")
+
+    check("mime", http_mime("a/b.PNG"), "image/png")
+    check("static forbidden", http_static(HttpRequest{ path: "/../x" }, ".").status.to_str(), "403")
+    check("with_header", http_text("x").with_header("X-A", "1").headers.join("|"), "Content-Type: text/plain; charset=utf-8|X-A: 1")
+
+    server.close()
+    println("failures: {failures}")
+    return failures
+}

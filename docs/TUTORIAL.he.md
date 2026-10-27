@@ -2261,7 +2261,7 @@ fn main() {
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
-* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/xml`, `std/http`, `std/net`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, HTTP, חיבורי TCP ובדיקות (ראו בהמשך הפרק).
+* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/xml`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
 * `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
 * `std/app` - תיקייה והגדרות לתוכנית שנשמרות בין הרצות (ראו בהמשך הפרק).
 
@@ -2541,6 +2541,84 @@ fn main() {
 ```output
 ping
 pong
+```
+
+* `std/url` מפרק ובונה כתובות אינטרנט: `url_parse(text)` מחזיר `Url` (`scheme`, `host`, `port`, `path`, `query`,
+  `fragment`, `param(name)`), `url_join(base, link)` עוקב אחרי קישור כמו דפדפן, ו-`url_encode` / `url_decode` מטפלים ב-%.
+
+```atf
+import "std/url"
+
+fn main() {
+    let u = url_parse("https://example.com:8080/a/b.html?x=1&y=two%20words#top").unwrap()
+    println(u.host, u.port, u.path, u.param("y") ?? "none")
+    println(url_encode("a b&c"))
+    println(url_join("http://a.com/x/y.html", "../z").unwrap())
+}
+```
+```output
+example.com 8080 /a/b.html two words
+a%20b%26c
+http://a.com/z
+```
+
+* `std/glob` מתאים שמות קבצים לתבניות (`*`, `?`, `[a-z]`, ו-`**` שחוצה תיקיות), ו-`glob_find(folder, pattern)` מחזיר את הקבצים המתאימים.
+
+```atf
+import "std/glob"
+
+fn main() {
+    println(glob_match("src/**/*.atf", "src/a/b.atf"), glob_match("*.txt", "a.atf"))
+}
+```
+```output
+true false
+```
+
+* `std/ini` קורא וכותב קבצי הגדרות INI: `ini_parse(text)` מחזיר `IniDoc` עם `get(section, key)`, `get_or`, `get_int`,
+  `get_bool`, `set` ו-`ini_stringify`. מפתחות שלפני ה-`[section]` הראשון שייכים לקבוצה `""`.
+
+```atf
+import "std/ini"
+
+fn main() {
+    let d = ini_parse("name = app\n[server]\nport = 8080\n").unwrap()
+    println(d.get_or("", "name", "?"), d.get_int("server", "port", 80))
+}
+```
+```output
+app 8080
+```
+
+* `std/httpd` הוא שרת אינטרנט קטן. מטפל (handler) הוא פונקציה מ-`HttpRequest` ל-`HttpReply`; `router_new()` אוסף נתיבים
+  כמו `/users/:id`, ו-`http_listen(port)` מחזיר שרת ש-`serve(handler)` שלו עונה לבקשות בזו אחר זו. `serve_one` עונה לבקשה אחת, וזה נוח בבדיקות.
+
+```atf
+import "std/httpd"
+
+fn main() {
+    var app = router_new()
+    app.get("/users/:id", |req| http_text("user " + req.params["id"]))
+    println(app.handle(HttpRequest{ path: "/users/7" }).body)
+    println(app.handle(HttpRequest{ path: "/nothing" }).status)
+}
+```
+```output
+user 7
+404
+```
+
+```atf nocheck
+import "std/httpd"
+
+fn main() {
+    var app = router_new()
+    app.get("/", |req| http_html("<h1>Hello</h1>"))
+    app.get("/hello/:name", |req| http_text("Hello, " + req.params["name"]))
+    let server = http_listen(8080).unwrap()
+    println("open http://127.0.0.1:8080/")
+    server.serve(|req| app.handle(req))
+}
 ```
 
 * `std/test` היא מסגרת בדיקות קטנה: `test(name, || { ... })` עם `expect`, `expect_eq`, `expect_ne`, `expect_near`

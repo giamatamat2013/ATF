@@ -1,0 +1,328 @@
+// std/httpd - a small HTTP server: routes, replies, static files.
+//
+//   import "std/httpd"
+//
+//   fn main() {
+//       var app = router_new()
+//       app.get("/", |req| http_html("<h1>Hello</h1>"))
+//       app.get("/users/:id", |req| http_text("user " + (req.params["id"])))
+//       app.post("/echo", |req| http_text(req.body))
+//       let server = http_listen(8080).unwrap()
+//       println("listening on http://127.0.0.1:{server.port}/")
+//       server.serve(|req| app.handle(req))        // runs until the program is stopped
+//   }
+//
+// A handler is a function from HttpRequest to HttpReply. The server answers one connection at a time and
+// closes it after the reply (Connection: close), which is enough for tools, small sites and tests.
+// `serve_one` answers a single request, so a program (or a test) can drive the server by hand.
+// Header names in a request are lower case: req.header("content-type").
+
+import "std/net"
+import "std/url"
+import "std/fs"
+
+struct HttpRequest {
+    method: str = "GET"
+    target: str = "/"                    // the path and query exactly as the client sent them
+    path: str = "/"                      // the decoded path, without the query
+    query: str = ""                      // the raw query text, without the ?
+    version: str = "HTTP/1.1"
+    headers: {str: str} = {}             // names in lower case
+    body: str = ""
+    params: {str: str} = {}              // the :name parts of the matching route
+}
+
+impl HttpRequest {
+    // a request header (the name is not case-sensitive), nil when it is missing
+    fn header(self, name: str) -> str? { return self.headers.try_get(name.lower()) }
+
+    // a query parameter, nil when it is missing
+    fn param(self, name: str) -> str? { return url_query_parse(self.query).try_get(name) }
+
+    // all query parameters
+    fn query_params(self) -> {str: str} { return url_query_parse(self.query) }
+
+    // the fields of a form body (application/x-www-form-urlencoded)
+    fn form(self) -> {str: str} { return url_query_parse(self.body) }
+}
+
+struct HttpReply {
+    status: int = 200
+    body: str = ""
+    headers: [str] = []                  // "Name: value", without Content-Length (the server adds it)
+}
+
+impl HttpReply {
+    // the same reply with one more header
+    fn with_header(self, name: str, value: str) -> HttpReply {
+        var h = copy(self.headers)
+        h.push(name + ": " + value)
+        return HttpReply{ status: self.status, body: self.body, headers: h }
+    }
+
+    // the same reply with another status
+    fn with_status(self, status: int) -> HttpReply {
+        return HttpReply{ status: status, body: self.body, headers: self.headers }
+    }
+}
+
+fn http_reply(status: int, body: str, content_type: str = "text/plain; charset=utf-8") -> HttpReply {
+    return HttpReply{ status: status, body: body, headers: ["Content-Type: " + content_type] }
+}
+
+// a 200 reply with plain text
+fn http_text(body: str) -> HttpReply { return http_reply(200, body) }
+
+// a 200 reply with an HTML page
+fn http_html(body: str) -> HttpReply { return http_reply(200, body, "text/html; charset=utf-8") }
+
+// a 200 reply with text that is already JSON (build it with std/json's json_stringify)
+fn http_json_reply(json_text: str) -> HttpReply { return http_reply(200, json_text, "application/json") }
+
+// a redirect (302 unless another status is given)
+fn http_redirect(to: str, status: int = 302) -> HttpReply {
+    return HttpReply{ status: status, body: "", headers: ["Location: " + to] }
+}
+
+fn http_not_found() -> HttpReply { return http_reply(404, "404 Not Found\n") }
+
+fn http_status_text(status: int) -> str {
+    return match status {
+        200 => "OK"
+        201 => "Created"
+        204 => "No Content"
+        301 => "Moved Permanently"
+        302 => "Found"
+        303 => "See Other"
+        304 => "Not Modified"
+        307 => "Temporary Redirect"
+        400 => "Bad Request"
+        401 => "Unauthorized"
+        403 => "Forbidden"
+        404 => "Not Found"
+        405 => "Method Not Allowed"
+        408 => "Request Timeout"
+        409 => "Conflict"
+        413 => "Payload Too Large"
+        415 => "Unsupported Media Type"
+        418 => "I'm a teapot"
+        429 => "Too Many Requests"
+        500 => "Internal Server Error"
+        501 => "Not Implemented"
+        503 => "Service Unavailable"
+        _ => "Status"
+    }
+}
+
+// the content type for a file name, by its ending
+fn http_mime(path: str) -> str {
+    let p = path.lower()
+    if p.ends_with(".html") or p.ends_with(".htm") { return "text/html; charset=utf-8" }
+    if p.ends_with(".css") { return "text/css; charset=utf-8" }
+    if p.ends_with(".js") { return "text/javascript; charset=utf-8" }
+    if p.ends_with(".json") { return "application/json" }
+    if p.ends_with(".txt") or p.ends_with(".md") { return "text/plain; charset=utf-8" }
+    if p.ends_with(".xml") { return "application/xml" }
+    if p.ends_with(".svg") { return "image/svg+xml" }
+    if p.ends_with(".png") { return "image/png" }
+    if p.ends_with(".jpg") or p.ends_with(".jpeg") { return "image/jpeg" }
+    if p.ends_with(".gif") { return "image/gif" }
+    if p.ends_with(".ico") { return "image/x-icon" }
+    if p.ends_with(".pdf") { return "application/pdf" }
+    if p.ends_with(".zip") { return "application/zip" }
+    return "application/octet-stream"
+}
+
+// A file as a reply (404 when it cannot be read).
+fn http_file(path: str) -> HttpReply {
+    if let data = read_file(path) {
+        return http_reply(200, data, http_mime(path))
+    }
+    return http_not_found()
+}
+
+// Answers a request with a file from the folder root: "/a/b.txt" gives root\a\b.txt, "/" gives index.html.
+// Paths that try to leave the folder (..) get 403. Returns 404 when there is no such file.
+fn http_static(req: HttpRequest, root: str) -> HttpReply {
+    var rel = req.path
+    if rel.contains("..") or rel.contains("\\") { return http_reply(403, "403 Forbidden\n") }
+    if rel.ends_with("/") { rel = rel + "index.html" }
+    var file = root
+    if file.ends_with("/") or file.ends_with("\\") { file = file[..file.len() - 1] }
+    file = file + rel
+    if fs_is_dir(file) { return http_redirect(req.path + "/") }
+    return http_file(file)
+}
+
+// ---- routing ----
+
+struct Route {
+    method: str
+    pattern: str
+    handler: fn(HttpRequest) -> HttpReply
+}
+
+struct Router {
+    routes: [Route]
+}
+
+fn router_new() -> Router { return Router{ routes: [] } }
+
+// Does the path match the pattern? A pattern part that starts with : matches any one part ("/users/:id"),
+// and a last part * matches the rest of the path. Fills params with the captured parts.
+fn route_match(pattern: str, path: str, params: {str: str}) -> bool {
+    let pp = pattern.split("/")
+    let ap = path.split("/")
+    for i in 0..pp.len() {
+        let part = pp[i]
+        if part == "*" and i == pp.len() - 1 {
+            var rest: [str] = []
+            for j in i..ap.len() { rest.push(ap[j]) }
+            params["*"] = "/".join(rest)
+            return true
+        }
+        if i >= ap.len() { return false }
+        if part.starts_with(":") {
+            params[part[1..]] = ap[i]
+        } else if part != ap[i] {
+            return false
+        }
+    }
+    return pp.len() == ap.len()
+}
+
+impl Router {
+    fn add(self, method: str, pattern: str, handler: fn(HttpRequest) -> HttpReply) {
+        self.routes.push(Route{ method: method, pattern: pattern, handler: handler })
+    }
+
+    fn get(self, pattern: str, handler: fn(HttpRequest) -> HttpReply) { self.add("GET", pattern, handler) }
+    fn post(self, pattern: str, handler: fn(HttpRequest) -> HttpReply) { self.add("POST", pattern, handler) }
+    fn put(self, pattern: str, handler: fn(HttpRequest) -> HttpReply) { self.add("PUT", pattern, handler) }
+    fn delete(self, pattern: str, handler: fn(HttpRequest) -> HttpReply) { self.add("DELETE", pattern, handler) }
+
+    // a route for every method
+    fn any(self, pattern: str, handler: fn(HttpRequest) -> HttpReply) { self.add("*", pattern, handler) }
+
+    // Finds the first route that fits and calls its handler. 404 when no path fits, 405 when
+    // the path fits but not the method. HEAD is answered like GET.
+    fn handle(self, req: HttpRequest) -> HttpReply {
+        var path_seen = false
+        for r in self.routes {
+            var params: {str: str} = {}
+            if not route_match(r.pattern, req.path, params) { continue }
+            path_seen = true
+            var m = req.method
+            if m == "HEAD" { m = "GET" }
+            if r.method != "*" and r.method != m { continue }
+            var full = HttpRequest{ method: req.method, target: req.target, path: req.path, query: req.query,
+                version: req.version, headers: req.headers, body: req.body, params: params }
+            return (r.handler)(full)
+        }
+        if path_seen { return http_reply(405, "405 Method Not Allowed\n") }
+        return http_not_found()
+    }
+}
+
+// ---- the server ----
+
+struct HttpServer {
+    tcp: TcpServer
+    port: int
+}
+
+// Starts listening (port 0 picks a free port, see server.port). By default only this computer can connect;
+// pass host "0.0.0.0" to accept other computers too.
+fn http_listen(port: int, host: str = "127.0.0.1") -> Result<HttpServer, str> {
+    let t = tcp_listen(port, host)?
+    return Result.Ok(HttpServer{ tcp: t, port: t.port })
+}
+
+// Reads one request from a connection: Err when it is not valid HTTP.
+fn http_read_request(c: TcpConn) -> Result<HttpRequest, str> {
+    let first = c.read_line() ?? ""
+    if first == "" { return Result.Err("empty request") }
+    let parts = first.split(" ")
+    if parts.len() < 2 { return Result.Err("bad request line: " + first) }
+    var req = HttpRequest()
+    req.method = parts[0].upper()
+    req.target = parts[1]
+    if parts.len() >= 3 { req.version = parts[2] }
+    var tgt = req.target
+    let qm = tgt.find("?")
+    if qm >= 0 {
+        req.query = tgt[qm + 1..]
+        tgt = tgt[..qm]
+    }
+    req.path = url_decode(tgt).unwrap_or(tgt)
+    var count = 0
+    loop {
+        let line = c.read_line() ?? ""
+        if line == "" { break }
+        count += 1
+        if count > 200 { return Result.Err("too many headers") }
+        let i = line.find(":")
+        if i > 0 { req.headers[line[..i].trim().lower()] = line[i + 1..].trim() }
+    }
+    if let cl = req.headers.try_get("content-length") {
+        let n = cl.parse_int() ?? -1
+        if n < 0 { return Result.Err("bad Content-Length: " + cl) }
+        if n > 67108864 { return Result.Err("the body is too large") }
+        if n > 0 {
+            if let body = c.read_exact(n) {
+                req.body = body
+            } else {
+                return Result.Err("the connection closed before the whole body arrived")
+            }
+        }
+    }
+    return Result.Ok(req)
+}
+
+// Sends a reply on a connection.
+fn http_write_reply(c: TcpConn, reply: HttpReply, head_only: bool = false) {
+    var sb = str_builder()
+    sb.add("HTTP/1.1 {reply.status} {http_status_text(reply.status)}\r\n")
+    var has_type = false
+    for h in reply.headers {
+        sb.add(h)
+        sb.add("\r\n")
+        if h.lower().starts_with("content-type:") { has_type = true }
+    }
+    if not has_type and reply.body != "" { sb.add("Content-Type: text/plain; charset=utf-8\r\n") }
+    sb.add("Content-Length: {reply.body.len()}\r\n")
+    sb.add("Connection: close\r\n\r\n")
+    if not head_only { sb.add(reply.body) }
+    c.write(sb.finish())
+}
+
+impl HttpServer {
+    // Waits for one client, reads its request, calls the handler and sends the reply.
+    // Returns Err for a connection that broke or sent something that is not HTTP (a 400 is sent in that case).
+    fn serve_one(self, handler: fn(HttpRequest) -> HttpReply) -> Result<str, str> {
+        let c = self.tcp.accept()?
+        c.set_timeout(10000)
+        match http_read_request(c) {
+            Result.Ok(req) => {
+                let reply = handler(req)
+                http_write_reply(c, reply, req.method == "HEAD")
+                c.close()
+                return Result.Ok(req.method + " " + req.target)
+            }
+            Result.Err(e) => {
+                http_write_reply(c, http_reply(400, "400 Bad Request: " + e + "\n"))
+                c.close()
+                return Result.Err(e)
+            }
+        }
+    }
+
+    // Answers requests one after another, forever. A broken connection is skipped.
+    fn serve(self, handler: fn(HttpRequest) -> HttpReply) {
+        loop {
+            self.serve_one(handler)
+        }
+    }
+
+    fn close(self) { self.tcp.close() }
+}

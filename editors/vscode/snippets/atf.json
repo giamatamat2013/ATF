@@ -510,6 +510,22 @@
       "}"
     ]
   },
+  "Web server": {
+    "prefix": "httpserve",
+    "description": "A small web server with std/httpd",
+    "body": [
+      "import \"std/httpd\"",
+      "",
+      "fn main() {",
+      "\tvar app = router_new()",
+      "\tapp.get(\"/\", |req| http_html(\"<h1>${1:Hello}</h1>\"))",
+      "\tapp.get(\"/hello/:name\", |req| http_text(\"Hello, \" + req.params[\"name\"]))",
+      "\tlet server = http_listen(${2:8080}).unwrap()",
+      "\tprintln(\"open http://127.0.0.1:{server.port}/\")",
+      "\tserver.serve(|req| app.handle(req))",
+      "}"
+    ]
+  },
   "TCP client": {
     "prefix": "tcpclient",
     "description": "Talk to a TCP server with std/net",

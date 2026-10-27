@@ -1,0 +1,298 @@
+// std/url - web addresses: taking them apart, building them, and percent-encoding text.
+//
+//   import "std/url"
+//
+//   let u = url_parse("https://ada@example.com:8080/a/b.html?x=1&y=two#top").unwrap()
+//   println(u.scheme, u.host, u.port, u.path)       // https example.com 8080 /a/b.html
+//   println(u.param("y") ?? "none")                  // two
+//   println(url_encode("a b&c"))                     // a%20b%26c
+//   println(url_query_build({"q": "x y", "n": "1"})) // q=x%20y&n=1
+//
+// `port` is -1 when the address has none. `query` and `fragment` are kept without the ? and #.
+// Text is bytes in a str, so non-ASCII letters are encoded as UTF-8 bytes (%D7%A9 and so on).
+
+const URL_HEX_DIGITS = "0123456789ABCDEF"
+
+fn url_is_unreserved(c: byte) -> bool {
+    if c >= 'a' and c <= 'z' { return true }
+    if c >= 'A' and c <= 'Z' { return true }
+    if c >= '0' and c <= '9' { return true }
+    return c == '-' or c == '_' or c == '.' or c == '~'
+}
+
+// Percent-encodes s: letters, digits and - _ . ~ stay, every other byte becomes %XX.
+// With plus: true a space becomes + (the form of a query string) instead of %20.
+fn url_encode(s: str, plus: bool = false) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if url_is_unreserved(c) {
+            sb.add_byte(c)
+        } else if c == ' ' and plus {
+            sb.add_byte('+')
+        } else {
+            sb.add_byte('%')
+            sb.add_byte(URL_HEX_DIGITS.byte_at(c >> 4))
+            sb.add_byte(URL_HEX_DIGITS.byte_at(c & 15))
+        }
+    }
+    return sb.finish()
+}
+
+fn url_hex_value(c: byte) -> int {
+    if c >= '0' and c <= '9' { return c - '0' }
+    if c >= 'a' and c <= 'f' { return c - 'a' + 10 }
+    if c >= 'A' and c <= 'F' { return c - 'A' + 10 }
+    return -1
+}
+
+// Undoes url_encode. With plus: true a + becomes a space. A bad %XX gives an Err.
+fn url_decode(s: str, plus: bool = false) -> Result<str, str> {
+    var sb = str_builder()
+    var i = 0
+    let n = s.len()
+    while i < n {
+        let c = s.byte_at(i)
+        if c == '%' {
+            if i + 2 >= n {
+                return Result.Err("incomplete %-escape at position {i}")
+            }
+            let hi = url_hex_value(s.byte_at(i + 1))
+            let lo = url_hex_value(s.byte_at(i + 2))
+            if hi < 0 or lo < 0 { return Result.Err("bad %-escape at position {i}") }
+            sb.add_byte((hi * 16 + lo) as byte)
+            i += 3
+        } else if c == '+' and plus {
+            sb.add_byte(' ')
+            i += 1
+        } else {
+            sb.add_byte(c)
+            i += 1
+        }
+    }
+    return Result.Ok(sb.finish())
+}
+
+// "a=1&b=two" -> {"a": "1", "b": "two"}. Names and values are decoded; a name without = gets "".
+// When a name repeats, the last value wins.
+fn url_query_parse(q: str) -> {str: str} {
+    var m: {str: str} = {}
+    if q == "" { return m }
+    for part in q.split("&") {
+        if part == "" { continue }
+        let eq = part.find("=")
+        var k = part
+        var v = ""
+        if eq >= 0 {
+            k = part[..eq]
+            v = part[eq + 1..]
+        }
+        m[url_decode(k, plus: true).unwrap_or(k)] = url_decode(v, plus: true).unwrap_or(v)
+    }
+    return m
+}
+
+// {"a": "1", "b": "x y"} -> "a=1&b=x%20y" (in the map's order)
+fn url_query_build(m: {str: str}) -> str {
+    var parts: [str] = []
+    for k, v in m {
+        parts.push(url_encode(k) + "=" + url_encode(v))
+    }
+    return "&".join(parts)
+}
+
+struct Url {
+    scheme: str = ""
+    user: str = ""
+    host: str = ""
+    port: int = -1
+    path: str = ""
+    query: str = ""
+    fragment: str = ""
+}
+
+impl Url {
+    // the value of one query parameter, or nil
+    fn param(self, name: str) -> str? {
+        return url_query_parse(self.query).try_get(name)
+    }
+
+    // all query parameters as a map
+    fn params(self) -> {str: str} {
+        return url_query_parse(self.query)
+    }
+
+    // the address as text again
+    fn to_str(self) -> str {
+        var sb = str_builder()
+        if self.scheme != "" {
+            sb.add(self.scheme)
+            sb.add(":")
+            if self.host != "" or self.scheme == "file" { sb.add("//") }
+        }
+        if self.user != "" {
+            sb.add(self.user)
+            sb.add("@")
+        }
+        sb.add(self.host)
+        if self.port >= 0 {
+            sb.add(":")
+            sb.add(str(self.port))
+        }
+        sb.add(self.path)
+        if self.query != "" {
+            sb.add("?")
+            sb.add(self.query)
+        }
+        if self.fragment != "" {
+            sb.add("#")
+            sb.add(self.fragment)
+        }
+        return sb.finish()
+    }
+
+    // the part to put after GET in a request: path and query ("/" when the path is empty)
+    fn request_target(self) -> str {
+        var p = self.path
+        if p == "" { p = "/" }
+        if self.query != "" { p = p + "?" + self.query }
+        return p
+    }
+
+    // the port to connect to: the written one, or the default of the scheme (80, 443, 21, 22)
+    fn effective_port(self) -> int {
+        if self.port >= 0 { return self.port }
+        if self.scheme == "http" or self.scheme == "ws" { return 80 }
+        if self.scheme == "https" or self.scheme == "wss" { return 443 }
+        if self.scheme == "ftp" { return 21 }
+        if self.scheme == "ssh" { return 22 }
+        return -1
+    }
+}
+
+fn url_valid_scheme(s: str) -> bool {
+    if s == "" { return false }
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        let ok = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (i > 0 and ((c >= '0' and c <= '9') or c == '+' or c == '-' or c == '.'))
+        if not ok { return false }
+    }
+    return true
+}
+
+// Takes an address apart. A relative reference ("/a/b?x=1", "b.html") parses too, with an empty scheme and host.
+fn url_parse(text: str) -> Result<Url, str> {
+    var u = Url()
+    var rest = text
+    let hash = rest.find("#")
+    if hash >= 0 {
+        u.fragment = rest[hash + 1..]
+        rest = rest[..hash]
+    }
+    let qm = rest.find("?")
+    if qm >= 0 {
+        u.query = rest[qm + 1..]
+        rest = rest[..qm]
+    }
+    let colon = rest.find(":")
+    let slash = rest.find("/")
+    if colon > 0 and (slash < 0 or colon < slash) and url_valid_scheme(rest[..colon]) {
+        u.scheme = rest[..colon].lower()
+        rest = rest[colon + 1..]
+    }
+    if rest.starts_with("//") {
+        rest = rest[2..]
+        var end = rest.find("/")
+        if end < 0 { end = rest.len() }
+        var auth = rest[..end]
+        rest = rest[end..]
+        let at = auth.find("@")
+        if at >= 0 {
+            u.user = auth[..at]
+            auth = auth[at + 1..]
+        }
+        if auth.starts_with("[") {
+            let close = auth.find("]")
+            if close < 0 { return Result.Err("missing ] in the address of the host") }
+            u.host = auth[..close + 1]
+            auth = auth[close + 1..]
+            if auth.starts_with(":") {
+                let ps = auth[1..]
+                if ps != "" {
+                    let p = ps.parse_int()
+                    if p == nil or p! < 0 or p! > 65535 { return Result.Err("bad port: " + ps) }
+                    u.port = p!
+                }
+            } else if auth != "" {
+                return Result.Err("unexpected text after the host: " + auth)
+            }
+        } else {
+            let pc = auth.find(":")
+            if pc >= 0 {
+                u.host = auth[..pc]
+                let ps = auth[pc + 1..]
+                if ps != "" {
+                    let p = ps.parse_int()
+                    if p == nil or p! < 0 or p! > 65535 { return Result.Err("bad port: " + ps) }
+                    u.port = p!
+                }
+            } else {
+                u.host = auth
+            }
+        }
+        u.host = u.host.lower()
+        if u.scheme != "" and u.scheme != "file" and u.host == "" { return Result.Err("the address has no host") }
+    }
+    u.path = rest
+    return Result.Ok(u)
+}
+
+fn url_path_normalize(path: str) -> str {
+    var out: [str] = []
+    let parts = path.split("/")
+    for i in 0..parts.len() {
+        let p = parts[i]
+        if p == "." { continue }
+        if p == ".." {
+            if out.len() > 1 { out.pop() }
+            continue
+        }
+        if p == "" and i > 0 and i < parts.len() - 1 { continue }
+        out.push(p)
+    }
+    return "/".join(out)
+}
+
+// Resolves a reference against a base address, the way a browser follows a link:
+// url_join("http://a.com/x/y.html", "../z") == "http://a.com/z"
+fn url_join(base: str, reference: str) -> Result<str, str> {
+    var r = url_parse(reference)?
+    if r.scheme != "" { return Result.Ok(r.to_str()) }
+    var b = url_parse(base)?
+    if r.host != "" {
+        r.scheme = b.scheme
+        return Result.Ok(r.to_str())
+    }
+    if r.path == "" {
+        if r.query != "" { b.query = r.query }
+        b.fragment = r.fragment
+        return Result.Ok(b.to_str())
+    }
+    if r.path.starts_with("/") {
+        b.path = url_path_normalize(r.path)
+    } else {
+        var dir = "/"
+        var k = b.path.len() - 1
+        while k >= 0 {
+            if b.path.byte_at(k) == '/' {
+                dir = b.path[..k + 1]
+                break
+            }
+            k -= 1
+        }
+        b.path = url_path_normalize(dir + r.path)
+    }
+    b.query = r.query
+    b.fragment = r.fragment
+    return Result.Ok(b.to_str())
+}
