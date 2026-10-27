@@ -2259,6 +2259,8 @@ struct Canvas {
 - `.line(x1: int, y1: int, x2: int, y2: int, width: int, c: int)` - a straight line with round ends, width pixels thick
 - `.text(x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false)` - one line of text with its top left corner at (x, y)
 - `.text_width(s: str, size: int = 15, bold: bool = false) -> int` - the width text would take
+- `.pixel_w() -> int` - the size of the canvas in real screen pixels (w and h are at 100% scale, so on a high-DPI screen the canvas has more pixels): render a software scene at pixel_w() x pixel_h() for full sharpness, no scaling
+- `.pixel_h() -> int`
 - `.pixels(x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int)` - Draw a picture from an array of 0xRRGGBB ints (pw * ph pixels, row by row), stretched to w x h pixels with the nearest pixel. Much faster than one rect per pixel: use it for software rendered scenes.
 - `.pixels_smooth(x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int)` - The same as pixels, but the picture is scaled smoothly (bilinear filtering) instead of showing square blocks. Use it for software rendered scenes drawn at a low resolution: the game does not look pixelated.
 

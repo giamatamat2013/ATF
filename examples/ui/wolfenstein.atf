@@ -6,9 +6,8 @@
 
 import "std/ui"
 
-const WF_W = 960        // ray casting resolution; with WF_S above 1 the picture is scaled up smoothly
-const WF_H = 600
-const WF_S = 1
+const WF_WIN_W = 1152    // the window starts at this size; it can be resized (or maximized) and the scene follows
+const WF_WIN_H = 720
 const WF_N = 16
 
 let WF_MAP = [
@@ -34,6 +33,13 @@ struct Enemy { x: float, y: float, hp: int = 3, cool: float = 1.0, hurt: float =
 
 var wf_grid: [int] = []
 var wf_enemies: [Enemy] = []
+// The scene is ray cast at the real size of the canvas (every screen pixel is a column or a row of the picture).
+// If a frame takes too long the resolution drops a step (wf_q = 2: half as many pixels in each direction) and the
+// picture is scaled up smoothly; with time to spare it climbs back to full resolution.
+var wf_rw = 0
+var wf_rh = 0
+var wf_q = 1
+var wf_ms = 0.0
 var wf_buf: [int] = []
 var wf_zbuf: [float] = []
 var wf_px = 1.5
@@ -268,28 +274,30 @@ fn wf_soldier(u: float, v: float, hurt: bool) -> int {
     return col
 }
 
-fn wf_render() {
-    if wf_buf.len() != WF_W * WF_H {
-        wf_buf = array_make::<int>(WF_W * WF_H)
-        wf_zbuf = array_make::<float>(WF_W)
+fn wf_render(pw: int, ph: int) {
+    wf_rw = max(pw / wf_q, 16)
+    wf_rh = max(ph / wf_q, 10)
+    if wf_buf.len() != wf_rw * wf_rh {
+        wf_buf = array_make::<int>(wf_rw * wf_rh)
+        wf_zbuf = array_make::<float>(wf_rw)
     }
     let dx = cos(wf_a)
     let dy = sin(wf_a)
     let plx = -dy * 0.66
     let ply = dx * 0.66
-    let half = WF_H / 2
-    for x in 0..WF_W {
-        let cam = float(x) / float(WF_W) * 2.0 - 1.0
+    let half = wf_rh / 2
+    for x in 0..wf_rw {
+        let cam = float(x) / float(wf_rw) * 2.0 - 1.0
         let d = wf_cast(wf_px, wf_py, dx + plx * cam, dy + ply * cam)
         wf_zbuf[x] = d
-        var lh = WF_H * 2
-        if d > 0.01 { lh = int(float(WF_H) / d) }
+        var lh = wf_rh * 2
+        if d > 0.01 { lh = int(float(wf_rh) / d) }
         let top = half - lh / 2
         var light = 1.0 / (1.0 + d * d * 0.03)
         if wf_side == 1 { light *= 0.72 }
         let tile = wf_tile
         let u = wf_u
-        for y in 0..WF_H {
+        for y in 0..wf_rh {
             var col = 0
             if y < top {
                 let k = 30 + y * 40 / half
@@ -300,7 +308,7 @@ fn wf_render() {
             } else {
                 col = wf_wall_color(tile, u, float(y - top) / float(lh), light)
             }
-            wf_buf[y * WF_W + x] = col
+            wf_buf[y * wf_rw + x] = col
         }
     }
     // sprites, far to near
@@ -322,22 +330,22 @@ fn wf_render() {
         let tx = inv * (dy * rx - dx * ry)
         let ty = inv * (-ply * rx + plx * ry)
         if ty < 0.25 { continue }
-        let size = int(float(WF_H) / ty)
-        let sx = int(float(WF_W) / 2.0 * (1.0 + tx / ty))
+        let size = int(float(wf_rh) / ty)
+        let sx = int(float(wf_rw) / 2.0 * (1.0 + tx / ty))
         let left = sx - size / 2
         let top = half - size / 2
         let light = 1.0 / (1.0 + ty * ty * 0.03)
-        for cx in max(left, 0)..min(left + size, WF_W) {
+        for cx in max(left, 0)..min(left + size, wf_rw) {
             if ty >= wf_zbuf[cx] { continue }
             let u = float(cx - left) / float(size)
-            for cy in max(top, 0)..min(top + size, WF_H) {
+            for cy in max(top, 0)..min(top + size, wf_rh) {
                 let v = float(cy - top) / float(size)
                 let col = wf_soldier(u, v, e.hurt > 0.0)
                 if col >= 0 {
                     let r = int(float((col >> 16) & 255) * light)
                     let g = int(float((col >> 8) & 255) * light)
                     let b = int(float(col & 255) * light)
-                    wf_buf[cy * WF_W + cx] = wf_pack(r, g, b)
+                    wf_buf[cy * wf_rw + cx] = wf_pack(r, g, b)
                 }
             }
         }
@@ -345,10 +353,12 @@ fn wf_render() {
 }
 
 fn wf_draw(c: Canvas) {
-    wf_render()
-    let w = WF_W * WF_S
-    let h = WF_H * WF_S
-    c.pixels_smooth(0, 0, w, h, wf_buf, WF_W, WF_H)
+    let t0 = clock()
+    wf_render(c.pixel_w(), c.pixel_h())
+    let w = c.w
+    let h = c.h
+    c.pixels_smooth(0, 0, w, h, wf_buf, wf_rw, wf_rh)
+    wf_adapt((clock() - t0) * 1000.0)
     if wf_pain > 0.0 { c.rect(0, 0, w, h, rgba(200, 0, 0, 0.35)) }
 
     // the gun
@@ -407,10 +417,25 @@ fn wf_draw(c: Canvas) {
     }
 }
 
+// keep a frame near 20 ms: fewer pixels when it is slower, more when there is room
+fn wf_adapt(ms: float) {
+    wf_ms = if wf_ms == 0.0 { ms } else { wf_ms * 0.9 + ms * 0.1 }
+    if wf_ms > 26.0 and wf_q < 8 {
+        wf_ms = wf_ms * float(wf_q * wf_q) / float((wf_q + 1) * (wf_q + 1))
+        wf_q += 1
+    } else if wf_q > 1 {
+        let finer = wf_ms * float(wf_q * wf_q) / float((wf_q - 1) * (wf_q - 1))
+        if finer < 20.0 {
+            wf_ms = finer
+            wf_q -= 1
+        }
+    }
+}
+
 fn main() {
     wf_reset()
     ui_mouse_capture(true)
     ui_every(30, || { wf_step() })
     ui_shortcut("esc", || { ui_quit() })
-    ui_run("ATF Wolfenstein", WF_W * WF_S, WF_H * WF_S, || canvas(|c| { wf_draw(c) }).size(WF_W * WF_S, WF_H * WF_S))
+    ui_run("ATF Wolfenstein", WF_WIN_W, WF_WIN_H, || canvas(|c| { wf_draw(c) }).grow())
 }

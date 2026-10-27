@@ -987,6 +987,10 @@ impl Canvas {
         t.weight = if bold { 700 } else { 400 }
         return int(float(ui_text_w(ui_font(t), s)) / ui_scale + 0.5)
     }
+    // the size of the canvas in real screen pixels (w and h are at 100% scale, so on a high-DPI screen the
+    // canvas has more pixels): render a software scene at pixel_w() x pixel_h() for full sharpness, no scaling
+    fn pixel_w(self) -> int { return ui_sc(self.w) }
+    fn pixel_h(self) -> int { return ui_sc(self.h) }
     // Draw a picture from an array of 0xRRGGBB ints (pw * ph pixels, row by row), stretched to w x h pixels
     // with the nearest pixel. Much faster than one rect per pixel: use it for software rendered scenes.
     fn pixels(self, x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int) {

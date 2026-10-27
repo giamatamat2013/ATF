@@ -223,6 +223,11 @@ fn pixel_view() -> Node {
     return canvas(|c| { c.pixels(0, 0, 40, 40, pic, 2, 2) }).size(40, 40)
 }
 
+fn size_view() -> Node {
+    // a canvas reports its size in real screen pixels, so a scene can be drawn without any scaling
+    return canvas(|c| { c.rect(0, 0, c.pixel_w(), c.pixel_h() / 2, hex("#ff0000")) }).size(40, 40)
+}
+
 fn smooth_view() -> Node {
     // the same 2 x 2 picture, scaled smoothly
     let pic = [0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF]
@@ -237,6 +242,8 @@ fn game_input() {
     let sm = render(smooth_view, 40, 40)
     println(px(sm, 40, 40, 0, 0), px(sm, 40, 40, 39, 0), px(sm, 40, 40, 0, 39), px(sm, 40, 40, 39, 39))
     println(px(sm, 40, 40, 20, 0), px(sm, 40, 40, 0, 20), px(sm, 40, 40, 20, 20))
+    let sz = render(size_view, 40, 40)
+    println(px(sz, 40, 40, 20, 5), px(sz, 40, 40, 20, 35))
     // without a window nothing is held down and the mouse does not move
     ui_mouse_capture(true)
     let (dx, dy) = ui_mouse_delta()

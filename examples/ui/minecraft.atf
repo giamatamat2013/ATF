@@ -8,9 +8,8 @@
 
 import "std/ui"
 
-const MC_W = 576         // ray casting resolution; every cell is drawn as MC_S x MC_S pixels
-const MC_H = 324
-const MC_S = 2
+const MC_WIN_W = 1152     // the window starts at this size; it can be resized (or maximized) and the scene follows
+const MC_WIN_H = 648
 const MC_X = 48           // world size in blocks
 const MC_Y = 24
 const MC_Z = 48
@@ -34,6 +33,13 @@ var mc_pitch = 0.0
 var mc_sel = 1
 var mc_cool = 0.0                      // seconds until the next block can be broken or placed
 var mc_buf: [int] = []                 // the picture, 0xRRGGBB per pixel
+// The scene is ray cast at the real size of the canvas (every screen pixel is a ray), however big the window is.
+// If a frame takes too long, the resolution drops one step (mc_q = 2 means half as many rays in each direction) and
+// the picture is scaled up smoothly; when there is time to spare it climbs back to the full resolution.
+var mc_rw = 0                           // size of the picture that was last ray cast
+var mc_rh = 0
+var mc_q = 1
+var mc_ms = 0.0                         // average time of a frame in milliseconds
 
 // result of the last mc_cast: the block that was hit, the cell it is in, the empty cell in front of it,
 // the face (0 = x, 1 = y, 2 = z) and the distance
@@ -306,7 +312,7 @@ fn mc_shade(x: int, y: int, ox: float, oy: float, oz: float, dx: float, dy: floa
         g = sky_g
         b = sky_b
     }
-    mc_buf[y * MC_W + x] = (clamp(int(r), 0, 255) << 16) | (clamp(int(g), 0, 255) << 8) | clamp(int(b), 0, 255)
+    mc_buf[y * mc_rw + x] = (clamp(int(r), 0, 255) << 16) | (clamp(int(g), 0, 255) << 8) | clamp(int(b), 0, 255)
 }
 
 fn mc_draw(c: Canvas) {
@@ -324,31 +330,37 @@ fn mc_draw(c: Canvas) {
     let uy = cp
     let uz = -cy * sp
     let tan_fov = 0.75
-    if mc_buf.len() != MC_W * MC_H { mc_buf = array_make::<int>(MC_W * MC_H) }
-    let aspect = float(MC_W) / float(MC_H)
+    let w = c.w
+    let h = c.h
+    let t0 = clock()
+    mc_rw = max(c.pixel_w() / mc_q, 16)
+    mc_rh = max(c.pixel_h() / mc_q, 9)
+    if mc_buf.len() != mc_rw * mc_rh { mc_buf = array_make::<int>(mc_rw * mc_rh) }
+    let aspect = float(mc_rw) / float(mc_rh)
     let ex = mc_px
     let ey = mc_py + 1.6
     let ez = mc_pz
-    for y in 0..MC_H {
-        let v = (1.0 - (float(y) + 0.5) / float(MC_H) * 2.0) * tan_fov
-        for x in 0..MC_W {
-            let u = ((float(x) + 0.5) / float(MC_W) * 2.0 - 1.0) * tan_fov * aspect
+    for y in 0..mc_rh {
+        let v = (1.0 - (float(y) + 0.5) / float(mc_rh) * 2.0) * tan_fov
+        for x in 0..mc_rw {
+            let u = ((float(x) + 0.5) / float(mc_rw) * 2.0 - 1.0) * tan_fov * aspect
             mc_shade(x, y, ex, ey, ez, fx + rx * u + ux * v, fy + uy * v, fz + rz * u + uz * v)
         }
     }
 
-    c.pixels_smooth(0, 0, MC_W * MC_S, MC_H * MC_S, mc_buf, MC_W, MC_H)
+    c.pixels_smooth(0, 0, w, h, mc_buf, mc_rw, mc_rh)
+    mc_adapt((clock() - t0) * 1000.0)
 
     // crosshair
-    let mx = MC_W * MC_S / 2
-    let my = MC_H * MC_S / 2
+    let mx = w / 2
+    let my = h / 2
     c.rect(mx - 9, my - 1, 18, 2, WHITE)
     c.rect(mx - 1, my - 9, 2, 18, WHITE)
 
     // hotbar
     let total = 6 * 46
-    let left = (MC_W * MC_S - total) / 2
-    let top = MC_H * MC_S - 56
+    let left = (w - total) / 2
+    let top = h - 56
     for i in 1..=6 {
         let bx = left + (i - 1) * 46
         c.rect(bx, top, 42, 42, rgba(0, 0, 0, 0.45))
@@ -357,10 +369,27 @@ fn mc_draw(c: Canvas) {
         if i == mc_sel { c.outline(bx - 1, top - 1, 44, 44, 0, 3, WHITE) }
     }
     c.text(8, 8, "{MC_NAMES[mc_sel]}   WASD move   mouse look   Space jump   left click break   right click place   1-6 block   Esc quit", WHITE, 14)
+    c.text(8, 28, "{mc_rw} x {mc_rh} rays   {mc_ms:.0f} ms", rgba(255, 255, 255, 0.7), 12)
+}
+
+// keep a frame near 20 ms: fewer rays when it is slower, more rays when there is room
+fn mc_adapt(ms: float) {
+    mc_ms = if mc_ms == 0.0 { ms } else { mc_ms * 0.9 + ms * 0.1 }
+    if mc_ms > 26.0 and mc_q < 8 {
+        mc_ms = mc_ms * float((mc_q) * (mc_q)) / float((mc_q + 1) * (mc_q + 1))
+        mc_q += 1
+    } else if mc_q > 1 {
+        // what a frame would cost with the next finer picture
+        let finer = mc_ms * float(mc_q * mc_q) / float((mc_q - 1) * (mc_q - 1))
+        if finer < 20.0 {
+            mc_ms = finer
+            mc_q -= 1
+        }
+    }
 }
 
 fn view() -> Node {
-    return canvas(|c| { mc_draw(c) }).size(MC_W * MC_S, MC_H * MC_S)
+    return canvas(|c| { mc_draw(c) }).grow()
 }
 
 fn main() {
@@ -373,5 +402,5 @@ fn main() {
     for i in 1..=6 {
         ui_shortcut("{i}", || { mc_sel = i })
     }
-    ui_run("ATF Minecraft", MC_W * MC_S, MC_H * MC_S, view)
+    ui_run("ATF Minecraft", MC_WIN_W, MC_WIN_H, view)
 }

@@ -2738,7 +2738,7 @@ true
 | דיאלוג | `dialog("Title", body, [buttons], on_close)`, או `modal(content, on_close)` לכרטיס משלכם |
 | הסבר בהצבעה | `.tooltip("text")` |
 | סמלים קטנים | `icon("save")`, `icon("search")`, ... (הרשימה ב-[STDLIB.md](STDLIB.md#stdui)) |
-| ציור | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, ועם `.on_pointer(\|x, y\| ..)`. `c.pixels(x, y, w, h, colors, pw, ph)` מציירת תמונה מתוך `[int]` של ערכי `0xRRGGBB`, מהר מספיק לרינדור בתוכנה. היא מגדילה בריבועים; `c.pixels_smooth(..)` מקבלת אותם פרמטרים ומגדילה בצורה חלקה, כך שסצנה ברזולוציה נמוכה לא נראית מפוקסלת. למשחקים: `ui_key_down("w")`, `ui_mouse_held(0)` (0 שמאלי, 1 ימני, 2 אמצעי), ומבט בעכבר עם `ui_mouse_capture(true)` + `ui_mouse_delta()` |
+| ציור | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, ועם `.on_pointer(\|x, y\| ..)`. `c.pixels(x, y, w, h, colors, pw, ph)` מציירת תמונה מתוך `[int]` של ערכי `0xRRGGBB`, מהר מספיק לרינדור בתוכנה. היא מגדילה בריבועים; `c.pixels_smooth(..)` מקבלת אותם פרמטרים ומגדילה בצורה חלקה, כך שסצנה ברזולוציה נמוכה לא נראית מפוקסלת. אין הגבלת רזולוציה: `c.pixel_w()` ו-`c.pixel_h()` מחזירות את גודל ה-canvas בפיקסלים אמיתיים של המסך, כך שאפשר לצייר סצנה ברזולוציה המלאה של החלון (עם `.grow()` היא עוקבת אחרי גודל החלון). `minecraft.atf` ו-`wolfenstein.atf` עושות את זה ומורידות רזולוציה לבד רק כשפריים לוקח יותר מדי זמן. למשחקים: `ui_key_down("w")`, `ui_mouse_held(0)` (0 שמאלי, 1 ימני, 2 אמצעי), ומבט בעכבר עם `ui_mouse_capture(true)` + `ui_mouse_delta()` |
 | קיצורי מקלדת | `ui_shortcut("ctrl+s", save)` |
 | דיאלוגים סטנדרטיים | `message_box`, `confirm_box`, `open_file_dialog`, `save_file_dialog` |
 | הלוח (clipboard) | `clipboard_get()`, `clipboard_set(text)` |
