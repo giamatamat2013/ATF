@@ -17,6 +17,7 @@ jobs:
       - name: Run the tests
         shell: bash
         run: |
+          mkdir -p build   # build/ is gitignored, and tests write scratch files into it
           python tests/run_tests.py
           python tests/run_examples.py
           python tests/qa/run_qa.py
