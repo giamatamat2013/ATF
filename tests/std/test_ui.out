@@ -50,6 +50,8 @@ canvas
 #ff0000 #ffffff #0000ff #ffffff
 pixels and mouse look
 #ff0000 #00ff00 #0000ff #ffffff
+#ff0000 #00ff00 #0000ff #ffffff
+#798500 #790085 #7f8585
 0 0 false false
 shortcuts and dialogs
 save2 run del  false

@@ -6,9 +6,9 @@
 
 import "std/ui"
 
-const WF_W = 256
-const WF_H = 160
-const WF_S = 4
+const WF_W = 320        // ray casting resolution; the picture is scaled up smoothly by WF_S
+const WF_H = 200
+const WF_S = 3
 const WF_N = 16
 
 let WF_MAP = [
@@ -348,7 +348,7 @@ fn wf_draw(c: Canvas) {
     wf_render()
     let w = WF_W * WF_S
     let h = WF_H * WF_S
-    c.pixels(0, 0, w, h, wf_buf, WF_W, WF_H)
+    c.pixels_smooth(0, 0, w, h, wf_buf, WF_W, WF_H)
     if wf_pain > 0.0 { c.rect(0, 0, w, h, rgba(200, 0, 0, 0.35)) }
 
     // the gun

@@ -2737,7 +2737,7 @@ Beyond the basics, `std/ui` has what a whole application needs:
 | a dialog | `dialog("Title", body, [buttons], on_close)`, or `modal(content, on_close)` for your own card |
 | a hint on hover | `.tooltip("text")` |
 | small symbols | `icon("save")`, `icon("search")`, ... (a list is in [STDLIB.md](STDLIB.md#stdui)) |
-| drawing | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, with `.on_pointer(\|x, y\| ..)`. `c.pixels(x, y, w, h, colors, pw, ph)` draws a picture from an `[int]` of `0xRRGGBB` values: fast enough for software rendering. For games: `ui_key_down("w")`, `ui_mouse_held(0)` (0 left, 1 right, 2 middle), and mouse look with `ui_mouse_capture(true)` + `ui_mouse_delta()` |
+| drawing | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, with `.on_pointer(\|x, y\| ..)`. `c.pixels(x, y, w, h, colors, pw, ph)` draws a picture from an `[int]` of `0xRRGGBB` values: fast enough for software rendering. It scales with square blocks; `c.pixels_smooth(..)` takes the same arguments and scales smoothly, so a low resolution scene does not look pixelated. For games: `ui_key_down("w")`, `ui_mouse_held(0)` (0 left, 1 right, 2 middle), and mouse look with `ui_mouse_capture(true)` + `ui_mouse_delta()` |
 | shortcuts | `ui_shortcut("ctrl+s", save)` |
 | standard dialogs | `message_box`, `confirm_box`, `open_file_dialog`, `save_file_dialog` |
 | the clipboard | `clipboard_get()`, `clipboard_set(text)` |

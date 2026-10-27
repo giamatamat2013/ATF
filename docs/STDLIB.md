@@ -2260,6 +2260,7 @@ struct Canvas {
 - `.text(x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false)` - one line of text with its top left corner at (x, y)
 - `.text_width(s: str, size: int = 15, bold: bool = false) -> int` - the width text would take
 - `.pixels(x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int)` - Draw a picture from an array of 0xRRGGBB ints (pw * ph pixels, row by row), stretched to w x h pixels with the nearest pixel. Much faster than one rect per pixel: use it for software rendered scenes.
+- `.pixels_smooth(x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int)` - The same as pixels, but the picture is scaled smoothly (bilinear filtering) instead of showing square blocks. Use it for software rendered scenes drawn at a low resolution: the game does not look pixelated.
 
 ## std/url
 

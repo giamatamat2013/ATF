@@ -1008,6 +1008,52 @@ impl Canvas {
             }
         }
     }
+    // The same as pixels, but the picture is scaled smoothly (bilinear filtering) instead of showing square
+    // blocks. Use it for software rendered scenes drawn at a low resolution: the game does not look pixelated.
+    fn pixels_smooth(self, x: int, y: int, w: int, h: int, pix: [int], pw: int, ph: int) {
+        let dw = ui_sc(w)
+        let dh = ui_sc(h)
+        if dw <= 0 or dh <= 0 or pw <= 0 or ph <= 0 or pix.len() < pw * ph { return }
+        let fb = ui_fb as ptr<int>
+        let dx0 = self.ox + ui_sc(x)
+        let dy0 = self.oy + ui_sc(y)
+        let x0 = max(dx0, ui_cx0)
+        let x1 = min(dx0 + dw, ui_cx1)
+        let y0 = max(dy0, ui_cy0)
+        let y1 = min(dy0 + dh, ui_cy1)
+        if x1 <= x0 or y1 <= y0 { return }
+        // for every column: the left source pixel, the right one, and how far (0..255) we are between them
+        let n = x1 - x0
+        let cl = array_make::<int>(n)
+        let cr = array_make::<int>(n)
+        let cf = array_make::<int>(n)
+        for i in 0..n {
+            let u = clamp(((2 * (x0 + i - dx0) + 1) * pw * 128) / dw - 128, 0, (pw - 1) * 256)
+            cl[i] = u >> 8
+            cr[i] = min((u >> 8) + 1, pw - 1)
+            cf[i] = u & 255
+        }
+        for yy in y0..y1 {
+            let v = clamp(((2 * (yy - dy0) + 1) * ph * 128) / dh - 128, 0, (ph - 1) * 256)
+            let r0 = (v >> 8) * pw
+            let r1 = min((v >> 8) + 1, ph - 1) * pw
+            let fy = v & 255
+            let row = yy * ui_fbw
+            for i in 0..n {
+                let fx = cf[i]
+                let top = ui_lerp_rgb(pix[r0 + cl[i]], pix[r0 + cr[i]], fx)
+                let bot = ui_lerp_rgb(pix[r1 + cl[i]], pix[r1 + cr[i]], fx)
+                fb[row + x0 + i] = ui_lerp_rgb(top, bot, fy)
+            }
+        }
+    }
+}
+
+// blend two 0xRRGGBB colors: f = 0 gives a, f = 256 gives b (red and blue are mixed together, green on its own)
+fn ui_lerp_rgb(a: int, b: int, f: int) -> int {
+    let rb = (((a & 0xFF00FF) * (256 - f) + (b & 0xFF00FF) * f) >> 8) & 0xFF00FF
+    let g = (((a & 0x00FF00) * (256 - f) + (b & 0x00FF00) * f) >> 8) & 0x00FF00
+    return rb | g
 }
 
 // an element that you draw with draw(canvas) each time the screen is drawn. Give it a size: .size(300, 200) or .grow()

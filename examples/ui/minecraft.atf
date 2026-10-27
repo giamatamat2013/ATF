@@ -337,7 +337,7 @@ fn mc_draw(c: Canvas) {
         }
     }
 
-    c.pixels(0, 0, MC_W * MC_S, MC_H * MC_S, mc_buf, MC_W, MC_H)
+    c.pixels_smooth(0, 0, MC_W * MC_S, MC_H * MC_S, mc_buf, MC_W, MC_H)
 
     // crosshair
     let mx = MC_W * MC_S / 2

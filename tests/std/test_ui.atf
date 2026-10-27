@@ -223,10 +223,20 @@ fn pixel_view() -> Node {
     return canvas(|c| { c.pixels(0, 0, 40, 40, pic, 2, 2) }).size(40, 40)
 }
 
+fn smooth_view() -> Node {
+    // the same 2 x 2 picture, scaled smoothly
+    let pic = [0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF]
+    return canvas(|c| { c.pixels_smooth(0, 0, 40, 40, pic, 2, 2) }).size(40, 40)
+}
+
 fn game_input() {
     println("pixels and mouse look")
     let pic = render(pixel_view, 40, 40)
     println(px(pic, 40, 40, 5, 5), px(pic, 40, 40, 35, 5), px(pic, 40, 40, 5, 35), px(pic, 40, 40, 35, 35))
+    // smooth: the corners keep their color, the points between them are mixed
+    let sm = render(smooth_view, 40, 40)
+    println(px(sm, 40, 40, 0, 0), px(sm, 40, 40, 39, 0), px(sm, 40, 40, 0, 39), px(sm, 40, 40, 39, 39))
+    println(px(sm, 40, 40, 20, 0), px(sm, 40, 40, 0, 20), px(sm, 40, 40, 20, 20))
     // without a window nothing is held down and the mouse does not move
     ui_mouse_capture(true)
     let (dx, dy) = ui_mouse_delta()
