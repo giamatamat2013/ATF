@@ -1340,7 +1340,8 @@ class CodeGen:
         last_in_reg = False
         if last is not None:
             self.gen(args[last])
-            if last < 4:
+            # a float arg 0 left in xmm0 would be overwritten by the stack-arg copies below
+            if last < 4 and not (last == 0 and n > 4 and is_flt(args[last].ty)):
                 if is_flt(args[last].ty):
                     if last != 0:
                         a.movsd(ARG_XREGS[last], XMM[0])

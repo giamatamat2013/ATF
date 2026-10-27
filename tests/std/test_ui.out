@@ -1,0 +1,13 @@
+colors
+FF2563EB FFFFFFFF 80112233 FFFFFFFF
+FF2563EB FF000000 FF0000
+7F7F7F FFFFFFFF FF000000
+layout
+#ff0000 #ffffff #0000ff #ffffff
+#ff0000 #0000ff #ffffff #ff0000
+#ff0000 #ffffff #0000ff #ffffff
+#ff0000 #0000ff
+styles
+#ff0000 #0000ff
+#ffffff #ffffff
+#ff0000 #ffffff

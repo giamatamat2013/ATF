@@ -1,0 +1,2647 @@
+// std/ui - windows, layout and styling for graphical programs (Windows).
+//
+//   import "std/ui"
+//
+//   struct App { count: int = 0 }
+//
+//   fn view(app: App) -> Node {
+//       return column([
+//           text("Clicked {app.count} times").font_size(22).bold(),
+//           button("Click me", || { app.count += 1 }).bg(hex("#2563eb")).color(WHITE),
+//       ]).padding(24).gap(12).center()
+//   }
+//
+//   fn main() {
+//       let app = App()
+//       ui_run("Counter", 420, 260, || view(app))
+//   }
+//
+// The idea is the one of HTML + CSS, written as ATF code:
+//   - the screen is a tree of Node values built by a view function (column, row, text, button, ...)
+//   - every Node takes CSS-like style methods that chain: .padding(8, 16) .bg(..) .radius(12) .shadow(..)
+//   - layout is flexbox: rows and columns with gap, align, justify, grow, wrap, plus grid and absolute positions
+//   - reusable styles are values:  let card = style().bg(WHITE).radius(16)   then  .style(card)
+//     styles combine with +  (card + raised), and have states: .hover(style()...) .pressed(..) .focused(..)
+//   - text styles (color, font_size, bold, ...) are inherited by the children, like in CSS
+//   - after every event (click, typing, timer) the view function runs again and the window is redrawn,
+//     so the program only changes its own data; there is no need to update widgets by hand
+// Colors are ints 0xAARRGGBB: hex("#2563eb"), rgb(37, 99, 235), rgba(0, 0, 0, 0.3), WHITE, BLACK, TRANSPARENT.
+// Lengths are in pixels at 100% screen scale; they are scaled for high-DPI screens automatically.
+// Every method of Style also works directly on a Node:  text("Hi").bold().color(WHITE).padding(8)
+// Without a window (tests, docs): ui_screenshot(view, w, h, "shot.bmp"), or run any UI program with
+// the environment variable ATF_UI_SCREENSHOT=shot.bmp.
+
+// ---------------------------------------------------------------- Windows API
+extern "user32" fn RegisterClassExW(wc: ptr<int>) -> i32
+extern "user32" fn CreateWindowExW(ex: int, cls: ptr<byte>, title: ptr<byte>, style: int, x: int, y: int, w: int, h: int, parent: int, menu: int, inst: int, param: int) -> int
+extern "user32" fn DefWindowProcW(h: int, m: int, w: int, l: int) -> int
+extern "user32" fn GetMessageW(msg: ptr<int>, h: int, lo: int, hi: int) -> i32
+extern "user32" fn TranslateMessage(msg: ptr<int>) -> i32
+extern "user32" fn DispatchMessageW(msg: ptr<int>) -> int
+extern "user32" fn PostQuitMessage(code: int)
+extern "user32" fn DestroyWindow(h: int) -> i32
+extern "user32" fn ShowWindow(h: int, cmd: int) -> i32
+extern "user32" fn InvalidateRect(h: int, r: int, erase: int) -> i32
+extern "user32" fn BeginPaint(h: int, ps: ptr<int>) -> int
+extern "user32" fn EndPaint(h: int, ps: ptr<int>) -> i32
+extern "user32" fn GetClientRect(h: int, r: ptr<int>) -> i32
+extern "user32" fn LoadCursorW(inst: int, id: int) -> int
+extern "user32" fn LoadIconW(inst: int, id: int) -> int
+extern "user32" fn SetCursor(c: int) -> int
+extern "user32" fn SetTimer(h: int, id: int, ms: int, f: int) -> int
+extern "user32" fn KillTimer(h: int, id: int) -> i32
+extern "user32" fn AdjustWindowRectExForDpi(r: ptr<int>, style: int, menu: int, ex: int, dpi: int) -> i32
+extern "user32" fn SetProcessDpiAwarenessContext(ctx: int) -> i32
+extern "user32" fn GetDpiForWindow(h: int) -> i32
+extern "user32" fn SetWindowPos(h: int, after: int, x: int, y: int, w: int, hh: int, flags: int) -> i32
+extern "user32" fn SetWindowTextW(h: int, s: ptr<byte>) -> i32
+extern "user32" fn SetCapture(h: int) -> int
+extern "user32" fn ReleaseCapture() -> i32
+extern "user32" fn GetKeyState(vk: int) -> i32
+extern "user32" fn TrackMouseEvent(t: ptr<int>) -> i32
+extern "user32" fn OpenClipboard(h: int) -> i32
+extern "user32" fn CloseClipboard() -> i32
+extern "user32" fn EmptyClipboard() -> i32
+extern "user32" fn GetClipboardData(fmt: int) -> int
+extern "user32" fn SetClipboardData(fmt: int, h: int) -> int
+extern "user32" fn GetSystemMetricsForDpi(i: int, dpi: int) -> i32
+extern "kernel32" fn GetModuleHandleW(name: int) -> int
+extern "kernel32" fn MultiByteToWideChar(cp: int, flags: int, s: ptr<byte>, n: int, w: ptr<byte>, wn: int) -> i32
+extern "kernel32" fn WideCharToMultiByte(cp: int, flags: int, w: ptr<byte>, wn: int, s: ptr<byte>, n: int, d: int, u: int) -> i32
+extern "kernel32" fn GlobalLock(h: int) -> int
+extern "kernel32" fn GlobalUnlock(h: int) -> i32
+extern "kernel32" fn GlobalAlloc(flags: int, n: int) -> int
+extern "gdi32" fn CreateCompatibleDC(dc: int) -> int
+extern "gdi32" fn CreateDIBSection(dc: int, bmi: ptr<int>, usage: int, bits: ptr<int>, sec: int, off: int) -> int
+extern "gdi32" fn SelectObject(dc: int, o: int) -> int
+extern "gdi32" fn DeleteObject(o: int) -> i32
+extern "gdi32" fn CreateFontW(h: int, w: int, esc: int, ori: int, weight: int, italic: int, under: int, strike: int, cs: int, op: int, cp: int, q: int, pf: int, face: ptr<byte>) -> int
+extern "gdi32" fn SetTextColor(dc: int, c: int) -> i32
+extern "gdi32" fn SetBkMode(dc: int, m: int) -> i32
+extern "gdi32" fn TextOutW(dc: int, x: int, y: int, s: ptr<byte>, n: int) -> i32
+extern "gdi32" fn GetTextExtentPoint32W(dc: int, s: ptr<byte>, n: int, sz: ptr<int>) -> i32
+extern "gdi32" fn GetTextMetricsW(dc: int, tm: ptr<int>) -> i32
+extern "gdi32" fn GdiFlush() -> i32
+extern "gdi32" fn SetDIBitsToDevice(dc: int, x: int, y: int, w: int, h: int, sx: int, sy: int, start: int, lines: int, bits: ptr<int>, bmi: ptr<int>, use: int) -> i32
+extern "gdiplus" fn GdiplusStartup(token: ptr<int>, input: ptr<int>, output: int) -> i32
+extern "gdiplus" fn GdipCreateBitmapFromFile(file: ptr<byte>, bmp: ptr<int>) -> i32
+extern "gdiplus" fn GdipGetImageWidth(img: int, w: ptr<int>) -> i32
+extern "gdiplus" fn GdipGetImageHeight(img: int, h: ptr<int>) -> i32
+extern "gdiplus" fn GdipBitmapLockBits(bmp: int, r: ptr<int>, flags: int, fmt: int, data: ptr<int>) -> i32
+extern "gdiplus" fn GdipBitmapUnlockBits(bmp: int, data: ptr<int>) -> i32
+extern "gdiplus" fn GdipDisposeImage(img: int) -> i32
+
+// ---------------------------------------------------------------- colors
+const WHITE = 0xFFFFFFFF
+const BLACK = 0xFF000000
+const TRANSPARENT = 0
+
+// opaque color from red, green, blue (0..255): rgb(37, 99, 235)
+fn rgb(r: int, g: int, b: int) -> int {
+    return 0xFF000000 | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)
+}
+
+// color with opacity a from 0.0 (invisible) to 1.0 (opaque), like CSS: rgba(0, 0, 0, 0.25)
+fn rgba(r: int, g: int, b: int, a: float) -> int {
+    return (ui_alpha_byte(a) << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255)
+}
+
+fn ui_alpha_byte(a: float) -> int {
+    return int(clamp(a, 0.0, 1.0) * 255.0 + 0.5)
+}
+
+fn ui_hexval(c: byte) -> int {
+    if c >= '0' and c <= '9' { return c - '0' }
+    if c >= 'a' and c <= 'f' { return c - 'a' + 10 }
+    if c >= 'A' and c <= 'F' { return c - 'A' + 10 }
+    return -1
+}
+
+// CSS color text: "#rgb", "#rrggbb", "#rrggbbaa" or a name ("white", "tomato", "slate", ...)
+fn hex(s: str) -> int {
+    if not s.starts_with("#") {
+        let named = UI_NAMED_COLORS.try_get(s.lower())
+        if named == nil { panic("hex: unknown color \"{s}\" (use \"#rrggbb\" or a CSS color name)") }
+        return named!
+    }
+    let d = s[1..]
+    var v = 0
+    for i in 0..d.len() {
+        let x = ui_hexval(d.byte_at(i))
+        if x < 0 { panic("hex: bad color \"{s}\"") }
+        v = v * 16 + x
+    }
+    if d.len() == 3 {
+        let r = (v >> 8) & 15
+        let g = (v >> 4) & 15
+        let b = v & 15
+        return rgb(r * 17, g * 17, b * 17)
+    }
+    if d.len() == 6 { return 0xFF000000 | v }
+    if d.len() == 8 { return ((v & 255) << 24) | (v >> 8) }
+    panic("hex: bad color \"{s}\" (use \"#rgb\", \"#rrggbb\" or \"#rrggbbaa\")")
+}
+
+let UI_NAMED_COLORS: {str: int} = {
+    "white": 0xFFFFFFFF, "black": 0xFF000000, "transparent": 0,
+    "red": 0xFFEF4444, "orange": 0xFFF97316, "amber": 0xFFF59E0B, "yellow": 0xFFEAB308,
+    "lime": 0xFF84CC16, "green": 0xFF22C55E, "emerald": 0xFF10B981, "teal": 0xFF14B8A6,
+    "cyan": 0xFF06B6D4, "sky": 0xFF0EA5E9, "blue": 0xFF3B82F6, "indigo": 0xFF6366F1,
+    "violet": 0xFF8B5CF6, "purple": 0xFFA855F7, "fuchsia": 0xFFD946EF, "pink": 0xFFEC4899,
+    "rose": 0xFFF43F5E, "slate": 0xFF64748B, "gray": 0xFF6B7280, "grey": 0xFF6B7280,
+    "zinc": 0xFF71717A, "stone": 0xFF78716C, "tomato": 0xFFFF6347, "gold": 0xFFFFD700,
+    "navy": 0xFF000080, "silver": 0xFFC0C0C0, "crimson": 0xFFDC143C, "coral": 0xFFFF7F50,
+}
+
+// the color between a and b: mix(a, b, 0.0) == a, mix(a, b, 1.0) == b
+fn mix(a: int, b: int, t: float) -> int {
+    let k = int(clamp(t, 0.0, 1.0) * 256.0)
+    let ik = 256 - k
+    let ca = (((a >> 24) & 255) * ik + ((b >> 24) & 255) * k) >> 8
+    let cr = (((a >> 16) & 255) * ik + ((b >> 16) & 255) * k) >> 8
+    let cg = (((a >> 8) & 255) * ik + ((b >> 8) & 255) * k) >> 8
+    let cb = ((a & 255) * ik + (b & 255) * k) >> 8
+    return (ca << 24) | (cr << 16) | (cg << 8) | cb
+}
+
+// lighter / darker version of a color (amount 0.0 .. 1.0), keeping its opacity
+fn lighten(c: int, amount: float) -> int { return (c & 0xFF000000) | (mix(c, WHITE, amount) & 0xFFFFFF) }
+fn darken(c: int, amount: float) -> int { return (c & 0xFF000000) | (mix(c, BLACK, amount) & 0xFFFFFF) }
+
+// the same color with opacity a (0.0 .. 1.0): fade(BLACK, 0.2)
+fn fade(c: int, a: float) -> int { return (ui_alpha_byte(a) << 24) | (c & 0xFFFFFF) }
+
+// ---------------------------------------------------------------- styles
+enum Align { Start, Center, End, Stretch }
+enum Justify { Start, Center, End, Between, Around, Evenly }
+enum Cursor { Default, Pointer, Text, Move, NotAllowed, ResizeH, ResizeV }
+
+const UNSET = -999999
+
+const UI_B_W = 1
+const UI_B_H = 2
+const UI_B_MINW = 4
+const UI_B_MAXW = 8
+const UI_B_MINH = 16
+const UI_B_MAXH = 32
+const UI_B_WPCT = 64
+const UI_B_HPCT = 128
+const UI_B_GROW = 256
+const UI_B_PAD = 512
+const UI_B_MAR = 1024
+const UI_B_GAP = 2048
+const UI_B_ALIGN = 4096
+const UI_B_JUST = 8192
+const UI_B_WRAP = 16384
+const UI_B_RTL = 32768
+const UI_B_BG = 65536
+const UI_B_BW = 131072
+const UI_B_BC = 262144
+const UI_B_RAD = 524288
+const UI_B_SHADOW = 1048576
+const UI_B_OP = 2097152
+const UI_B_FG = 4194304
+const UI_B_FSIZE = 8388608
+const UI_B_WEIGHT = 16777216
+const UI_B_ITALIC = 33554432
+const UI_B_UNDER = 67108864
+const UI_B_FAM = 134217728
+const UI_B_TALIGN = 268435456
+const UI_B_LH = 536870912
+const UI_B_NOWRAP = 1073741824
+const UI_B_CURSOR = 2147483648
+const UI_B_TRANS = 4294967296
+const UI_B_ABS = 8589934592
+const UI_B_CLIP = 17179869184
+const UI_B_GRAD = 34359738368
+const UI_TEXT_BITS = 4194304 | 8388608 | 16777216 | 33554432 | 67108864 | 134217728 | 268435456 | 536870912 | 1073741824 | 32768
+
+// A set of style properties, like one CSS rule. Only the properties that were set count when
+// styles are combined (a + b: the properties set in b win). Setting a property returns a new Style.
+struct Style {
+    has: int = 0
+    w_v: int = 0
+    h_v: int = 0
+    minw: int = 0
+    maxw: int = 0
+    minh: int = 0
+    maxh: int = 0
+    wpct: float = 0.0
+    hpct: float = 0.0
+    grow_v: float = 0.0
+    pt: int = 0
+    pr: int = 0
+    pb: int = 0
+    pl: int = 0
+    mt: int = 0
+    mr: int = 0
+    mb: int = 0
+    ml: int = 0
+    gap_v: int = 0
+    align_v: Align = Align.Stretch
+    just_v: Justify = Justify.Start
+    wrap_v: bool = false
+    rtl_v: bool = false
+    bg_v: int = 0
+    bg2: int = 0
+    gangle: float = 180.0
+    bw: int = 0
+    bc: int = 0
+    r0: int = 0
+    r1: int = 0
+    r2: int = 0
+    r3: int = 0
+    shx: int = 0
+    shy: int = 0
+    shblur: int = 0
+    shspread: int = 0
+    shc: int = 0
+    op: float = 1.0
+    fg: int = 0
+    fsize: int = 15
+    fweight: int = 400
+    fitalic: bool = false
+    funder: bool = false
+    ffam: str = "Segoe UI"
+    talign: Align = Align.Start
+    lh: float = 0.0
+    nowrap_v: bool = false
+    cur: Cursor = Cursor.Default
+    trans: int = 0
+    al: int = 0
+    at: int = 0
+    ar: int = 0
+    ab: int = 0
+    hov: Style? = nil
+    prs: Style? = nil
+    foc: Style? = nil
+}
+
+// an empty style, to build a reusable set of properties: let card = style().bg(WHITE).radius(12)
+fn style() -> Style { return Style() }
+
+fn ui_set(s: Style, bit: int) -> Style {
+    let c = copy(s)
+    c.has = c.has | bit
+    return c
+}
+
+// CSS shorthand: 1 value = all sides, 2 = (vertical, horizontal), 3 = (top, horizontal, bottom), 4 = (top, right, bottom, left)
+fn ui_sides(a: int, b: int, c: int, d: int) -> (int, int, int, int) {
+    if b == UNSET { return (a, a, a, a) }
+    if c == UNSET { return (a, b, a, b) }
+    if d == UNSET { return (a, b, c, b) }
+    return (a, b, c, d)
+}
+
+impl Style {
+    // ---- size
+    fn width(self, v: int) -> Style { let s = ui_set(self, UI_B_W); s.w_v = v; s.has = s.has & ~UI_B_WPCT; return s }
+    fn height(self, v: int) -> Style { let s = ui_set(self, UI_B_H); s.h_v = v; s.has = s.has & ~UI_B_HPCT; return s }
+    fn size(self, w: int, h: int) -> Style { return self.width(w).height(h) }
+    fn min_width(self, v: int) -> Style { let s = ui_set(self, UI_B_MINW); s.minw = v; return s }
+    fn max_width(self, v: int) -> Style { let s = ui_set(self, UI_B_MAXW); s.maxw = v; return s }
+    fn min_height(self, v: int) -> Style { let s = ui_set(self, UI_B_MINH); s.minh = v; return s }
+    fn max_height(self, v: int) -> Style { let s = ui_set(self, UI_B_MAXH); s.maxh = v; return s }
+    // width as a percentage of the parent's inner width
+    fn width_pct(self, p: float) -> Style { let s = ui_set(self, UI_B_WPCT); s.wpct = p; s.has = s.has & ~UI_B_W; return s }
+    fn height_pct(self, p: float) -> Style { let s = ui_set(self, UI_B_HPCT); s.hpct = p; s.has = s.has & ~UI_B_H; return s }
+    // take a share of the free space along the parent's direction (CSS flex-grow)
+    fn grow(self, g: float = 1.0) -> Style { let s = ui_set(self, UI_B_GROW); s.grow_v = g; return s }
+    // ---- spacing
+    fn padding(self, a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Style {
+        let s = ui_set(self, UI_B_PAD)
+        let (t, r, bo, l) = ui_sides(a, b, c, d)
+        s.pt = t
+        s.pr = r
+        s.pb = bo
+        s.pl = l
+        return s
+    }
+    fn margin(self, a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Style {
+        let s = ui_set(self, UI_B_MAR)
+        let (t, r, bo, l) = ui_sides(a, b, c, d)
+        s.mt = t
+        s.mr = r
+        s.mb = bo
+        s.ml = l
+        return s
+    }
+    fn gap(self, v: int) -> Style { let s = ui_set(self, UI_B_GAP); s.gap_v = v; return s }
+    // ---- flex layout of the children
+    // cross-axis placement of the children (CSS align-items)
+    fn align(self, a: Align) -> Style { let s = ui_set(self, UI_B_ALIGN); s.align_v = a; return s }
+    // main-axis distribution of the children (CSS justify-content)
+    fn justify(self, j: Justify) -> Style { let s = ui_set(self, UI_B_JUST); s.just_v = j; return s }
+    // children in the middle on both axes
+    fn center(self) -> Style { return self.align(Align.Center).justify(Justify.Center) }
+    // a row that continues on the next line when it is full (CSS flex-wrap)
+    fn wrap(self) -> Style { let s = ui_set(self, UI_B_WRAP); s.wrap_v = true; return s }
+    // right-to-left: rows start on the right and text aligns right (Hebrew, Arabic)
+    fn rtl(self) -> Style { let s = ui_set(self, UI_B_RTL); s.rtl_v = true; return s }
+    // ---- box
+    fn bg(self, c: int) -> Style { let s = ui_set(self, UI_B_BG); s.bg_v = c; s.has = s.has & ~UI_B_GRAD; return s }
+    // linear gradient; angle in degrees like CSS (180 = top to bottom, 90 = left to right)
+    fn gradient(self, from: int, to: int, angle: float = 180.0) -> Style {
+        let s = ui_set(self, UI_B_BG | UI_B_GRAD)
+        s.bg_v = from
+        s.bg2 = to
+        s.gangle = angle
+        return s
+    }
+    fn border(self, w: int, c: int) -> Style { let s = ui_set(self, UI_B_BW | UI_B_BC); s.bw = w; s.bc = c; return s }
+    fn border_color(self, c: int) -> Style { let s = ui_set(self, UI_B_BC); s.bc = c; return s }
+    // corner radius: 1 value for all corners, or (top-left, top-right, bottom-right, bottom-left)
+    fn radius(self, a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Style {
+        let s = ui_set(self, UI_B_RAD)
+        let (r0, r1, r2, r3) = ui_sides(a, b, c, d)
+        s.r0 = r0
+        s.r1 = r1
+        s.r2 = r2
+        s.r3 = r3
+        return s
+    }
+    // fully rounded ends (a pill or a circle)
+    fn pill(self) -> Style { return self.radius(99999) }
+    // drop shadow (CSS box-shadow): offset x, y, blur radius, color, spread
+    fn shadow(self, x: int, y: int, blur: int, c: int, spread: int = 0) -> Style {
+        let s = ui_set(self, UI_B_SHADOW)
+        s.shx = x
+        s.shy = y
+        s.shblur = blur
+        s.shc = c
+        s.shspread = spread
+        return s
+    }
+    fn opacity(self, o: float) -> Style { let s = ui_set(self, UI_B_OP); s.op = clamp(o, 0.0, 1.0); return s }
+    // cut the children at the edges of the box
+    fn clip(self) -> Style { let s = ui_set(self, UI_B_CLIP); return s }
+    // ---- text (inherited by the children)
+    fn color(self, c: int) -> Style { let s = ui_set(self, UI_B_FG); s.fg = c; return s }
+    fn font_size(self, v: int) -> Style { let s = ui_set(self, UI_B_FSIZE); s.fsize = v; return s }
+    // 100 (thin) .. 400 (normal) .. 700 (bold) .. 900 (black)
+    fn weight(self, w: int) -> Style { let s = ui_set(self, UI_B_WEIGHT); s.fweight = w; return s }
+    fn bold(self) -> Style { return self.weight(700) }
+    fn italic(self) -> Style { let s = ui_set(self, UI_B_ITALIC); s.fitalic = true; return s }
+    fn underline(self) -> Style { let s = ui_set(self, UI_B_UNDER); s.funder = true; return s }
+    fn family(self, f: str) -> Style { let s = ui_set(self, UI_B_FAM); s.ffam = f; return s }
+    fn text_align(self, a: Align) -> Style { let s = ui_set(self, UI_B_TALIGN); s.talign = a; return s }
+    // line height as a multiple of the font size (1.5 = one and a half)
+    fn line_height(self, f: float) -> Style { let s = ui_set(self, UI_B_LH); s.lh = f; return s }
+    // keep text on one line
+    fn nowrap(self) -> Style { let s = ui_set(self, UI_B_NOWRAP); s.nowrap_v = true; return s }
+    // ---- interaction
+    fn cursor(self, c: Cursor) -> Style { let s = ui_set(self, UI_B_CURSOR); s.cur = c; return s }
+    // extra properties while the mouse is over the element (CSS :hover)
+    fn hover(self, h: Style) -> Style { let s = copy(self); s.hov = h; return s }
+    // extra properties while the mouse button is held on the element (CSS :active)
+    fn pressed(self, h: Style) -> Style { let s = copy(self); s.prs = h; return s }
+    // extra properties while a text box has the keyboard (CSS :focus)
+    fn focused(self, h: Style) -> Style { let s = copy(self); s.foc = h; return s }
+    // animate color changes (background, text, border) over ms milliseconds
+    fn transition(self, ms: int) -> Style { let s = ui_set(self, UI_B_TRANS); s.trans = ms; return s }
+    // take the element out of the flow and place it relative to its parent's box (CSS position: absolute)
+    fn absolute(self, left: int = UNSET, top: int = UNSET, right: int = UNSET, bottom: int = UNSET) -> Style {
+        let s = ui_set(self, UI_B_ABS)
+        s.al = left
+        s.at = top
+        s.ar = right
+        s.ab = bottom
+        return s
+    }
+
+    // this style with the properties set in o on top
+    fn merge(self, o: Style) -> Style {
+        let h = o.has
+        if h == 0 and o.hov == nil and o.prs == nil and o.foc == nil { return self }
+        let s = copy(self)
+        if h != 0 {
+            // a fixed size and a percentage size replace each other
+            if h & UI_B_W != 0 and h & UI_B_WPCT == 0 { s.has = s.has & ~UI_B_WPCT }
+            if h & UI_B_WPCT != 0 and h & UI_B_W == 0 { s.has = s.has & ~UI_B_W }
+            if h & UI_B_H != 0 and h & UI_B_HPCT == 0 { s.has = s.has & ~UI_B_HPCT }
+            if h & UI_B_HPCT != 0 and h & UI_B_H == 0 { s.has = s.has & ~UI_B_H }
+            if h & UI_B_W != 0 { s.w_v = o.w_v }
+            if h & UI_B_H != 0 { s.h_v = o.h_v }
+            if h & UI_B_MINW != 0 { s.minw = o.minw }
+            if h & UI_B_MAXW != 0 { s.maxw = o.maxw }
+            if h & UI_B_MINH != 0 { s.minh = o.minh }
+            if h & UI_B_MAXH != 0 { s.maxh = o.maxh }
+            if h & UI_B_WPCT != 0 { s.wpct = o.wpct }
+            if h & UI_B_HPCT != 0 { s.hpct = o.hpct }
+            if h & UI_B_GROW != 0 { s.grow_v = o.grow_v }
+            if h & UI_B_PAD != 0 {
+                s.pt = o.pt
+                s.pr = o.pr
+                s.pb = o.pb
+                s.pl = o.pl
+            }
+            if h & UI_B_MAR != 0 {
+                s.mt = o.mt
+                s.mr = o.mr
+                s.mb = o.mb
+                s.ml = o.ml
+            }
+            if h & UI_B_GAP != 0 { s.gap_v = o.gap_v }
+            if h & UI_B_ALIGN != 0 { s.align_v = o.align_v }
+            if h & UI_B_JUST != 0 { s.just_v = o.just_v }
+            if h & UI_B_WRAP != 0 { s.wrap_v = o.wrap_v }
+            if h & UI_B_RTL != 0 { s.rtl_v = o.rtl_v }
+            if h & UI_B_BG != 0 {
+                s.bg_v = o.bg_v
+                s.bg2 = o.bg2
+                s.gangle = o.gangle
+                s.has = (s.has & ~UI_B_GRAD) | (h & UI_B_GRAD)
+            }
+            if h & UI_B_BW != 0 { s.bw = o.bw }
+            if h & UI_B_BC != 0 { s.bc = o.bc }
+            if h & UI_B_RAD != 0 {
+                s.r0 = o.r0
+                s.r1 = o.r1
+                s.r2 = o.r2
+                s.r3 = o.r3
+            }
+            if h & UI_B_SHADOW != 0 {
+                s.shx = o.shx
+                s.shy = o.shy
+                s.shblur = o.shblur
+                s.shspread = o.shspread
+                s.shc = o.shc
+            }
+            if h & UI_B_OP != 0 { s.op = o.op }
+            if h & UI_B_FG != 0 { s.fg = o.fg }
+            if h & UI_B_FSIZE != 0 { s.fsize = o.fsize }
+            if h & UI_B_WEIGHT != 0 { s.fweight = o.fweight }
+            if h & UI_B_ITALIC != 0 { s.fitalic = o.fitalic }
+            if h & UI_B_UNDER != 0 { s.funder = o.funder }
+            if h & UI_B_FAM != 0 { s.ffam = o.ffam }
+            if h & UI_B_TALIGN != 0 { s.talign = o.talign }
+            if h & UI_B_LH != 0 { s.lh = o.lh }
+            if h & UI_B_NOWRAP != 0 { s.nowrap_v = o.nowrap_v }
+            if h & UI_B_CURSOR != 0 { s.cur = o.cur }
+            if h & UI_B_TRANS != 0 { s.trans = o.trans }
+            if h & UI_B_ABS != 0 {
+                s.al = o.al
+                s.at = o.at
+                s.ar = o.ar
+                s.ab = o.ab
+            }
+            s.has = s.has | (h & ~UI_B_GRAD)
+        }
+        if o.hov != nil { s.hov = ui_merge_opt(self.hov, o.hov!) }
+        if o.prs != nil { s.prs = ui_merge_opt(self.prs, o.prs!) }
+        if o.foc != nil { s.foc = ui_merge_opt(self.foc, o.foc!) }
+        return s
+    }
+
+    // a + b: the properties of a, with the ones set in b on top
+    fn op_add(self, o: Style) -> Style { return self.merge(o) }
+}
+
+fn ui_merge_opt(a: Style?, b: Style) -> Style {
+    if let x = a { return x.merge(b) }
+    return b
+}
+
+// ---------------------------------------------------------------- nodes
+const UI_K_COL = 0
+const UI_K_ROW = 1
+const UI_K_TEXT = 2
+const UI_K_TEXTBOX = 3
+const UI_K_IMAGE = 4
+const UI_K_GRID = 5
+const UI_K_STACK = 6
+
+struct UiFont {
+    key: str
+    hf: int
+    size: int
+    height: int
+    ascent: int
+}
+
+struct UiText {
+    size: int = 15
+    weight: int = 400
+    italic: bool = false
+    underline: bool = false
+    family: str = "Segoe UI"
+    align: Align = Align.Start
+    lh: float = 0.0
+    nowrap: bool = false
+    rtl: bool = false
+}
+
+// One element on the screen. Build nodes with column, row, text, button, ... and style them with
+// the same methods as Style (each returns the node, so they chain).
+struct Node {
+    kind: int = 0
+    s: Style
+    th: Style
+    children: [Node]
+    content: str = ""
+    hint: str = ""
+    keyname: str = ""
+    cols: int = 1
+    secret: bool = false
+    click_f: fn()? = nil
+    input_f: fn(str)? = nil
+    submit_f: fn()? = nil
+    drag_f: fn(float)? = nil
+    // layout results
+    path: str = ""
+    bs: Style
+    tp: UiText
+    rf: UiFont? = nil
+    lines: [str]
+    x: int = 0
+    y: int = 0
+    w: int = 0
+    h: int = 0
+    content_h: int = 0
+    clips: bool = false
+}
+
+fn ui_node(kind: int, children: [Node]) -> Node {
+    let lines: [str] = []
+    return Node{ kind: kind, s: Style(), th: Style(), children: children, bs: Style(), tp: UiText(), lines: lines }
+}
+
+impl Node {
+    // ---- same properties as Style (see there)
+    fn width(self, v: int) -> Node { self.s = self.s.width(v); return self }
+    fn height(self, v: int) -> Node { self.s = self.s.height(v); return self }
+    fn size(self, w: int, h: int) -> Node { self.s = self.s.size(w, h); return self }
+    fn min_width(self, v: int) -> Node { self.s = self.s.min_width(v); return self }
+    fn max_width(self, v: int) -> Node { self.s = self.s.max_width(v); return self }
+    fn min_height(self, v: int) -> Node { self.s = self.s.min_height(v); return self }
+    fn max_height(self, v: int) -> Node { self.s = self.s.max_height(v); return self }
+    fn width_pct(self, p: float) -> Node { self.s = self.s.width_pct(p); return self }
+    fn height_pct(self, p: float) -> Node { self.s = self.s.height_pct(p); return self }
+    fn grow(self, g: float = 1.0) -> Node { self.s = self.s.grow(g); return self }
+    fn padding(self, a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Node { self.s = self.s.padding(a, b, c, d); return self }
+    fn margin(self, a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Node { self.s = self.s.margin(a, b, c, d); return self }
+    fn gap(self, v: int) -> Node { self.s = self.s.gap(v); return self }
+    fn align(self, a: Align) -> Node { self.s = self.s.align(a); return self }
+    fn justify(self, j: Justify) -> Node { self.s = self.s.justify(j); return self }
+    fn center(self) -> Node { self.s = self.s.center(); return self }
+    fn wrap(self) -> Node { self.s = self.s.wrap(); return self }
+    fn rtl(self) -> Node { self.s = self.s.rtl(); return self }
+    fn bg(self, c: int) -> Node { self.s = self.s.bg(c); return self }
+    fn gradient(self, from: int, to: int, angle: float = 180.0) -> Node { self.s = self.s.gradient(from, to, angle); return self }
+    fn border(self, w: int, c: int) -> Node { self.s = self.s.border(w, c); return self }
+    fn border_color(self, c: int) -> Node { self.s = self.s.border_color(c); return self }
+    fn radius(self, a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Node { self.s = self.s.radius(a, b, c, d); return self }
+    fn pill(self) -> Node { self.s = self.s.pill(); return self }
+    fn shadow(self, x: int, y: int, blur: int, c: int, spread: int = 0) -> Node { self.s = self.s.shadow(x, y, blur, c, spread); return self }
+    fn opacity(self, o: float) -> Node { self.s = self.s.opacity(o); return self }
+    fn clip(self) -> Node { self.s = self.s.clip(); return self }
+    fn color(self, c: int) -> Node { self.s = self.s.color(c); return self }
+    fn font_size(self, v: int) -> Node { self.s = self.s.font_size(v); return self }
+    fn weight(self, w: int) -> Node { self.s = self.s.weight(w); return self }
+    fn bold(self) -> Node { self.s = self.s.bold(); return self }
+    fn italic(self) -> Node { self.s = self.s.italic(); return self }
+    fn underline(self) -> Node { self.s = self.s.underline(); return self }
+    fn family(self, f: str) -> Node { self.s = self.s.family(f); return self }
+    fn text_align(self, a: Align) -> Node { self.s = self.s.text_align(a); return self }
+    fn line_height(self, f: float) -> Node { self.s = self.s.line_height(f); return self }
+    fn nowrap(self) -> Node { self.s = self.s.nowrap(); return self }
+    fn cursor(self, c: Cursor) -> Node { self.s = self.s.cursor(c); return self }
+    fn hover(self, h: Style) -> Node { self.s = self.s.hover(h); return self }
+    fn pressed(self, h: Style) -> Node { self.s = self.s.pressed(h); return self }
+    fn focused(self, h: Style) -> Node { self.s = self.s.focused(h); return self }
+    fn transition(self, ms: int) -> Node { self.s = self.s.transition(ms); return self }
+    fn absolute(self, left: int = UNSET, top: int = UNSET, right: int = UNSET, bottom: int = UNSET) -> Node {
+        self.s = self.s.absolute(left, top, right, bottom)
+        return self
+    }
+
+    // ---- node only
+    // add the properties of a reusable style
+    fn style(self, st: Style) -> Node { self.s = self.s.merge(st); return self }
+    // run f when the element is clicked (the view is rebuilt afterwards)
+    fn on_click(self, f: fn()) -> Node {
+        self.click_f = f
+        if self.s.has & UI_B_CURSOR == 0 { self.th = self.th.cursor(Cursor.Pointer) }
+        return self
+    }
+    // while the mouse is pressed on the element: f(position 0.0 .. 1.0 across its width)
+    fn on_drag(self, f: fn(float)) -> Node { self.drag_f = f; return self }
+    // text box: f runs when Enter is pressed
+    fn on_submit(self, f: fn()) -> Node { self.submit_f = f; return self }
+    // text box: grey text shown while it is empty
+    fn placeholder(self, s: str) -> Node { self.hint = s; return self }
+    // text box: show dots instead of the letters
+    fn password(self) -> Node { self.secret = true; return self }
+    // a stable name, so the element keeps its state (focus, scroll) when the list around it changes
+    fn key(self, k: str) -> Node { self.keyname = k; return self }
+    // add one more child
+    fn add(self, c: Node) -> Node { self.children.push(c); return self }
+}
+
+// ---------------------------------------------------------------- elements
+// default theme colors
+const UI_INK = 0xFF0F172A
+const UI_MUTED = 0xFF64748B
+const UI_LINE = 0xFFE2E8F0
+const UI_ACCENT = 0xFF2563EB
+const UI_PAGE = 0xFFF8FAFC
+
+// children one under the other (a vertical flex box)
+fn column(children: [Node] = []) -> Node { return ui_node(UI_K_COL, children) }
+// same as column
+fn box(children: [Node] = []) -> Node { return ui_node(UI_K_COL, children) }
+// children side by side (a horizontal flex box); they are centered vertically unless .align(..) says otherwise
+fn row(children: [Node] = []) -> Node {
+    let n = ui_node(UI_K_ROW, children)
+    n.th = n.th.align(Align.Center)
+    return n
+}
+// children on top of each other, all in the same place (for layers, overlays, badges)
+fn stack(children: [Node] = []) -> Node { return ui_node(UI_K_STACK, children) }
+// a table of cols equal columns; children fill it row by row
+fn grid(cols: int, children: [Node] = []) -> Node {
+    let n = ui_node(UI_K_GRID, children)
+    n.cols = max(cols, 1)
+    return n
+}
+// a column whose content scrolls with the mouse wheel when it is taller than the box
+fn scroll(children: [Node] = []) -> Node {
+    let n = ui_node(UI_K_COL, children)
+    n.th = n.th.clip()
+    n.clips = true
+    n.content = "\x01scroll"
+    return n
+}
+// text; long text wraps at word boundaries, "\n" starts a new line
+fn text(s: str) -> Node {
+    let n = ui_node(UI_K_TEXT, [])
+    n.content = s
+    return n
+}
+// an empty element that takes the free space (pushes its neighbours apart)
+fn spacer() -> Node { return ui_node(UI_K_COL, []).grow(1.0) }
+// a thin line between items
+fn divider() -> Node {
+    let n = ui_node(UI_K_COL, [])
+    n.th = n.th.height(1).bg(UI_LINE)
+    return n
+}
+
+// a clickable button with a text label
+fn button(label: str, on_click: fn()) -> Node {
+    let n = ui_node(UI_K_ROW, [text(label)])
+    n.th = style().padding(8, 16).radius(8).bg(WHITE).border(1, UI_LINE).color(UI_INK).weight(500)
+        .justify(Justify.Center).align(Align.Center).cursor(Cursor.Pointer).transition(120)
+        .hover(style().bg(0xFFF1F5F9)).pressed(style().bg(UI_LINE))
+    n.click_f = on_click
+    return n
+}
+
+// a one-line text field: shows value, calls on_input(new value) when the user types
+fn textbox(value: str, on_input: fn(str)) -> Node {
+    let n = ui_node(UI_K_TEXTBOX, [])
+    n.content = value
+    n.input_f = on_input
+    n.th = style().padding(8, 12).radius(8).bg(WHITE).border(1, 0xFFCBD5E1).color(UI_INK)
+        .cursor(Cursor.Text).transition(120).width(220)
+        .focused(style().border_color(UI_ACCENT).shadow(0, 0, 0, fade(UI_ACCENT, 0.25), 3))
+    return n
+}
+
+// a check box with a label; on_change gets the new state
+fn checkbox(checked: bool, label: str, on_change: fn(bool)) -> Node {
+    var mark = box([]).size(18, 18).radius(5).border(2, 0xFFCBD5E1).bg(WHITE).center().transition(120)
+    if checked {
+        mark = box([text("✓").font_size(12).bold().color(WHITE).family("Segoe UI Symbol")])
+            .size(18, 18).radius(5).bg(UI_ACCENT).center().transition(120)
+    }
+    let n = row([mark, text(label)]).gap(8)
+    n.click_f = || on_change(not checked)
+    n.th = n.th.cursor(Cursor.Pointer)
+    return n
+}
+
+// an on/off switch; on_change gets the new state
+fn toggle(on: bool, on_change: fn(bool)) -> Node {
+    let knob = box([]).size(18, 18).pill().bg(WHITE).shadow(0, 1, 3, fade(BLACK, 0.3))
+    let n = row([knob]).size(40, 22).pill().padding(2).transition(150)
+    if on {
+        n.th = n.th.bg(UI_ACCENT).justify(Justify.End)
+    } else {
+        n.th = n.th.bg(0xFFCBD5E1).justify(Justify.Start)
+    }
+    n.click_f = || on_change(not on)
+    n.th = n.th.cursor(Cursor.Pointer)
+    return n
+}
+
+// a horizontal slider for a value from 0.0 to 1.0; on_change gets the new value while dragging
+fn slider(value: float, on_change: fn(float)) -> Node {
+    let v = clamp(value, 0.0, 1.0)
+    let filled = box([]).width_pct(v * 100.0).height(6).radius(3).bg(UI_ACCENT)
+    let knob = box([]).size(18, 18).pill().bg(WHITE).border(2, UI_ACCENT).margin(0, -9).shadow(0, 1, 3, fade(BLACK, 0.2))
+    let rest = box([]).grow(1.0).height(6).radius(3).bg(UI_LINE)
+    let n = row([filled, knob, rest]).height(22).padding(0, 9)
+    n.drag_f = on_change
+    n.th = n.th.width(200).cursor(Cursor.Pointer)
+    return n
+}
+
+// a progress bar for a value from 0.0 to 1.0
+fn progress(value: float) -> Node {
+    let v = clamp(value, 0.0, 1.0)
+    let n = row([box([]).width_pct(v * 100.0).height(8).pill().bg(UI_ACCENT).transition(200)])
+    n.th = n.th.height(8).pill().bg(UI_LINE).align(Align.Stretch).width(200).clip()
+    return n
+}
+
+// a picture from a file (PNG, JPG, BMP, GIF); without a size it shows at its natural size.
+// The picture fills the box and is cut to keep its proportions (CSS object-fit: cover).
+fn image(path: str) -> Node {
+    let n = ui_node(UI_K_IMAGE, [])
+    n.content = path
+    return n
+}
+
+// ---------------------------------------------------------------- strings for Windows (UTF-16)
+var ui_wlen = 0
+
+fn ui_wide(s: str) -> ptr<byte> {
+    let n = str_len(s)
+    let buf = __alloc_atomic(n * 2 + 2)
+    var k = 0
+    if n > 0 { k = MultiByteToWideChar(65001, 0, str_data(s), n, buf, n) }
+    buf[k * 2] = 0
+    buf[k * 2 + 1] = 0
+    ui_wlen = k
+    return buf
+}
+
+fn ui_from_wide(w: ptr<byte>, wn: int) -> str {
+    if wn == 0 { return "" }
+    let n = WideCharToMultiByte(65001, 0, w, wn, 0 as ptr<byte>, 0, 0, 0)
+    let s = str_new(n)
+    WideCharToMultiByte(65001, 0, w, wn, str_data(s), n, 0, 0)
+    return s
+}
+
+fn ui_utf8(cp: int) -> str {
+    let w = __alloc_atomic(8)
+    var wn = 1
+    if cp >= 0x10000 {
+        let v = cp - 0x10000
+        let hi = 0xD800 + (v >> 10)
+        let lo = 0xDC00 + (v & 0x3FF)
+        w[0] = byte(hi & 255)
+        w[1] = byte(hi >> 8)
+        w[2] = byte(lo & 255)
+        w[3] = byte(lo >> 8)
+        wn = 2
+    } else {
+        w[0] = byte(cp & 255)
+        w[1] = byte(cp >> 8)
+    }
+    return ui_from_wide(w, wn)
+}
+
+fn ui_lo16s(v: int) -> int {
+    var x = v & 0xFFFF
+    if x >= 0x8000 { x -= 0x10000 }
+    return x
+}
+
+fn ui_lo32s(v: int) -> int { return (v << 32) >> 32 }
+
+// ---------------------------------------------------------------- fonts and text
+var ui_mdc = 0
+var ui_mbits = 0
+var ui_mbw = 0
+var ui_mbh = 0
+var ui_mbmp = 0
+var ui_fonts: {str: UiFont} = {}
+var ui_widths: {str: int} = {}
+
+struct UiMask {
+    w: int
+    h: int
+    data: ptr<byte>
+}
+
+var ui_masks: {str: UiMask} = {}
+
+fn ui_bmi(w: int, h: int) -> ptr<int> {
+    let b = __alloc_atomic(48) as ptr<int>
+    b[0] = 40 | ((w & 0xFFFFFFFF) << 32)
+    b[1] = (h & 0xFFFFFFFF) | (1 << 32) | (32 << 48)
+    b[2] = 0
+    b[3] = 0
+    b[4] = 0
+    b[5] = 0
+    return b
+}
+
+fn ui_mask_dc(w: int, h: int) {
+    if ui_mdc == 0 {
+        ui_mdc = CreateCompatibleDC(0)
+        SetBkMode(ui_mdc, 1)
+        SetTextColor(ui_mdc, 0xFFFFFF)
+    }
+    if w <= ui_mbw and h <= ui_mbh { return }
+    var nw = max(max(w, ui_mbw), 512)
+    if nw % 2 == 1 { nw += 1 }
+    let nh = max(max(h, ui_mbh), 64)
+    let pp = __alloc_atomic(8) as ptr<int>
+    let bmp = CreateDIBSection(ui_mdc, ui_bmi(nw, -nh), 0, pp, 0, 0)
+    SelectObject(ui_mdc, bmp)
+    if ui_mbmp != 0 { DeleteObject(ui_mbmp) }
+    ui_mbmp = bmp
+    ui_mbits = pp[0]
+    ui_mbw = nw
+    ui_mbh = nh
+}
+
+fn ui_font(t: UiText) -> UiFont {
+    let size = max(ui_sc(t.size), 1)
+    let key = "{t.family}|{size}|{t.weight}|{t.italic}|{t.underline}"
+    if let f = ui_fonts.try_get(key) { return f }
+    ui_mask_dc(1, 1)
+    let hf = CreateFontW(-size, 0, 0, 0, t.weight, if t.italic { 1 } else { 0 }, if t.underline { 1 } else { 0 }, 0, 1, 0, 0, 4, 0, ui_wide(t.family))
+    SelectObject(ui_mdc, hf)
+    let tm = __alloc_atomic(64) as ptr<int>
+    GetTextMetricsW(ui_mdc, tm)
+    let f = UiFont(key, hf, size, ui_lo32s(tm[0]), tm[0] >> 32)
+    ui_fonts[key] = f
+    return f
+}
+
+fn ui_text_w(f: UiFont, s: str) -> int {
+    if s.len() == 0 { return 0 }
+    let key = f.key + "\x01" + s
+    if let w = ui_widths.try_get(key) { return w }
+    ui_mask_dc(1, 1)
+    SelectObject(ui_mdc, f.hf)
+    let ws = ui_wide(s)
+    let sz = __alloc_atomic(16) as ptr<int>
+    sz[0] = 0
+    GetTextExtentPoint32W(ui_mdc, ws, ui_wlen, sz)
+    let w = ui_lo32s(sz[0])
+    if ui_widths.len() > 20000 { ui_widths = {} }
+    ui_widths[key] = w
+    return w
+}
+
+fn ui_text_mask(f: UiFont, s: str) -> UiMask {
+    let key = f.key + "\x01" + s
+    if let m = ui_masks.try_get(key) { return m }
+    let tw = ui_text_w(f, s) + f.size / 3 + 2
+    let th = f.height
+    ui_mask_dc(tw, th)
+    SelectObject(ui_mdc, f.hf)
+    let bits = ui_mbits as ptr<int>
+    let row_ints = ui_mbw / 2
+    let wi = (tw + 1) / 2
+    for r in 0..th {
+        let base = r * row_ints
+        for k in 0..wi { bits[base + k] = 0 }
+    }
+    let ws = ui_wide(s)
+    TextOutW(ui_mdc, 1, 0, ws, ui_wlen)
+    GdiFlush()
+    let data = __alloc_atomic(tw * th)
+    let src = ui_mbits as ptr<byte>
+    for r in 0..th {
+        let so = r * ui_mbw * 4 + 1
+        let d = r * tw
+        for c in 0..tw { data[d + c] = src[so + c * 4] }
+    }
+    let m = UiMask(tw, th, data)
+    if ui_masks.len() > 4000 { ui_masks = {} }
+    ui_masks[key] = m
+    return m
+}
+
+fn ui_line_h(n: Node) -> int {
+    let f = n.rf!
+    if n.tp.lh > 0.0 { return int(float(f.size) * n.tp.lh + 0.5) }
+    return f.height
+}
+
+// break text into lines no wider than maxw
+fn ui_wrap(f: UiFont, s: str, maxw: int, nowrap: bool) -> [str] {
+    let out: [str] = []
+    for para in s.split("\n") {
+        if nowrap or ui_text_w(f, para) <= maxw {
+            out.push(para)
+            continue
+        }
+        var line = ""
+        for word in para.split(" ") {
+            let cand = if line.len() == 0 { word } else { line + " " + word }
+            if line.len() > 0 and ui_text_w(f, cand) > maxw {
+                out.push(line)
+                line = word
+            } else {
+                line = cand
+            }
+        }
+        out.push(line)
+    }
+    return out
+}
+
+// ---------------------------------------------------------------- images
+struct UiImage {
+    w: int
+    h: int
+    px: ptr<int>
+}
+
+var ui_images: {str: UiImage?} = {}
+var ui_scaled: {str: UiImage} = {}
+var ui_gdip = false
+
+fn ui_load_image(path: str) -> UiImage? {
+    if let cached = ui_images.try_get(path) { return cached }
+    if not ui_gdip {
+        let tok = __alloc_atomic(8) as ptr<int>
+        let inp = __alloc_atomic(24) as ptr<int>
+        inp[0] = 1
+        inp[1] = 0
+        inp[2] = 0
+        GdiplusStartup(tok, inp, 0)
+        ui_gdip = true
+    }
+    let pb = __alloc_atomic(8) as ptr<int>
+    pb[0] = 0
+    if GdipCreateBitmapFromFile(ui_wide(path), pb) != 0 or pb[0] == 0 {
+        ui_images[path] = nil
+        return nil
+    }
+    let bmp = pb[0]
+    let tmp = __alloc_atomic(16) as ptr<int>
+    tmp[0] = 0
+    tmp[1] = 0
+    GdipGetImageWidth(bmp, tmp)
+    GdipGetImageHeight(bmp, tmp + 1)
+    let w = tmp[0] & 0xFFFFFFFF
+    let h = tmp[1] & 0xFFFFFFFF
+    let rect = __alloc_atomic(16) as ptr<int>
+    rect[0] = 0
+    rect[1] = w | (h << 32)
+    let data = __alloc_atomic(32) as ptr<int>
+    if GdipBitmapLockBits(bmp, rect, 1, 0x26200A, data) != 0 {
+        GdipDisposeImage(bmp)
+        ui_images[path] = nil
+        return nil
+    }
+    let stride = ui_lo32s(data[1])
+    let scan = data[2] as ptr<byte>
+    let px = __alloc_atomic(w * h * 8) as ptr<int>
+    for y in 0..h {
+        let rowp = scan + y * stride
+        for x in 0..w {
+            let b = rowp + x * 4
+            px[y * w + x] = (b[3] << 24) | (b[2] << 16) | (b[1] << 8) | b[0]
+        }
+    }
+    GdipBitmapUnlockBits(bmp, data)
+    GdipDisposeImage(bmp)
+    let img = UiImage(w, h, px)
+    ui_images[path] = img
+    return img
+}
+
+// the picture scaled to cover w x h (cut in the middle), averaged when shrinking
+fn ui_cover(path: str, img: UiImage, w: int, h: int) -> UiImage {
+    let key = "{path}|{w}|{h}"
+    if let c = ui_scaled.try_get(key) { return c }
+    let sc = max(float(w) / float(img.w), float(h) / float(img.h))
+    let ox = (float(img.w) * sc - float(w)) / 2.0
+    let oy = (float(img.h) * sc - float(h)) / 2.0
+    let px = __alloc_atomic(max(w * h, 1) * 8) as ptr<int>
+    let step_src = 1.0 / sc
+    for y in 0..h {
+        let sy0 = (float(y) + oy) / sc
+        for x in 0..w {
+            let sx0 = (float(x) + ox) / sc
+            let x0 = int(sx0)
+            let y0 = int(sy0)
+            let x1 = max(int(sx0 + step_src), x0 + 1)
+            let y1 = max(int(sy0 + step_src), y0 + 1)
+            var a = 0
+            var r = 0
+            var g = 0
+            var b = 0
+            var n = 0
+            for yy in y0..min(y1, img.h) {
+                for xx in x0..min(x1, img.w) {
+                    let p = img.px[yy * img.w + xx]
+                    a += (p >> 24) & 255
+                    r += (p >> 16) & 255
+                    g += (p >> 8) & 255
+                    b += p & 255
+                    n += 1
+                }
+            }
+            if n == 0 { n = 1 }
+            px[y * w + x] = ((a / n) << 24) | ((r / n) << 16) | ((g / n) << 8) | (b / n)
+        }
+    }
+    let out = UiImage(w, h, px)
+    if ui_scaled.len() > 200 { ui_scaled = {} }
+    ui_scaled[key] = out
+    return out
+}
+
+// ---------------------------------------------------------------- drawing (into a pixel buffer)
+var ui_fb = 0
+var ui_fbw = 0
+var ui_fbh = 0
+var ui_cx0 = 0
+var ui_cy0 = 0
+var ui_cx1 = 0
+var ui_cy1 = 0
+var ui_ga = 255
+var ui_scale = 1.0
+
+fn ui_sc(v: int) -> int {
+    if ui_scale == 1.0 or v == UNSET { return v }
+    return int(float(v) * ui_scale + (if v >= 0 { 0.5 } else { -0.5 }))
+}
+
+fn ui_fb_size(w: int, h: int) {
+    if w == ui_fbw and h == ui_fbh and ui_fb != 0 { return }
+    ui_fb = __alloc_atomic(max(w * h, 1) * 8) as int
+    ui_fbw = w
+    ui_fbh = h
+}
+
+fn ui_put(fb: ptr<int>, i: int, c: int, a: int) {
+    if a <= 0 { return }
+    if a >= 255 {
+        fb[i] = c & 0xFFFFFF
+        return
+    }
+    let d = fb[i]
+    let ia = 255 - a
+    let r = (((c >> 16) & 255) * a + ((d >> 16) & 255) * ia) / 255
+    let g = (((c >> 8) & 255) * a + ((d >> 8) & 255) * ia) / 255
+    let b = ((c & 255) * a + (d & 255) * ia) / 255
+    fb[i] = (r << 16) | (g << 8) | b
+}
+
+// opacity of color c after the current group opacity, 0..255
+fn ui_ca(c: int) -> int { return ((c >> 24) & 255) * ui_ga / 255 }
+
+fn ui_fill_rect(x: int, y: int, w: int, h: int, c: int) {
+    let a = ui_ca(c)
+    if a == 0 { return }
+    let fb = ui_fb as ptr<int>
+    let x0 = max(x, ui_cx0)
+    let x1 = min(x + w, ui_cx1)
+    let y0 = max(y, ui_cy0)
+    let y1 = min(y + h, ui_cy1)
+    let rgb_c = c & 0xFFFFFF
+    for yy in y0..y1 {
+        let row = yy * ui_fbw
+        if a >= 255 {
+            for xx in x0..x1 { fb[row + xx] = rgb_c }
+        } else {
+            for xx in x0..x1 { ui_put(fb, row + xx, c, a) }
+        }
+    }
+}
+
+// signed distance from (px, py) to a rounded rectangle (negative inside)
+fn ui_rr_dist(px: float, py: float, x: float, y: float, w: float, h: float, r0: float, r1: float, r2: float, r3: float) -> float {
+    let hx = w * 0.5
+    let hy = h * 0.5
+    let dx = px - (x + hx)
+    let dy = py - (y + hy)
+    var r = r2
+    if dx < 0.0 {
+        r = if dy < 0.0 { r0 } else { r3 }
+    } else if dy < 0.0 {
+        r = r1
+    }
+    let qx = abs(dx) - (hx - r)
+    let qy = abs(dy) - (hy - r)
+    let ox = max(qx, 0.0)
+    let oy = max(qy, 0.0)
+    return sqrt(ox * ox + oy * oy) + min(max(qx, qy), 0.0) - r
+}
+
+fn ui_grad_color(c1: int, c2: int, ang: float, px: float, py: float, x: float, y: float, w: float, h: float) -> int {
+    let rad = ang * PI / 180.0
+    let dx = sin(rad)
+    let dy = -cos(rad)
+    let len = abs(w * dx) + abs(h * dy)
+    if len <= 0.0 { return c1 }
+    let t = ((px - (x + w / 2.0)) * dx + (py - (y + h / 2.0)) * dy) / len + 0.5
+    return mix(c1, c2, t)
+}
+
+// fill (bw == 0) or outline (bw > 0) of a rounded rectangle, antialiased; c2 != c1 makes a gradient
+fn ui_rrect(x: int, y: int, w: int, h: int, ra: int, rb: int, rc: int, rd: int, bw: int, c1: int, c2: int, ang: float) {
+    if w <= 0 or h <= 0 { return }
+    if ui_ca(c1) == 0 and ui_ca(c2) == 0 { return }
+    let lim = min(w, h) / 2
+    let r0 = clamp(ra, 0, lim)
+    let r1 = clamp(rb, 0, lim)
+    let r2 = clamp(rc, 0, lim)
+    let r3 = clamp(rd, 0, lim)
+    let grad = c1 != c2
+    if r0 == 0 and r1 == 0 and r2 == 0 and r3 == 0 and bw == 0 and not grad {
+        ui_fill_rect(x, y, w, h, c1)
+        return
+    }
+    let fb = ui_fb as ptr<int>
+    let fx = float(x)
+    let fy = float(y)
+    let fw = float(w)
+    let fh = float(h)
+    let fbw = float(bw)
+    let ir0 = float(max(r0 - bw, 0))
+    let ir1 = float(max(r1 - bw, 0))
+    let ir2 = float(max(r2 - bw, 0))
+    let ir3 = float(max(r3 - bw, 0))
+    let zt = max(max(r0, r1), bw) + 1
+    let zb = max(max(r2, r3), bw) + 1
+    let zl = max(max(r0, r3), bw) + 1
+    let zr = max(max(r1, r2), bw) + 1
+    let x0 = max(x, ui_cx0)
+    let x1 = min(x + w, ui_cx1)
+    let y0 = max(y, ui_cy0)
+    let y1 = min(y + h, ui_cy1)
+    let ca1 = ui_ca(c1)
+    for yy in y0..y1 {
+        let row = yy * ui_fbw
+        let edge_row = yy < y + zt or yy >= y + h - zb
+        let py = float(yy) + 0.5
+        var xx = x0
+        while xx < x1 {
+            if not edge_row and xx >= x + zl and xx < x + w - zr {
+                let end = min(x1, x + w - zr)
+                if bw == 0 {
+                    if grad {
+                        for k in xx..end {
+                            let c = ui_grad_color(c1, c2, ang, float(k) + 0.5, py, fx, fy, fw, fh)
+                            ui_put(fb, row + k, c, ui_ca(c))
+                        }
+                    } else if ca1 >= 255 {
+                        let v = c1 & 0xFFFFFF
+                        for k in xx..end { fb[row + k] = v }
+                    } else {
+                        for k in xx..end { ui_put(fb, row + k, c1, ca1) }
+                    }
+                }
+                xx = max(end, xx + 1)
+                continue
+            }
+            let px = float(xx) + 0.5
+            var cov = clamp(0.5 - ui_rr_dist(px, py, fx, fy, fw, fh, float(r0), float(r1), float(r2), float(r3)), 0.0, 1.0)
+            if bw > 0 and cov > 0.0 {
+                cov -= clamp(0.5 - ui_rr_dist(px, py, fx + fbw, fy + fbw, fw - 2.0 * fbw, fh - 2.0 * fbw, ir0, ir1, ir2, ir3), 0.0, 1.0)
+            }
+            if cov > 0.0 {
+                var c = c1
+                if grad { c = ui_grad_color(c1, c2, ang, px, py, fx, fy, fw, fh) }
+                ui_put(fb, row + xx, c, int(cov * float(ui_ca(c)) + 0.5))
+            }
+            xx += 1
+        }
+    }
+}
+
+// soft shadow around a rounded rectangle (not drawn under the element itself, like CSS)
+fn ui_shadow(x: int, y: int, w: int, h: int, ra: int, rb: int, rc: int, rd: int, dx: int, dy: int, blur: int, spread: int, c: int) {
+    let ca = ui_ca(c)
+    if ca == 0 or w <= 0 or h <= 0 { return }
+    let sx = x + dx - spread
+    let sy = y + dy - spread
+    let sw = w + 2 * spread
+    let shh = h + 2 * spread
+    if sw <= 0 or shh <= 0 { return }
+    let lim = min(w, h) / 2
+    let rr0 = clamp(ra, 0, lim)
+    let rr1 = clamp(rb, 0, lim)
+    let rr2 = clamp(rc, 0, lim)
+    let rr3 = clamp(rd, 0, lim)
+    let slim = float(min(sw, shh)) / 2.0
+    let s0 = min(float(if rr0 > 0 { rr0 + spread } else { 0 }), slim)
+    let s1 = min(float(if rr1 > 0 { rr1 + spread } else { 0 }), slim)
+    let s2 = min(float(if rr2 > 0 { rr2 + spread } else { 0 }), slim)
+    let s3 = min(float(if rr3 > 0 { rr3 + spread } else { 0 }), slim)
+    let rmax = max(max(rr0, rr1), max(rr2, rr3))
+    let ext = blur * 3 / 2 + 2
+    let x0 = max(sx - ext, ui_cx0)
+    let x1 = min(sx + sw + ext, ui_cx1)
+    let y0 = max(sy - ext, ui_cy0)
+    let y1 = min(sy + shh + ext, ui_cy1)
+    let fb = ui_fb as ptr<int>
+    let sigma = max(float(blur) / 2.0, 0.5)
+    let k = 1.2027 / (sigma * 1.41421356)
+    let fsx = float(sx)
+    let fsy = float(sy)
+    let fsw = float(sw)
+    let fsh = float(shh)
+    for yy in y0..y1 {
+        let row = yy * ui_fbw
+        let py = float(yy) + 0.5
+        let in_y = yy >= y + rmax and yy < y + h - rmax
+        let in_y2 = yy >= y and yy < y + h
+        for xx in x0..x1 {
+            if in_y2 and xx >= x + rmax and xx < x + w - rmax { continue }
+            if in_y and xx >= x and xx < x + w { continue }
+            let d = ui_rr_dist(float(xx) + 0.5, py, fsx, fsy, fsw, fsh, s0, s1, s2, s3)
+            var a = 0.0
+            if blur <= 0 {
+                a = clamp(0.5 - d, 0.0, 1.0)
+            } else {
+                a = 0.5 * (1.0 - tanh(k * d))
+            }
+            if a > 0.004 { ui_put(fb, row + xx, c, int(a * float(ca) + 0.5)) }
+        }
+    }
+}
+
+fn ui_draw_mask(m: UiMask, x: int, y: int, c: int) {
+    let ca = ui_ca(c)
+    if ca == 0 { return }
+    let fb = ui_fb as ptr<int>
+    let x0 = max(x, ui_cx0)
+    let x1 = min(x + m.w, ui_cx1)
+    let y0 = max(y, ui_cy0)
+    let y1 = min(y + m.h, ui_cy1)
+    for yy in y0..y1 {
+        let row = yy * ui_fbw
+        let mrow = (yy - y) * m.w - x
+        for xx in x0..x1 {
+            let cov = m.data[mrow + xx]
+            if cov != 0 { ui_put(fb, row + xx, c, cov * ca / 255) }
+        }
+    }
+}
+
+fn ui_draw_image(img: UiImage, x: int, y: int, ra: int, rb: int, rc: int, rd: int) {
+    let fb = ui_fb as ptr<int>
+    let lim = min(img.w, img.h) / 2
+    let r0 = clamp(ra, 0, lim)
+    let r1 = clamp(rb, 0, lim)
+    let r2 = clamp(rc, 0, lim)
+    let r3 = clamp(rd, 0, lim)
+    let rounded = r0 + r1 + r2 + r3 > 0
+    let rmax = max(max(r0, r1), max(r2, r3))
+    let x0 = max(x, ui_cx0)
+    let x1 = min(x + img.w, ui_cx1)
+    let y0 = max(y, ui_cy0)
+    let y1 = min(y + img.h, ui_cy1)
+    for yy in y0..y1 {
+        let row = yy * ui_fbw
+        let srow = (yy - y) * img.w - x
+        let edge_y = yy < y + rmax or yy >= y + img.h - rmax
+        for xx in x0..x1 {
+            let p = img.px[srow + xx]
+            var a = ((p >> 24) & 255) * ui_ga / 255
+            if rounded and (edge_y or xx < x + rmax or xx >= x + img.w - rmax) {
+                let cov = clamp(0.5 - ui_rr_dist(float(xx) + 0.5, float(yy) + 0.5, float(x), float(y), float(img.w), float(img.h), float(r0), float(r1), float(r2), float(r3)), 0.0, 1.0)
+                a = int(float(a) * cov)
+            }
+            ui_put(fb, row + xx, p, a)
+        }
+    }
+}
+
+// ---------------------------------------------------------------- layout
+let UI_BIG = 1 << 40
+
+fn ui_prepare(n: Node, path: str, parent: UiText) {
+    n.path = path
+    n.bs = n.th.merge(n.s)
+    let s = n.bs
+    if s.has & UI_TEXT_BITS == 0 {
+        n.tp = parent
+    } else {
+        let t = copy(parent)
+        if s.has & UI_B_FSIZE != 0 { t.size = s.fsize }
+        if s.has & UI_B_WEIGHT != 0 { t.weight = s.fweight }
+        if s.has & UI_B_ITALIC != 0 { t.italic = s.fitalic }
+        if s.has & UI_B_UNDER != 0 { t.underline = s.funder }
+        if s.has & UI_B_FAM != 0 { t.family = s.ffam }
+        if s.has & UI_B_TALIGN != 0 { t.align = s.talign }
+        if s.has & UI_B_LH != 0 { t.lh = s.lh }
+        if s.has & UI_B_NOWRAP != 0 { t.nowrap = s.nowrap_v }
+        if s.has & UI_B_RTL != 0 { t.rtl = s.rtl_v }
+        n.tp = t
+    }
+    if n.kind == UI_K_TEXT or n.kind == UI_K_TEXTBOX { n.rf = ui_font(n.tp) }
+    n.clips = s.has & UI_B_CLIP != 0
+    for i in 0..n.children.len() {
+        let c = n.children[i]
+        let name = if c.keyname.len() > 0 { c.keyname } else { int_to_str(i) }
+        ui_prepare(c, path + "/" + name, n.tp)
+    }
+}
+
+fn ui_pad_h(s: Style) -> int { return ui_sc(s.pl) + ui_sc(s.pr) + 2 * ui_sc(s.bw) }
+fn ui_pad_v(s: Style) -> int { return ui_sc(s.pt) + ui_sc(s.pb) + 2 * ui_sc(s.bw) }
+fn ui_mar_h(s: Style) -> int { if s.has & UI_B_MAR == 0 { return 0 }; return ui_sc(s.ml) + ui_sc(s.mr) }
+fn ui_mar_v(s: Style) -> int { if s.has & UI_B_MAR == 0 { return 0 }; return ui_sc(s.mt) + ui_sc(s.mb) }
+fn ui_is_abs(n: Node) -> bool { return n.bs.has & UI_B_ABS != 0 }
+
+fn ui_clamp_w(s: Style, w: int) -> int {
+    var v = w
+    if s.has & UI_B_MAXW != 0 { v = min(v, ui_sc(s.maxw)) }
+    if s.has & UI_B_MINW != 0 { v = max(v, ui_sc(s.minw)) }
+    return max(v, 0)
+}
+
+fn ui_clamp_h(s: Style, h: int) -> int {
+    var v = h
+    if s.has & UI_B_MAXH != 0 { v = min(v, ui_sc(s.maxh)) }
+    if s.has & UI_B_MINH != 0 { v = max(v, ui_sc(s.minh)) }
+    return max(v, 0)
+}
+
+// width set by the style (fixed or percentage of avail), or -1
+fn ui_fixed_w(s: Style, avail: int) -> int {
+    if s.has & UI_B_W != 0 { return ui_clamp_w(s, ui_sc(s.w_v)) }
+    if s.has & UI_B_WPCT != 0 and avail < UI_BIG { return ui_clamp_w(s, int(float(avail) * s.wpct / 100.0)) }
+    return -1
+}
+
+fn ui_fixed_h(s: Style, avail: int) -> int {
+    if s.has & UI_B_H != 0 { return ui_clamp_h(s, ui_sc(s.h_v)) }
+    if s.has & UI_B_HPCT != 0 and avail < UI_BIG { return ui_clamp_h(s, int(float(avail) * s.hpct / 100.0)) }
+    return -1
+}
+
+fn ui_gap(s: Style) -> int { return ui_sc(s.gap_v) }
+
+// natural size (border box, without margins) when at most avail_w wide
+fn ui_measure(n: Node, avail_w: int) -> (int, int) {
+    let s = n.bs
+    let fw = ui_fixed_w(s, avail_w)
+    let ph = ui_pad_h(s)
+    let pv = ui_pad_v(s)
+    var limit = if fw >= 0 { fw } else { avail_w }
+    if s.has & UI_B_MAXW != 0 { limit = min(limit, ui_sc(s.maxw)) }
+    let inner = max(limit - ph, 0)
+    var cw = 0
+    var ch = 0
+    if n.kind == UI_K_TEXT {
+        let f = n.rf!
+        let lines = ui_wrap(f, n.content, inner, n.tp.nowrap)
+        for l in lines { cw = max(cw, ui_text_w(f, l)) }
+        ch = lines.len() * ui_line_h(n)
+    } else if n.kind == UI_K_TEXTBOX {
+        cw = n.rf!.size * 10
+        ch = ui_line_h(n)
+    } else if n.kind == UI_K_IMAGE {
+        if let img = ui_load_image(n.content) {
+            cw = ui_sc(img.w)
+            ch = ui_sc(img.h)
+            if fw >= 0 and img.w > 0 { ch = (fw - ph) * img.h / img.w }
+        }
+    } else {
+        let gap = ui_gap(s)
+        var k = 0
+        if n.kind == UI_K_GRID {
+            let cols = n.cols
+            let cellw = if inner < UI_BIG { (inner - gap * (cols - 1)) / cols } else { UI_BIG }
+            var rowh = 0
+            var maxcw = 0
+            var i = 0
+            for c in n.children {
+                if ui_is_abs(c) { continue }
+                let (w, h) = ui_measure(c, cellw - ui_mar_h(c.bs))
+                maxcw = max(maxcw, w + ui_mar_h(c.bs))
+                rowh = max(rowh, h + ui_mar_v(c.bs))
+                i += 1
+                if i % cols == 0 {
+                    ch += rowh + (if i > cols { gap } else { 0 })
+                    rowh = 0
+                }
+            }
+            if i % cols != 0 { ch += rowh + (if i > cols { gap } else { 0 }) }
+            cw = maxcw * cols + gap * (cols - 1)
+        } else if n.kind == UI_K_ROW {
+            if s.wrap_v and inner < UI_BIG {
+                var lw = 0
+                var lh = 0
+                var cnt = 0
+                for c in n.children {
+                    if ui_is_abs(c) { continue }
+                    let (w, h) = ui_measure(c, inner - ui_mar_h(c.bs))
+                    let ow = w + ui_mar_h(c.bs)
+                    let oh = h + ui_mar_v(c.bs)
+                    if cnt > 0 and lw + gap + ow > inner {
+                        cw = max(cw, lw)
+                        ch += lh + gap
+                        lw = ow
+                        lh = oh
+                        cnt = 1
+                    } else {
+                        lw += (if cnt > 0 { gap } else { 0 }) + ow
+                        lh = max(lh, oh)
+                        cnt += 1
+                    }
+                }
+                cw = max(cw, lw)
+                ch += lh
+            } else {
+                for c in n.children {
+                    if ui_is_abs(c) { continue }
+                    let (w, h) = ui_measure(c, inner - ui_mar_h(c.bs))
+                    cw += w + ui_mar_h(c.bs)
+                    ch = max(ch, h + ui_mar_v(c.bs))
+                    k += 1
+                }
+                if k > 1 { cw += gap * (k - 1) }
+            }
+        } else if n.kind == UI_K_STACK {
+            for c in n.children {
+                let (w, h) = ui_measure(c, inner - ui_mar_h(c.bs))
+                cw = max(cw, w + ui_mar_h(c.bs))
+                ch = max(ch, h + ui_mar_v(c.bs))
+            }
+        } else {
+            for c in n.children {
+                if ui_is_abs(c) { continue }
+                let (w, h) = ui_measure(c, inner - ui_mar_h(c.bs))
+                cw = max(cw, w + ui_mar_h(c.bs))
+                ch += h + ui_mar_v(c.bs)
+                k += 1
+            }
+            if k > 1 { ch += gap * (k - 1) }
+        }
+    }
+    var w = if fw >= 0 { fw } else { ui_clamp_w(s, min(cw + ph, max(limit, ph))) }
+    if fw < 0 and n.kind != UI_K_TEXT and n.kind != UI_K_TEXTBOX { w = ui_clamp_w(s, cw + ph) }
+    let fh = ui_fixed_h(s, UI_BIG)
+    let h = if fh >= 0 { fh } else { ui_clamp_h(s, ch + pv) }
+    return (w, h)
+}
+
+// cross-axis offset for a child of size sz in a line of size avail
+fn ui_align_off(a: Align, avail: int, sz: int) -> int {
+    return match a {
+        Align.Center => (avail - sz) / 2
+        Align.End => avail - sz
+        _ => 0
+    }
+}
+
+// main-axis start offset and extra space between children
+fn ui_justify(j: Justify, free: int, count: int) -> (int, int) {
+    if free <= 0 or count == 0 { return (0, 0) }
+    return match j {
+        Justify.Start => (0, 0)
+        Justify.Center => (free / 2, 0)
+        Justify.End => (free, 0)
+        Justify.Between => if count > 1 { (0, free / (count - 1)) } else { (0, 0) }
+        Justify.Around => (free / (count * 2), free / count)
+        Justify.Evenly => (free / (count + 1), free / (count + 1))
+    }
+}
+
+fn ui_state_sy(path: str) -> int { return ui_scrolls.get(path, 0) }
+
+var ui_scrolls: {str: int} = {}
+
+fn ui_arrange(n: Node, x: int, y: int, w: int, h: int) {
+    n.x = x
+    n.y = y
+    n.w = w
+    n.h = h
+    let s = n.bs
+    let bw = ui_sc(s.bw)
+    let ix = x + bw + ui_sc(s.pl)
+    var iy = y + bw + ui_sc(s.pt)
+    let iw = max(w - ui_pad_h(s), 0)
+    let ih = max(h - ui_pad_v(s), 0)
+    if n.kind == UI_K_TEXT {
+        n.lines = ui_wrap(n.rf!, n.content, iw, n.tp.nowrap)
+        return
+    }
+    if n.children.len() == 0 { return }
+    let gap = ui_gap(s)
+    let is_scroll = n.content == "\x01scroll"
+    var sy = 0
+    if is_scroll {
+        sy = ui_state_sy(n.path)
+        iy -= sy
+    }
+    let flow: [Node] = []
+    for c in n.children {
+        if ui_is_abs(c) { ui_arrange_abs(c, x + bw, y + bw, w - 2 * bw, h - 2 * bw) } else { flow.push(c) }
+    }
+    let rtl = n.tp.rtl
+    if n.kind == UI_K_STACK {
+        for c in flow {
+            let cs = c.bs
+            let mh = ui_mar_h(cs)
+            let mv = ui_mar_v(cs)
+            let (mw, mhh) = ui_measure(c, iw - mh)
+            var cw = mw
+            var chh = mhh
+            if s.align_v == Align.Stretch and ui_fixed_w(cs, iw) < 0 { cw = iw - mh }
+            if s.align_v == Align.Stretch and ui_fixed_h(cs, ih) < 0 { chh = ih - mv }
+            let ox = ui_align_off(s.align_v, iw - mh, cw)
+            let oy = match s.just_v {
+                Justify.Center => (ih - mv - chh) / 2
+                Justify.End => ih - mv - chh
+                _ => 0
+            }
+            ui_arrange(c, ix + ui_sc(cs.ml * (if cs.has & UI_B_MAR != 0 { 1 } else { 0 })) + ox, iy + (if cs.has & UI_B_MAR != 0 { ui_sc(cs.mt) } else { 0 }) + oy, cw, chh)
+        }
+        n.content_h = ih
+        return
+    }
+    if n.kind == UI_K_GRID {
+        let cols = n.cols
+        let cellw = max((iw - gap * (cols - 1)) / cols, 0)
+        var cy = iy
+        var i = 0
+        while i < flow.len() {
+            var rowh = 0
+            for j in i..min(i + cols, flow.len()) {
+                let c = flow[j]
+                let (mw, mh) = ui_measure(c, cellw - ui_mar_h(c.bs))
+                rowh = max(rowh, mh + ui_mar_v(c.bs))
+            }
+            for j in i..min(i + cols, flow.len()) {
+                let c = flow[j]
+                let cs = c.bs
+                let col = j - i
+                let cx = if rtl { ix + iw - (col + 1) * cellw - col * gap } else { ix + col * (cellw + gap) }
+                let ml = if cs.has & UI_B_MAR != 0 { ui_sc(cs.ml) } else { 0 }
+                let mt = if cs.has & UI_B_MAR != 0 { ui_sc(cs.mt) } else { 0 }
+                var cw = cellw - ui_mar_h(cs)
+                let fw = ui_fixed_w(cs, cellw)
+                if fw >= 0 { cw = fw }
+                var chh = rowh - ui_mar_v(cs)
+                let fh = ui_fixed_h(cs, rowh)
+                if fh >= 0 { chh = fh }
+                ui_arrange(c, cx + ml, cy + mt, cw, chh)
+            }
+            cy += rowh + gap
+            i += cols
+        }
+        n.content_h = cy - gap - iy
+        ui_clamp_scroll(n, is_scroll, ih, sy)
+        return
+    }
+    if n.kind == UI_K_ROW {
+        if s.wrap_v {
+            ui_arrange_wrap(n, flow, ix, iy, iw, ih, gap, rtl)
+            return
+        }
+        ui_arrange_row(n, flow, ix, iy, iw, ih, gap, rtl)
+        return
+    }
+    // column
+    let count = flow.len()
+    let ws: [int] = []
+    let hs: [int] = []
+    var total = 0
+    var grow_sum = 0.0
+    for c in flow {
+        let cs = c.bs
+        let mh = ui_mar_h(cs)
+        var cw = 0
+        let fw = ui_fixed_w(cs, iw)
+        if fw >= 0 {
+            cw = fw
+        } else if s.align_v == Align.Stretch {
+            cw = ui_clamp_w(cs, iw - mh)
+        } else {
+            let (mw, _) = ui_measure(c, iw - mh)
+            cw = min(mw, iw - mh)
+        }
+        var chh = ui_fixed_h(cs, ih)
+        if chh < 0 {
+            let (_, mhh) = ui_measure(c, cw)
+            chh = mhh
+        }
+        ws.push(cw)
+        hs.push(chh)
+        total += chh + ui_mar_v(cs)
+        if cs.has & UI_B_GROW != 0 { grow_sum += cs.grow_v }
+    }
+    total += gap * max(count - 1, 0)
+    var free = ih - total
+    if is_scroll { free = 0 }
+    if free > 0 and grow_sum > 0.0 {
+        var left = free
+        for i in 0..count {
+            let cs = flow[i].bs
+            if cs.has & UI_B_GROW != 0 {
+                let add = int(float(free) * cs.grow_v / grow_sum)
+                hs[i] = ui_clamp_h(cs, hs[i] + add)
+                left -= add
+            }
+        }
+        free = 0
+    }
+    let (start, extra) = ui_justify(s.just_v, free, count)
+    var cy = iy + start
+    for i in 0..count {
+        let c = flow[i]
+        let cs = c.bs
+        let mh = ui_mar_h(cs)
+        let ml = if cs.has & UI_B_MAR != 0 { ui_sc(cs.ml) } else { 0 }
+        let mt = if cs.has & UI_B_MAR != 0 { ui_sc(cs.mt) } else { 0 }
+        let mb = if cs.has & UI_B_MAR != 0 { ui_sc(cs.mb) } else { 0 }
+        var a = s.align_v
+        if rtl {
+            if a == Align.Start or a == Align.Stretch { a = Align.End } else if a == Align.End { a = Align.Start }
+        }
+        let ox = ui_align_off(a, iw - mh, ws[i])
+        ui_arrange(c, ix + ml + ox, cy + mt, ws[i], hs[i])
+        cy += mt + hs[i] + mb + gap + extra
+    }
+    n.content_h = total
+    ui_clamp_scroll(n, is_scroll, ih, sy)
+}
+
+fn ui_clamp_scroll(n: Node, is_scroll: bool, ih: int, sy: int) {
+    if not is_scroll { return }
+    let maxs = max(n.content_h - ih, 0)
+    if sy > maxs {
+        ui_scrolls[n.path] = maxs
+        // lay out again with the corrected offset
+        ui_arrange(n, n.x, n.y, n.w, n.h)
+    }
+}
+
+fn ui_arrange_row(n: Node, flow: [Node], ix: int, iy: int, iw: int, ih: int, gap: int, rtl: bool) {
+    let s = n.bs
+    let count = flow.len()
+    let ws: [int] = []
+    var total = 0
+    var grow_sum = 0.0
+    var shrink_sum = 0
+    for c in flow {
+        let cs = c.bs
+        var cw = ui_fixed_w(cs, iw)
+        if cw < 0 {
+            let (mw, _) = ui_measure(c, iw - ui_mar_h(cs))
+            cw = mw
+            shrink_sum += cw
+        }
+        ws.push(cw)
+        total += cw + ui_mar_h(cs)
+        if cs.has & UI_B_GROW != 0 { grow_sum += cs.grow_v }
+    }
+    total += gap * max(count - 1, 0)
+    var free = iw - total
+    if free > 0 and grow_sum > 0.0 {
+        for i in 0..count {
+            let cs = flow[i].bs
+            if cs.has & UI_B_GROW != 0 { ws[i] = ui_clamp_w(cs, ws[i] + int(float(free) * cs.grow_v / grow_sum)) }
+        }
+        free = 0
+    } else if free < 0 and shrink_sum > 0 {
+        // too wide: shrink the children without a fixed width, in proportion to their size
+        let over = -free
+        for i in 0..count {
+            let cs = flow[i].bs
+            if ui_fixed_w(cs, iw) < 0 {
+                ws[i] = ui_clamp_w(cs, ws[i] - over * ws[i] / shrink_sum)
+            }
+        }
+        free = 0
+    }
+    let (start, extra) = ui_justify(s.just_v, free, count)
+    var cx = start
+    for i in 0..count {
+        let c = flow[i]
+        let cs = c.bs
+        let has_m = cs.has & UI_B_MAR != 0
+        let ml = if has_m { ui_sc(cs.ml) } else { 0 }
+        let mr = if has_m { ui_sc(cs.mr) } else { 0 }
+        let mt = if has_m { ui_sc(cs.mt) } else { 0 }
+        let mv = ui_mar_v(cs)
+        var chh = ui_fixed_h(cs, ih)
+        if chh < 0 {
+            if s.align_v == Align.Stretch {
+                chh = ui_clamp_h(cs, ih - mv)
+            } else {
+                let (_, mhh) = ui_measure(c, ws[i])
+                chh = mhh
+            }
+        }
+        let oy = ui_align_off(s.align_v, ih - mv, chh)
+        let left = cx + ml
+        let px = if rtl { ix + iw - left - ws[i] } else { ix + left }
+        ui_arrange(c, px, iy + mt + oy, ws[i], chh)
+        cx += ml + ws[i] + mr + gap + extra
+    }
+    n.content_h = ih
+}
+
+fn ui_arrange_wrap(n: Node, flow: [Node], ix: int, iy: int, iw: int, ih: int, gap: int, rtl: bool) {
+    let s = n.bs
+    var i = 0
+    var cy = iy
+    while i < flow.len() {
+        // collect one line
+        var lw = 0
+        var lh = 0
+        var j = i
+        let ws: [int] = []
+        let hs: [int] = []
+        while j < flow.len() {
+            let c = flow[j]
+            let (mw, mh) = ui_measure(c, iw - ui_mar_h(c.bs))
+            let ow = mw + ui_mar_h(c.bs)
+            if j > i and lw + gap + ow > iw { break }
+            lw += (if j > i { gap } else { 0 }) + ow
+            lh = max(lh, mh + ui_mar_v(c.bs))
+            ws.push(mw)
+            hs.push(mh)
+            j += 1
+        }
+        let (start, extra) = ui_justify(s.just_v, iw - lw, j - i)
+        var cx = start
+        for k in i..j {
+            let c = flow[k]
+            let cs = c.bs
+            let has_m = cs.has & UI_B_MAR != 0
+            let ml = if has_m { ui_sc(cs.ml) } else { 0 }
+            let mr = if has_m { ui_sc(cs.mr) } else { 0 }
+            let mt = if has_m { ui_sc(cs.mt) } else { 0 }
+            let cw = ws[k - i]
+            var chh = hs[k - i]
+            if s.align_v == Align.Stretch and ui_fixed_h(cs, lh) < 0 { chh = lh - ui_mar_v(cs) }
+            let oy = ui_align_off(s.align_v, lh - ui_mar_v(cs), chh)
+            let left = cx + ml
+            let px = if rtl { ix + iw - left - cw } else { ix + left }
+            ui_arrange(c, px, cy + mt + oy, cw, chh)
+            cx += ml + cw + mr + gap + extra
+        }
+        cy += lh + gap
+        i = j
+    }
+    n.content_h = cy - iy - gap
+}
+
+fn ui_arrange_abs(c: Node, px: int, py: int, pw: int, ph: int) {
+    let cs = c.bs
+    let l = ui_sc(cs.al)
+    let t = ui_sc(cs.at)
+    let r = ui_sc(cs.ar)
+    let b = ui_sc(cs.ab)
+    let (mw, mh) = ui_measure(c, pw)
+    var w = mw
+    var h = mh
+    if cs.al != UNSET and cs.ar != UNSET and ui_fixed_w(cs, pw) < 0 { w = pw - l - r }
+    if cs.at != UNSET and cs.ab != UNSET and ui_fixed_h(cs, ph) < 0 { h = ph - t - b }
+    var x = px
+    if cs.al != UNSET { x = px + l } else if cs.ar != UNSET { x = px + pw - r - w }
+    var y = py
+    if cs.at != UNSET { y = py + t } else if cs.ab != UNSET { y = py + ph - b - h }
+    ui_arrange(c, x, y, w, h)
+}
+
+// ---------------------------------------------------------------- painting
+struct UiAnim {
+    bg: int
+    fg: int
+    bc: int
+    tbg: int
+    tfg: int
+    tbc: int
+    fbg: int
+    ffg: int
+    fbc: int
+    t0: int
+}
+
+var ui_anims: {str: UiAnim} = {}
+var ui_animating = false
+var ui_hov: {str: bool} = {}
+var ui_press = ""
+var ui_focus = ""
+var ui_caret = 0
+var ui_caret_on = true
+var ui_tbscroll: {str: int} = {}
+
+fn ui_effective(n: Node) -> Style {
+    let hovered = ui_hov.has(n.path)
+    let pressed = ui_press.len() > 0 and ui_press == n.path and hovered
+    let focus = ui_focus.len() > 0 and ui_focus == n.path
+    if not hovered and not focus { return n.bs }
+    var e = n.th
+    if hovered and n.th.hov != nil { e = e.merge(n.th.hov!) }
+    if pressed and n.th.prs != nil { e = e.merge(n.th.prs!) }
+    if focus and n.th.foc != nil { e = e.merge(n.th.foc!) }
+    e = e.merge(n.s)
+    let interactive = n.click_f != nil or n.drag_f != nil
+    if hovered and n.s.hov != nil { e = e.merge(n.s.hov!) } else if hovered and interactive and n.s.has & UI_B_BG != 0 {
+        // a user background without a hover style: darken it a little, so the button still reacts
+        e = e.bg(ui_shade(e.bg_v, if pressed { 0.16 } else { 0.08 }))
+    }
+    if pressed and n.s.prs != nil { e = e.merge(n.s.prs!) }
+    if focus and n.s.foc != nil { e = e.merge(n.s.foc!) }
+    return e
+}
+
+fn ui_shade(c: int, amount: float) -> int {
+    let r = (c >> 16) & 255
+    let g = (c >> 8) & 255
+    let b = c & 255
+    if r * 299 + g * 587 + b * 114 < 128000 { return lighten(c, amount) }
+    return darken(c, amount)
+}
+
+fn ui_ease(t: float) -> float {
+    let u = 1.0 - t
+    return 1.0 - u * u * u
+}
+
+// colors of an element with a transition, moving toward the style's colors
+fn ui_animate(n: Node, e: Style) -> Style {
+    let now = time_ms()
+    let tbg = e.bg_v
+    let tfg = e.fg
+    let tbc = e.bc
+    let found = ui_anims.try_get(n.path)
+    if found == nil {
+        ui_anims[n.path] = UiAnim(tbg, tfg, tbc, tbg, tfg, tbc, tbg, tfg, tbc, now - 100000)
+        return e
+    }
+    let a = found!
+    if a.tbg != tbg or a.tfg != tfg or a.tbc != tbc {
+        a.fbg = a.bg
+        a.ffg = a.fg
+        a.fbc = a.bc
+        a.tbg = tbg
+        a.tfg = tfg
+        a.tbc = tbc
+        a.t0 = now
+    }
+    let t = float(now - a.t0) / float(max(e.trans, 1))
+    if t >= 1.0 {
+        a.bg = tbg
+        a.fg = tfg
+        a.bc = tbc
+        return e
+    }
+    ui_animating = true
+    let k = ui_ease(t)
+    a.bg = mix(a.fbg, tbg, k)
+    a.fg = mix(a.ffg, tfg, k)
+    a.bc = mix(a.fbc, tbc, k)
+    let r = copy(e)
+    r.bg_v = a.bg
+    r.fg = a.fg
+    r.bc = a.bc
+    return r
+}
+
+fn ui_paint(n: Node, inh_color: int) {
+    var e = ui_effective(n)
+    if e.has & UI_B_TRANS != 0 and e.trans > 0 { e = ui_animate(n, e) }
+    let saved_ga = ui_ga
+    if e.has & UI_B_OP != 0 { ui_ga = int(float(ui_ga) * e.op + 0.5) }
+    if ui_ga <= 0 {
+        ui_ga = saved_ga
+        return
+    }
+    let r0 = ui_sc(e.r0)
+    let r1 = ui_sc(e.r1)
+    let r2 = ui_sc(e.r2)
+    let r3 = ui_sc(e.r3)
+    if e.has & UI_B_SHADOW != 0 {
+        ui_shadow(n.x, n.y, n.w, n.h, r0, r1, r2, r3, ui_sc(e.shx), ui_sc(e.shy), ui_sc(e.shblur), ui_sc(e.shspread), e.shc)
+    }
+    if e.has & UI_B_BG != 0 {
+        let c2 = if e.has & UI_B_GRAD != 0 { e.bg2 } else { e.bg_v }
+        ui_rrect(n.x, n.y, n.w, n.h, r0, r1, r2, r3, 0, e.bg_v, c2, e.gangle)
+    }
+    let bw = ui_sc(e.bw)
+    if bw > 0 { ui_rrect(n.x, n.y, n.w, n.h, r0, r1, r2, r3, bw, e.bc, e.bc, 0.0) }
+    let color = if e.has & UI_B_FG != 0 { e.fg } else { inh_color }
+    let ix = n.x + bw + ui_sc(e.pl)
+    let iy = n.y + bw + ui_sc(e.pt)
+    let iw = n.w - ui_pad_h(e)
+    let ih = n.h - ui_pad_v(e)
+    if n.kind == UI_K_TEXT {
+        ui_paint_text(n, color, ix, iy, iw)
+    } else if n.kind == UI_K_TEXTBOX {
+        ui_paint_textbox(n, color, ix, iy, iw, ih)
+    } else if n.kind == UI_K_IMAGE {
+        if let img = ui_load_image(n.content) {
+            if n.w > 0 and n.h > 0 { ui_draw_image(ui_cover(n.content, img, n.w, n.h), n.x, n.y, r0, r1, r2, r3) }
+        }
+    }
+    if n.children.len() > 0 {
+        let sx0 = ui_cx0
+        let sy0 = ui_cy0
+        let sx1 = ui_cx1
+        let sy1 = ui_cy1
+        if n.clips {
+            ui_cx0 = max(ui_cx0, n.x + bw)
+            ui_cy0 = max(ui_cy0, n.y + bw)
+            ui_cx1 = min(ui_cx1, n.x + n.w - bw)
+            ui_cy1 = min(ui_cy1, n.y + n.h - bw)
+        }
+        if ui_cx0 < ui_cx1 and ui_cy0 < ui_cy1 {
+            for c in n.children {
+                if c.x < ui_cx1 and c.x + c.w > ui_cx0 and c.y < ui_cy1 and c.y + c.h > ui_cy0 or c.children.len() > 0 {
+                    ui_paint(c, color)
+                }
+            }
+            if n.content == "\x01scroll" and n.content_h > ih and ih > 0 {
+                // scroll bar
+                let sy = ui_state_sy(n.path)
+                let th = max(ih * ih / n.content_h, ui_sc(24))
+                let ty = iy + (ih - th) * sy / max(n.content_h - ih, 1)
+                let sw = ui_sc(if ui_hov.has(n.path) { 8 } else { 5 })
+                let c = if ui_hov.has(n.path) { fade(BLACK, 0.35) } else { fade(BLACK, 0.18) }
+                ui_rrect(n.x + n.w - bw - sw - ui_sc(3), ty, sw, th, sw / 2, sw / 2, sw / 2, sw / 2, 0, c, c, 0.0)
+            }
+        }
+        ui_cx0 = sx0
+        ui_cy0 = sy0
+        ui_cx1 = sx1
+        ui_cy1 = sy1
+    }
+    ui_ga = saved_ga
+}
+
+fn ui_line_x(n: Node, f: UiFont, line: str, ix: int, iw: int) -> int {
+    var a = n.tp.align
+    if n.tp.rtl {
+        if a == Align.Start { a = Align.End } else if a == Align.End { a = Align.Start }
+    }
+    return match a {
+        Align.Center => ix + (iw - ui_text_w(f, line)) / 2
+        Align.End => ix + iw - ui_text_w(f, line)
+        _ => ix
+    }
+}
+
+fn ui_paint_text(n: Node, color: int, ix: int, iy: int, iw: int) {
+    let f = n.rf!
+    let lh = ui_line_h(n)
+    var y = iy
+    for line in n.lines {
+        if line.len() > 0 and y < ui_cy1 and y + lh > ui_cy0 {
+            let m = ui_text_mask(f, line)
+            ui_draw_mask(m, ui_line_x(n, f, line, ix, iw) - 1, y + (lh - f.height) / 2, color)
+        }
+        y += lh
+    }
+}
+
+fn ui_shown_text(n: Node) -> str {
+    if not n.secret { return n.content }
+    var k = 0
+    for i in 0..n.content.len() {
+        if n.content.byte_at(i) & 0xC0 != 0x80 { k += 1 }
+    }
+    return "•" * k
+}
+
+// byte offset in the shown text for a caret at byte offset i of the real text
+fn ui_shown_index(n: Node, i: int) -> int {
+    if not n.secret { return i }
+    var k = 0
+    for j in 0..i {
+        if n.content.byte_at(j) & 0xC0 != 0x80 { k += 1 }
+    }
+    return k * 3
+}
+
+fn ui_paint_textbox(n: Node, color: int, ix: int, iy: int, iw: int, ih: int) {
+    let f = n.rf!
+    let lh = ui_line_h(n)
+    let focus = ui_focus == n.path
+    let shown = ui_shown_text(n)
+    let ty = iy + (ih - f.height) / 2
+    let sx0 = ui_cx0
+    let sy0 = ui_cy0
+    let sx1 = ui_cx1
+    let sy1 = ui_cy1
+    ui_cx0 = max(ui_cx0, ix)
+    ui_cx1 = min(ui_cx1, ix + iw)
+    ui_cy0 = max(ui_cy0, iy)
+    ui_cy1 = min(ui_cy1, iy + ih)
+    var scroll_x = ui_tbscroll.get(n.path, 0)
+    var caret_x = 0
+    if focus {
+        let ci = ui_shown_index(n, min(ui_caret, n.content.len()))
+        caret_x = ui_text_w(f, shown[..ci])
+        if caret_x - scroll_x > iw - 2 { scroll_x = caret_x - iw + 2 }
+        if caret_x - scroll_x < 0 { scroll_x = caret_x }
+        ui_tbscroll[n.path] = scroll_x
+    } else {
+        scroll_x = 0
+    }
+    if shown.len() == 0 {
+        if n.hint.len() > 0 { ui_draw_mask(ui_text_mask(f, n.hint), ix - 1, ty, mix(color, WHITE, 0.55) | 0xFF000000) }
+    } else {
+        ui_draw_mask(ui_text_mask(f, shown), ix - 1 - scroll_x, ty, color)
+    }
+    if focus and ui_caret_on {
+        ui_fill_rect(ix + caret_x - scroll_x, iy + (ih - lh) / 2 + ui_sc(2), max(ui_sc(1), 1), lh - ui_sc(4), color)
+    }
+    ui_cx0 = sx0
+    ui_cy0 = sy0
+    ui_cx1 = sx1
+    ui_cy1 = sy1
+}
+
+// draw the whole tree into the pixel buffer
+fn ui_render(root: Node, w: int, h: int) {
+    ui_fb_size(w, h)
+    ui_cx0 = 0
+    ui_cy0 = 0
+    ui_cx1 = w
+    ui_cy1 = h
+    ui_ga = 255
+    ui_animating = false
+    ui_fill_rect(0, 0, w, h, UI_PAGE)
+    ui_paint(root, UI_INK)
+}
+
+// ---------------------------------------------------------------- the window
+var ui_hwnd = 0
+var ui_views: [fn() -> Node] = []
+var ui_root: Node? = nil
+var ui_winw = 0
+var ui_winh = 0
+var ui_mx = -1
+var ui_my = -1
+var ui_tracking = false
+var ui_cursor_id = 32512
+var ui_timers: [fn()] = []
+var ui_timer_ms: [int] = []
+var ui_hi_surrogate = 0
+
+fn ui_layout() {
+    if ui_root == nil { return }
+    let root = ui_root!
+    ui_prepare(root, "", UiText())
+    ui_arrange(root, 0, 0, ui_winw, ui_winh)
+}
+
+fn ui_rebuild() {
+    if ui_views.len() == 0 { return }
+    ui_root = ui_views[0]()
+    ui_layout()
+    ui_update_hover()
+}
+
+// ask for the view to be rebuilt and the window to be redrawn (after changing data outside an event)
+fn ui_refresh() {
+    ui_rebuild()
+    if ui_hwnd != 0 { InvalidateRect(ui_hwnd, 0, 0) }
+}
+
+// close the window (ui_run returns)
+fn ui_quit() {
+    if ui_hwnd != 0 { DestroyWindow(ui_hwnd) }
+}
+
+// change the window title
+fn ui_title(title: str) {
+    if ui_hwnd != 0 { SetWindowTextW(ui_hwnd, ui_wide(title)) }
+}
+
+// run f every ms milliseconds while the window is open; the view is rebuilt after each call
+fn ui_every(ms: int, f: fn()) {
+    ui_timers.push(f)
+    ui_timer_ms.push(ms)
+    if ui_hwnd != 0 { SetTimer(ui_hwnd, 100 + ui_timers.len() - 1, ms, 0) }
+}
+
+// deepest element at (x, y): the chain from that element up to the root
+fn ui_hit(n: Node, x: int, y: int, out: [Node]) -> bool {
+    let inside = x >= n.x and x < n.x + n.w and y >= n.y and y < n.y + n.h
+    if n.clips and not inside { return false }
+    var i = n.children.len() - 1
+    while i >= 0 {
+        if ui_hit(n.children[i], x, y, out) {
+            out.push(n)
+            return true
+        }
+        i -= 1
+    }
+    if inside {
+        out.push(n)
+        return true
+    }
+    return false
+}
+
+fn ui_chain(x: int, y: int) -> [Node] {
+    let out: [Node] = []
+    if let r = ui_root { ui_hit(r, x, y, out) }
+    return out
+}
+
+fn ui_find(n: Node, path: str) -> Node? {
+    if n.path == path { return n }
+    if not path.starts_with(n.path) { return nil }
+    for c in n.children {
+        if let f = ui_find(c, path) { return f }
+    }
+    return nil
+}
+
+fn ui_cursor_of(c: Cursor) -> int {
+    return match c {
+        Cursor.Default => 32512
+        Cursor.Pointer => 32649
+        Cursor.Text => 32513
+        Cursor.Move => 32646
+        Cursor.NotAllowed => 32648
+        Cursor.ResizeH => 32644
+        Cursor.ResizeV => 32645
+    }
+}
+
+// recompute which elements are under the mouse; true when it changed
+fn ui_update_hover() -> bool {
+    let chain = ui_chain(ui_mx, ui_my)
+    var changed = chain.len() != ui_hov.len()
+    let nh: {str: bool} = {}
+    for c in chain {
+        nh[c.path] = true
+        if not ui_hov.has(c.path) { changed = true }
+    }
+    ui_hov = nh
+    var cur = 32512
+    for c in chain {
+        if c.bs.has & UI_B_CURSOR != 0 {
+            cur = ui_cursor_of(c.bs.cur)
+            break
+        }
+    }
+    ui_cursor_id = cur
+    return changed
+}
+
+fn ui_invalidate() {
+    if ui_hwnd != 0 { InvalidateRect(ui_hwnd, 0, 0) }
+}
+
+fn ui_drag_to(n: Node, x: int) {
+    if let f = n.drag_f {
+        let s = n.bs
+        let left = n.x + ui_sc(s.bw) + ui_sc(s.pl)
+        let w = max(n.w - ui_pad_h(s), 1)
+        f(clamp(float(x - left) / float(w), 0.0, 1.0))
+    }
+}
+
+fn ui_caret_from_x(n: Node, x: int) -> int {
+    let f = n.rf!
+    let s = n.bs
+    let left = n.x + ui_sc(s.bw) + ui_sc(s.pl) - ui_tbscroll.get(n.path, 0)
+    let t = n.content
+    var best = 0
+    var i = 0
+    while i <= t.len() {
+        if i == t.len() or t.byte_at(i) & 0xC0 != 0x80 {
+            let w = ui_text_w(f, ui_shown_text_prefix(n, i))
+            if left + w <= x + ui_text_w(f, "n") / 2 { best = i } else { break }
+        }
+        i += 1
+    }
+    return best
+}
+
+fn ui_shown_text_prefix(n: Node, i: int) -> str {
+    if n.secret { return "•" * (ui_shown_index(n, i) / 3) }
+    return n.content[..i]
+}
+
+fn ui_mouse_down(x: int, y: int) {
+    ui_mx = x
+    ui_my = y
+    let chain = ui_chain(x, y)
+    ui_press = ""
+    var new_focus = ""
+    for c in chain {
+        if c.kind == UI_K_TEXTBOX {
+            new_focus = c.path
+            ui_focus = c.path
+            ui_caret = ui_caret_from_x(c, x)
+            ui_caret_on = true
+            ui_press = c.path
+            break
+        }
+        if c.click_f != nil or c.drag_f != nil {
+            ui_press = c.path
+            if c.drag_f != nil {
+                ui_drag_to(c, x)
+                ui_rebuild()
+            }
+            break
+        }
+    }
+    ui_focus = new_focus
+    if ui_hwnd != 0 { SetCapture(ui_hwnd) }
+    ui_invalidate()
+}
+
+fn ui_mouse_up(x: int, y: int) {
+    if ui_hwnd != 0 { ReleaseCapture() }
+    let was = ui_press
+    ui_press = ""
+    if was.len() > 0 {
+        for c in ui_chain(x, y) {
+            if c.path == was {
+                if let f = c.click_f {
+                    f()
+                    ui_rebuild()
+                }
+                break
+            }
+        }
+    }
+    ui_update_hover()
+    ui_invalidate()
+}
+
+fn ui_mouse_move(x: int, y: int) {
+    ui_mx = x
+    ui_my = y
+    if ui_press.len() > 0 and ui_root != nil {
+        if let n = ui_find(ui_root!, ui_press) {
+            if n.drag_f != nil {
+                ui_drag_to(n, x)
+                ui_rebuild()
+                ui_invalidate()
+                return
+            }
+        }
+    }
+    if ui_update_hover() { ui_invalidate() }
+}
+
+fn ui_wheel(delta: int) {
+    for c in ui_chain(ui_mx, ui_my) {
+        if c.content == "\x01scroll" {
+            let sy = ui_state_sy(c.path)
+            ui_scrolls[c.path] = max(sy - delta * ui_sc(48) / 120, 0)
+            ui_layout()
+            ui_update_hover()
+            ui_invalidate()
+            return
+        }
+    }
+}
+
+fn ui_focused_box() -> Node? {
+    if ui_focus.len() == 0 or ui_root == nil { return nil }
+    let n = ui_find(ui_root!, ui_focus)
+    if n == nil or n!.kind != UI_K_TEXTBOX { return nil }
+    return n
+}
+
+fn ui_set_text(n: Node, t: str, caret: int) {
+    ui_caret = caret
+    ui_caret_on = true
+    if let f = n.input_f { f(t) }
+    ui_rebuild()
+    ui_invalidate()
+}
+
+fn ui_insert(s: str) {
+    if let n = ui_focused_box() {
+        let t = n.content
+        let c = min(ui_caret, t.len())
+        ui_set_text(n, t[..c] + s + t[c..], c + s.len())
+    }
+}
+
+fn ui_prev_char(t: str, i: int) -> int {
+    var j = i - 1
+    while j > 0 and t.byte_at(j) & 0xC0 == 0x80 { j -= 1 }
+    return max(j, 0)
+}
+
+fn ui_next_char(t: str, i: int) -> int {
+    var j = i + 1
+    while j < t.len() and t.byte_at(j) & 0xC0 == 0x80 { j += 1 }
+    return min(j, t.len())
+}
+
+fn ui_textboxes(n: Node, out: [str]) {
+    if n.kind == UI_K_TEXTBOX { out.push(n.path) }
+    for c in n.children { ui_textboxes(c, out) }
+}
+
+fn ui_key(vk: int) {
+    let ctrl = GetKeyState(17) & 0x8000 != 0
+    let shift = GetKeyState(16) & 0x8000 != 0
+    if vk == 9 and ui_root != nil {
+        // Tab: next (or previous) text box
+        let all: [str] = []
+        ui_textboxes(ui_root!, all)
+        if all.len() > 0 {
+            var i = all.index_of(ui_focus)
+            if shift { i = if i <= 0 { all.len() - 1 } else { i - 1 } } else { i = (i + 1) % all.len() }
+            ui_focus = all[i]
+            if let n = ui_focused_box() { ui_caret = n.content.len() }
+            ui_caret_on = true
+            ui_invalidate()
+        }
+        return
+    }
+    let found = ui_focused_box()
+    if found == nil { return }
+    let n = found!
+    let t = n.content
+    let c = min(ui_caret, t.len())
+    if vk == 8 {
+        if c > 0 {
+            let p = if ctrl { 0 } else { ui_prev_char(t, c) }
+            ui_set_text(n, t[..p] + t[c..], p)
+        }
+    } else if vk == 46 {
+        if c < t.len() {
+            let q = ui_next_char(t, c)
+            ui_set_text(n, t[..c] + t[q..], c)
+        }
+    } else if vk == 37 {
+        ui_caret = ui_prev_char(t, c)
+    } else if vk == 39 {
+        ui_caret = if c < t.len() { ui_next_char(t, c) } else { c }
+    } else if vk == 36 {
+        ui_caret = 0
+    } else if vk == 35 {
+        ui_caret = t.len()
+    } else if vk == 13 {
+        if let f = n.submit_f {
+            f()
+            ui_rebuild()
+        }
+    } else if vk == 27 {
+        ui_focus = ""
+    } else if ctrl and vk == 86 {
+        let p = ui_clipboard_get()
+        if p.len() > 0 { ui_insert(p.replace("\r\n", " ").replace("\n", " ")) }
+    } else if ctrl and vk == 67 {
+        if not n.secret { ui_clipboard_set(t) }
+    } else {
+        return
+    }
+    ui_caret_on = true
+    ui_invalidate()
+}
+
+fn ui_clipboard_get() -> str {
+    if OpenClipboard(ui_hwnd) == 0 { return "" }
+    var r = ""
+    let h = GetClipboardData(13)
+    if h != 0 {
+        let p = GlobalLock(h)
+        if p != 0 {
+            let w = p as ptr<byte>
+            var n = 0
+            while w[n * 2] != 0 or w[n * 2 + 1] != 0 { n += 1 }
+            r = ui_from_wide(w, n)
+            GlobalUnlock(h)
+        }
+    }
+    CloseClipboard()
+    return r
+}
+
+fn ui_clipboard_set(s: str) {
+    if OpenClipboard(ui_hwnd) == 0 { return }
+    EmptyClipboard()
+    let w = ui_wide(s)
+    let n = (ui_wlen + 1) * 2
+    let h = GlobalAlloc(2, n)
+    if h != 0 {
+        let p = GlobalLock(h) as ptr<byte>
+        for i in 0..n { p[i] = w[i] }
+        GlobalUnlock(h)
+        SetClipboardData(13, h)
+    }
+    CloseClipboard()
+}
+
+fn ui_client_size() {
+    let r = __alloc_atomic(16) as ptr<int>
+    GetClientRect(ui_hwnd, r)
+    ui_winw = ui_lo32s(r[1])
+    ui_winh = r[1] >> 32
+}
+
+fn ui_paint_window() {
+    let ps = __alloc_atomic(80) as ptr<int>
+    let dc = BeginPaint(ui_hwnd, ps)
+    if ui_winw > 0 and ui_winh > 0 {
+        if ui_root == nil { ui_rebuild() }
+        if let root = ui_root { ui_render(root, ui_winw, ui_winh) }
+        // pixels are kept as one int each; Windows wants 4 bytes each
+        let n = ui_winw * ui_winh
+        let packed = __alloc_atomic(n * 4 + 8) as ptr<int>
+        let fb = ui_fb as ptr<int>
+        let half = n / 2
+        for i in 0..half { packed[i] = (fb[2 * i] & 0xFFFFFFFF) | (fb[2 * i + 1] << 32) }
+        if n % 2 == 1 { packed[half] = fb[n - 1] & 0xFFFFFFFF }
+        SetDIBitsToDevice(dc, 0, 0, ui_winw, ui_winh, 0, 0, 0, ui_winh, packed, ui_bmi(ui_winw, -ui_winh), 0)
+    }
+    EndPaint(ui_hwnd, ps)
+    if ui_animating { SetTimer(ui_hwnd, 1, 16, 0) } else { KillTimer(ui_hwnd, 1) }
+}
+
+fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
+    let m = msg & 0xFFFFFFFF
+    if m == 15 {
+        ui_paint_window()
+        return 0
+    } else if m == 20 {
+        return 1
+    } else if m == 5 {
+        ui_client_size()
+        ui_layout()
+        return 0
+    } else if m == 512 {
+        if not ui_tracking {
+            let t = __alloc_atomic(24) as ptr<int>
+            t[0] = 24 | (2 << 32)
+            t[1] = h
+            t[2] = 0
+            TrackMouseEvent(t)
+            ui_tracking = true
+        }
+        ui_mouse_move(ui_lo16s(lp), ui_lo16s(lp >> 16))
+        return 0
+    } else if m == 675 {
+        ui_tracking = false
+        ui_mx = -1
+        ui_my = -1
+        if ui_update_hover() { ui_invalidate() }
+        return 0
+    } else if m == 513 {
+        ui_mouse_down(ui_lo16s(lp), ui_lo16s(lp >> 16))
+        return 0
+    } else if m == 514 {
+        ui_mouse_up(ui_lo16s(lp), ui_lo16s(lp >> 16))
+        return 0
+    } else if m == 522 {
+        ui_wheel(ui_lo16s(wp >> 16))
+        return 0
+    } else if m == 32 {
+        if lp & 0xFFFF == 1 {
+            SetCursor(LoadCursorW(0, ui_cursor_id))
+            return 1
+        }
+    } else if m == 256 {
+        ui_key(wp & 0xFFFF)
+        return 0
+    } else if m == 258 {
+        let ch = wp & 0xFFFF
+        if ch >= 0xD800 and ch < 0xDC00 {
+            ui_hi_surrogate = ch
+        } else if ch >= 0xDC00 and ch < 0xE000 {
+            if ui_hi_surrogate != 0 { ui_insert(ui_utf8(0x10000 + ((ui_hi_surrogate - 0xD800) << 10) + (ch - 0xDC00))) }
+            ui_hi_surrogate = 0
+        } else if ch >= 32 and ch != 127 and GetKeyState(17) & 0x8000 == 0 {
+            ui_insert(ui_utf8(ch))
+        }
+        return 0
+    } else if m == 275 {
+        let id = wp
+        if id == 1 {
+            ui_invalidate()
+        } else if id == 2 {
+            if ui_focus.len() > 0 {
+                ui_caret_on = not ui_caret_on
+                ui_invalidate()
+            }
+        } else if id >= 100 and id - 100 < ui_timers.len() {
+            ui_timers[id - 100]()
+            ui_rebuild()
+            ui_invalidate()
+        }
+        return 0
+    } else if m == 736 {
+        ui_scale = float((wp >> 16) & 0xFFFF) / 96.0
+        let r = lp as ptr<int>
+        let left = ui_lo32s(r[0])
+        let top = r[0] >> 32
+        SetWindowPos(h, 0, left, top, ui_lo32s(r[1]) - left, (r[1] >> 32) - top, 4 | 16)
+        ui_client_size()
+        ui_layout()
+        ui_invalidate()
+        return 0
+    } else if m == 2 {
+        PostQuitMessage(0)
+        return 0
+    }
+    return DefWindowProcW(h, msg, wp, lp)
+}
+
+// Open a window and show view() in it until the window is closed. width and height are the size of
+// the inside of the window. view runs again after every click, key press and timer, so it should
+// build the screen from the program's data each time.
+// With the environment variable ATF_UI_SCREENSHOT=picture.bmp set, no window opens: the first frame is
+// saved to that file instead (for tests and documentation of any UI program).
+fn ui_run(title: str, width: int, height: int, view: fn() -> Node) {
+    if let shot = getenv("ATF_UI_SCREENSHOT") {
+        if shot.len() > 0 {
+            if not ui_screenshot(view, width, height, shot) { panic("ui_run: could not write {shot}") }
+            return
+        }
+    }
+    ui_views = [view]
+    SetProcessDpiAwarenessContext(-4)
+    let inst = GetModuleHandleW(0)
+    let cls = ui_wide("ATFWindow")
+    let wp = ui_wndproc
+    let wc = __alloc_atomic(80) as ptr<int>
+    wc[0] = 80 | (3 << 32)
+    wc[1] = (wp as ptr<int>)[0]
+    wc[2] = 0
+    wc[3] = inst
+    wc[4] = LoadIconW(0, 32512)
+    wc[5] = LoadCursorW(0, 32512)
+    wc[6] = 0
+    wc[7] = 0
+    wc[8] = cls as int
+    wc[9] = 0
+    RegisterClassExW(wc)
+    let style = 0x00CF0000
+    ui_hwnd = CreateWindowExW(0, cls, ui_wide(title), style, 0x80000000, 0x80000000, width, height, 0, 0, inst, 0)
+    if ui_hwnd == 0 { panic("ui_run: could not create the window") }
+    let dpi = GetDpiForWindow(ui_hwnd)
+    ui_scale = if dpi > 0 { float(dpi) / 96.0 } else { 1.0 }
+    let r = __alloc_atomic(16) as ptr<int>
+    r[0] = 0
+    r[1] = (int(float(width) * ui_scale) & 0xFFFFFFFF) | (int(float(height) * ui_scale) << 32)
+    AdjustWindowRectExForDpi(r, style, 0, 0, max(dpi, 96))
+    let ww = ui_lo32s(r[1]) - ui_lo32s(r[0])
+    let wh = (r[1] >> 32) - (r[0] >> 32)
+    SetWindowPos(ui_hwnd, 0, 0, 0, ww, wh, 2 | 4)
+    ui_client_size()
+    for i in 0..ui_timers.len() { SetTimer(ui_hwnd, 100 + i, ui_timer_ms[i], 0) }
+    SetTimer(ui_hwnd, 2, 530, 0)
+    ui_rebuild()
+    ShowWindow(ui_hwnd, 5)
+    let msg = __alloc_atomic(64) as ptr<int>
+    while GetMessageW(msg, 0, 0, 0) > 0 {
+        TranslateMessage(msg)
+        DispatchMessageW(msg)
+    }
+    ui_hwnd = 0
+}
+
+// Draw view() into a picture file (.bmp) of width x height pixels without opening a window
+// (for tests, documentation and thumbnails). hover_x, hover_y: optional mouse position to show hover styles.
+fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1) -> bool {
+    ui_views = [view]
+    ui_scale = 1.0
+    ui_winw = width
+    ui_winh = height
+    ui_mx = hover_x
+    ui_my = hover_y
+    ui_rebuild()
+    ui_render(ui_root!, width, height)
+    let rowb = width * 4
+    let size = 54 + rowb * height
+    let out = str_new(size)
+    let d = str_data(out)
+    for i in 0..size { d[i] = 0 }
+    d[0] = 'B'
+    d[1] = 'M'
+    ui_put32(d, 2, size)
+    ui_put32(d, 10, 54)
+    ui_put32(d, 14, 40)
+    ui_put32(d, 18, width)
+    ui_put32(d, 22, height)
+    d[26] = 1
+    d[28] = 32
+    ui_put32(d, 34, rowb * height)
+    let fb = ui_fb as ptr<int>
+    for y in 0..height {
+        let o = 54 + (height - 1 - y) * rowb
+        for x in 0..width {
+            let p = fb[y * width + x]
+            d[o + x * 4] = byte(p & 255)
+            d[o + x * 4 + 1] = byte((p >> 8) & 255)
+            d[o + x * 4 + 2] = byte((p >> 16) & 255)
+            d[o + x * 4 + 3] = 255
+        }
+    }
+    return write_file(path, out)
+}
+
+fn ui_put32(d: ptr<byte>, at: int, v: int) {
+    d[at] = byte(v & 255)
+    d[at + 1] = byte((v >> 8) & 255)
+    d[at + 2] = byte((v >> 16) & 255)
+    d[at + 3] = byte((v >> 24) & 255)
+}

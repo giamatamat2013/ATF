@@ -1,0 +1,92 @@
+// todo.atf - a task list: type a task, press Enter, tick it off, filter and delete.
+// Shows: textbox with on_submit and placeholder, checkbox, keys for list items, a segmented control
+//        built from rows, hover styles, scroll, and building lists of nodes in a loop.
+// Run:   atf run examples/ui/todo.atf
+
+import "std/ui"
+
+struct Task {
+    title: str
+    done: bool = false
+}
+
+struct Todo {
+    tasks: [Task] = []
+    draft: str = ""
+    filter: int = 0    // 0 all, 1 active, 2 done
+    next_id: int = 0
+}
+
+let ACCENT = hex("#4f46e5")
+let CARD = style().bg(WHITE).radius(16).padding(20).gap(14).shadow(0, 10, 30, rgba(15, 23, 42, 0.08))
+let TAB = style().padding(6, 14).radius(8).color(hex("slate")).weight(500).cursor(Cursor.Pointer)
+    .hover(style().color(hex("#0f172a"))).transition(120)
+let TAB_ON = style().bg(WHITE).color(hex("#0f172a")).shadow(0, 1, 3, rgba(0, 0, 0, 0.12))
+let DELETE = style().padding(2, 8).radius(6).color(hex("#94a3b8")).cursor(Cursor.Pointer)
+    .hover(style().bg(hex("#fee2e2")).color(hex("#dc2626"))).transition(120)
+
+fn add_task(app: Todo) {
+    let t = app.draft.trim()
+    if t.len() == 0 { return }
+    app.tasks.push(Task(t))
+    app.draft = ""
+}
+
+fn tab(app: Todo, i: int, label: str) -> Node {
+    var t = text(label).style(TAB).on_click(|| { app.filter = i })
+    if app.filter == i { t = t.style(TAB_ON) }
+    return t
+}
+
+fn task_row(app: Todo, i: int) -> Node {
+    let task = app.tasks[i]
+    var title = text(task.title).grow()
+    if task.done { title = title.color(hex("#94a3b8")) }
+    return row([
+        checkbox(task.done, "", |v| { task.done = v }),
+        title,
+        text("✕").style(DELETE).on_click(|| { app.tasks.remove(i) }),
+    ]).gap(10).padding(10, 12).radius(10).hover(style().bg(hex("#f8fafc")))
+}
+
+fn view(app: Todo) -> Node {
+    let rows: [Node] = []
+    var left = 0
+    for i in 0..app.tasks.len() {
+        let t = app.tasks[i]
+        if not t.done { left += 1 }
+        if app.filter == 1 and t.done { continue }
+        if app.filter == 2 and not t.done { continue }
+        rows.push(task_row(app, i))
+    }
+    if rows.len() == 0 {
+        rows.push(text("Nothing here yet").color(hex("#94a3b8")).text_align(Align.Center).padding(24))
+    }
+    return column([
+        column([
+            text("My tasks").font_size(26).bold(),
+            row([
+                textbox(app.draft, |s| { app.draft = s })
+                    .placeholder("What needs to be done?")
+                    .on_submit(|| add_task(app))
+                    .grow(),
+                button("Add", || add_task(app)).bg(ACCENT).color(WHITE).border(0, TRANSPARENT),
+            ]).gap(8).align(Align.Stretch),
+            row([tab(app, 0, "All"), tab(app, 1, "Active"), tab(app, 2, "Done")])
+                .gap(2).padding(3).radius(10).bg(hex("#f1f5f9")),
+            scroll(rows).grow().gap(2),
+            row([text("{left} left").color(hex("slate")).font_size(13), spacer(),
+                 text("Clear done").font_size(13).color(ACCENT).on_click(|| {
+                     app.tasks = app.tasks.filter(|t| not t.done)
+                 })]),
+        ]).style(CARD).grow(),
+    ]).padding(24).grow().gradient(hex("#eef2ff"), hex("#fdf2f8"), 135.0)
+}
+
+fn main() {
+    let app = Todo()
+    app.tasks.push(Task("Try the ATF ui library"))
+    app.tasks.push(Task("Write a view function", true))
+    app.tasks.push(Task("Style it with chained methods"))
+    ui_run("Tasks", 440, 560, || view(app))
+}

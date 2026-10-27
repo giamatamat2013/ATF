@@ -6,7 +6,7 @@
 // comment written directly above it (or at the end of a one-line function).
 
 let PRELUDE = "atf/stdlib/prelude.atf"
-let MODULES = ["base64", "collections", "csv", "datetime", "hash", "hex", "json"]
+let MODULES = ["base64", "collections", "csv", "datetime", "hash", "hex", "json", "ui"]
 let OUT = "docs/STDLIB.md"
 
 // top-level prelude functions that only the runtime and the compiler use
@@ -23,7 +23,13 @@ let INTERNAL: {str: bool} = make_set([
 ])
 let INTERNAL_METHODS: {str: bool} = make_set(["grow", "tag"])
 // helper types of the modules; entries that mention them are left out
-let INTERNAL_TYPES = ["JsonParser", "SortedMapNode"]
+let INTERNAL_TYPES = ["JsonParser", "SortedMapNode", "UiFont", "UiText", "UiMask", "UiImage", "UiAnim"]
+// module types whose fields are internal: their methods are listed, their declaration is not
+let OPAQUE_TYPES: {str: bool} = make_set(["Style", "Node"])
+// methods of a type that are already listed under another type are left out (Node has every Style method)
+let SAME_METHODS_AS: {str: str} = {"Node": "Style"}
+// in std/ui the names that start with ui_ / UI_ are internal, except these
+let PUBLIC_UI: {str: bool} = make_set(["ui_run", "ui_screenshot", "ui_refresh", "ui_quit", "ui_title", "ui_every"])
 
 fn mentions_internal_type(s: str) -> bool {
     for t in INTERNAL_TYPES {
@@ -191,6 +197,7 @@ fn parse_source(text: str, prelude: bool, module_title: str) -> [Section] {
     var decl: [str] = []                         // lines of a struct/enum being collected
     var decl_doc = ""
     var skip_decl = false                        // inside the declaration of an internal type
+    var method_names: [str] = []                 // "Type.method" of the methods listed so far
     let lines = text.split("\n")
     for raw in lines {
         let line = raw.trim_end()
@@ -227,6 +234,11 @@ fn parse_source(text: str, prelude: bool, module_title: str) -> [Section] {
             pending = []
             continue
         }
+        if t.starts_with("// ----") {
+            // a group header inside an impl block
+            pending = []
+            continue
+        }
         if t.starts_with("//") {
             pending.push(t[2..].trim())
             continue
@@ -255,9 +267,13 @@ fn parse_source(text: str, prelude: bool, module_title: str) -> [Section] {
             if mentions_internal_type(sig) or mentions_internal_type(impl_type) { continue }
             if impl_type == "" {
                 if prelude and name in INTERNAL { continue }
+                if not prelude and name.starts_with("ui_") and not (name in PUBLIC_UI) { continue }
                 add_entry(cur, "Functions", Entry(sig, d), false)
             } else {
                 if name in INTERNAL_METHODS { continue }
+                let other = SAME_METHODS_AS.get(impl_type, "")
+                if other != "" and method_names.contains(other + "." + name) { continue }
+                method_names.push(impl_type + "." + name)
                 add_entry(cur, "Methods of `" + impl_type + "`", Entry(method_sig(sig, base_name(impl_type)), d), false)
             }
             continue
@@ -265,11 +281,13 @@ fn parse_source(text: str, prelude: bool, module_title: str) -> [Section] {
         if line.starts_with("const ") {
             let name = t[6..].split(" ")[0].split(":")[0]
             if prelude and not (name in PUBLIC_PRELUDE_CONSTS) { continue }
+            if name.starts_with("UI_") { continue }
             add_entry(cur, "Constants", Entry(t[6..], doc), false)
             continue
         }
         if not prelude and (line.starts_with("struct ") or line.starts_with("enum ")) {
-            if mentions_internal_type(line) {
+            let tname = t.split(" ")[1].split("{")[0].split("<")[0]
+            if mentions_internal_type(line) or tname in OPAQUE_TYPES {
                 if not line.ends_with("}") { skip_decl = true }
                 continue
             }

@@ -60,6 +60,14 @@ total: 5.25
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
   available; modules add JSON, CSV, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times, and
   collections (deque, priority queue, sorted map and set, counter, linked list).
+- **Windows and design.** `std/ui` builds graphical programs the way HTML and CSS do, written as ATF code: a view function
+  returns a tree of elements (`column`, `row`, `text`, `button`, `textbox`, ...), styled with chained methods
+  (`.padding(8, 16).bg(hex("#4f46e5")).radius(12).shadow(..)`). It supports flexbox and grid layout, gradients, soft shadows,
+  hover styles with transitions, reusable styles, images, scrolling, right-to-left text and high-DPI screens.
+
+  ```atf nocheck
+  button("Save", || save(doc)).bg(hex("#4f46e5")).color(WHITE).radius(10).hover(style().bg(hex("#4338ca")))
+  ```
 - **Self-hosted.** The compiler is written in ATF itself (`compiler/`) and compiles itself.
 
 ## Getting started
@@ -153,6 +161,7 @@ error: 'abc' is not a number
 - [docs/REFERENCE.md](docs/REFERENCE.md) - the exact rules of the language
 - [docs/STDLIB.md](docs/STDLIB.md) - every library function, method and module
 - [examples/](examples/) - 45 example programs, from `fizzbuzz` to a `bigint` calculator and a text adventure
+- [examples/ui/](examples/ui/) - window programs: a counter, a task list and an analytics dashboard
 
 Every code sample in these documents is compiled and run by `python tests/check_docs.py`.
 
@@ -169,13 +178,15 @@ Every code sample in these documents is compiled and run by `python tests/check_
 bin/atf.exe            the compiler (built from compiler/)
 compiler/              the compiler, written in ATF
 atf/                   the bootstrap compiler in Python (stage 0) and the prelude (stdlib/prelude.atf)
-stdlib/                importable modules:  import "std/json"
+stdlib/                importable modules:  import "std/json", import "std/ui"
 docs/                  tutorial, reference and library documentation
 examples/              example programs with their expected output
 tests/                 test suites (see below)
 bench/                 benchmarks
 editors/               editor support
 tools/                 tools written in ATF (tools/stdlib_docs.atf writes docs/STDLIB.md)
+CLAUDE.md              rules for Claude Code: every change also updates the docs, tutorials and the ATF skill
+.claude/skills/atf/    the Claude skill that teaches the language
 ```
 
 ## Building the compiler

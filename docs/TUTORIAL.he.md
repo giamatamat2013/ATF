@@ -2233,6 +2233,7 @@ fn main() {
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
+* `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
 
 ```atf
 import "std/json"
@@ -2333,6 +2334,97 @@ fn main() {
 
 * `include_str("file.txt")` מכניס את התוכן של קובץ טקסט לתוך התוכנית בזמן ההידור, כמחרוזת (הנתיב יחסי לקובץ המקור).
   כך אפשר לצרף נתונים לקובץ ה-`.exe` עצמו.
+
+### חלונות ועיצוב: `std/ui`
+
+עם `import "std/ui"` כותבים תוכניות עם חלון, כפתורים, תיבות טקסט וכל מה שיש בממשק מודרני. הרעיונות לקוחים מ-HTML
+ו-CSS, אבל הקוד הוא atf רגיל: המסך הוא עץ של ערכי `Node`, ולכל אחד מהם מוסיפים מתודות עיצוב בשרשרת.
+
+* **פונקציית תצוגה** (view) בונה את המסך מהנתונים שלכם. אחרי כל לחיצה, הקשה או טיימר היא רצה שוב והחלון מצויר מחדש.
+  לכן הקוד שמטפל באירועים רק משנה נתונים, ואף פעם לא צריך לעדכן רכיב ביד.
+* **רכיבים**: `column`, `row`, `box`, `stack`, `grid(cols, ...)`, `scroll`, `text`, `button`, `textbox`, `checkbox`,
+  `toggle`, `slider`, `progress`, `image`, `spacer`, `divider`.
+* **מתודות עיצוב** משתרשרות כמו מאפייני CSS: `.padding(8, 16)`, `.bg(..)`, `.radius(12)`, `.shadow(..)`, `.font_size(18)`.
+  עיצוב טקסט (`color`, `font_size`, `bold`) עובר בירושה לילדים, כמו ב-CSS.
+* **סגנון לשימוש חוזר** הוא ערך, כמו class ב-CSS: `let card = style().bg(WHITE).radius(16)` ואז `.style(card)`.
+  מחברים סגנונות עם `+`, ומוסיפים מצבים עם `.hover(style()...)`, `.pressed(..)`, `.focused(..)` ומעבר הדרגתי עם `.transition(ms)`.
+* **צבעים** הם מספרים: `hex("#4f46e5")`, `hex("slate")`, `rgb(79, 70, 229)`, `rgba(0, 0, 0, 0.25)`, `fade(c, 0.5)`,
+  `mix(a, b, 0.3)`, `lighten`, `darken`, `WHITE`, `BLACK`, `TRANSPARENT`.
+
+```atf
+import "std/ui"
+
+struct App { count: int = 0 }
+
+// סגנון לשימוש חוזר, כמו class ב-CSS
+let PRIMARY = style().bg(hex("#4f46e5")).color(WHITE).radius(10).padding(10, 18).border(0, TRANSPARENT)
+    .hover(style().bg(hex("#4338ca"))).transition(150)
+
+fn view(app: App) -> Node {
+    return column([
+        text("לחצתם {app.count} פעמים").font_size(22).bold(),
+        row([
+            button("איפוס", || { app.count = 0 }),
+            button("לחצו כאן", || { app.count += 1 }).style(PRIMARY),
+        ]).gap(8).rtl(),
+    ]).padding(24).gap(12).center().grow()
+}
+```
+
+`main` פותחת את החלון עם `ui_run(title, width, height, view)`, שחוזרת כשסוגרים את החלון:
+
+```atf nocheck
+fn main() {
+    let app = App()
+    ui_run("מונה", 420, 260, || view(app))
+}
+```
+
+איך כותבים ב-atf רעיונות של CSS:
+
+| CSS | atf |
+|---|---|
+| `display: flex; flex-direction: column` | `column([...])` (ושורה: `row([...])`) |
+| `gap: 12px; padding: 8px 16px` | `.gap(12).padding(8, 16)` (מאחד עד ארבעה ערכים, כמו ב-CSS) |
+| `align-items` / `justify-content` | `.align(Align.Center)` / `.justify(Justify.Between)` |
+| `flex-grow: 1` / `flex-wrap: wrap` | `.grow()` / `.wrap()` |
+| `width: 50%` | `.width_pct(50.0)` |
+| `display: grid` עם 3 עמודות | `grid(3, [...])` |
+| `background: linear-gradient(135deg, a, b)` | `.gradient(a, b, 135.0)` |
+| `border-radius: 999px` | `.pill()` |
+| `box-shadow: 0 4px 18px rgba(0,0,0,.1)` | `.shadow(0, 4, 18, rgba(0, 0, 0, 0.1))` |
+| `position: absolute; top: 6px; right: 6px` | `.absolute(UNSET, 6, 6)` (שמאל, למעלה, ימין, למטה) |
+| `:hover { ... }` | `.hover(style()...)` |
+| `transition: 150ms` | `.transition(150)` |
+| `direction: rtl` | `.rtl()` (לעברית ולערבית) |
+| `overflow: auto` | `scroll([...])` |
+
+לנתונים שמשתנים עם הזמן, כמו שעון או מספרים חיים, משתמשים ב-`ui_every(ms, fn)`, והתצוגה נבנית מחדש אחרי כל קריאה.
+כדי לקבל תמונה בלי לפתוח חלון (לבדיקות ולתיעוד) קוראים ל-`ui_screenshot(view, width, height, "file.bmp")`,
+או מריצים כל תוכנית ממשק עם משתנה הסביבה `ATF_UI_SCREENSHOT=file.bmp`.
+
+```atf
+import "std/ui"
+
+fn main() {
+    let card = style().bg(WHITE).radius(16).padding(20).gap(8).shadow(0, 8, 24, rgba(15, 23, 42, 0.12))
+    let view = || column([
+        column([
+            text("מסלול Pro").font_size(20).bold(),
+            text("פרויקטים בלי הגבלה וייצוא חי").color(hex("slate")),
+            text("שדרוג").color(WHITE).bg(hex("#4f46e5")).padding(6, 14).pill(),
+        ]).style(card).align(Align.Start),
+    ]).padding(24).grow().rtl().gradient(hex("#eef2ff"), hex("#fdf2f8"), 135.0)
+    println(ui_screenshot(view, 400, 220, "card.bmp"))
+}
+```
+```output
+true
+```
+
+כל הפונקציות מתוארות ב-[STDLIB.md](STDLIB.md#stdui). תוכניות גדולות יותר נמצאות ב-`examples/ui/`: `counter.atf`,
+`todo.atf` (רשימת משימות עם תיבת טקסט, תיבות סימון וסינון) ו-`dashboard.atf` (תפריט צד, כרטיסים עם מעברי צבע, גרף
+עמודות, הגדרות וערכת נושא בהירה וכהה).
 
 ### תרגיל 18.1
 

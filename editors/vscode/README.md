@@ -7,7 +7,8 @@ Created by **TAMAT2013**.
 ## Features
 
 - **Syntax highlighting** for ATF, including string interpolation, format specs, generics, lambdas and attributes. Also inside ```` ```atf ```` blocks in Markdown.
-- **Snippets** for functions, structs, enums, `impl`, `match`, loops and more.
+- **Snippets** for functions, structs, enums, `impl`, `match`, loops and more. Window programs with `std/ui`: `uiapp` (a whole program), `uistyle`, `uirow`, `uicol`.
+- **Automatic imports.** When you use a standard library name such as `json_parse`, `counter_from` or `button(...)`, the matching `import "std/..."` line is added at the top of the file.
 - **Compiler errors in the editor.** `atf check` runs when an `.atf` file is opened or saved, and the errors show up as red squiggles and in the Problems panel.
 - **Run and build commands** from the Command Palette:
   - `ATF: Run File` (also `Ctrl+F5` and the play button in the editor title bar)
@@ -32,6 +33,7 @@ Opening the ATF repository as the workspace is enough; running `install.cmd` fro
 | --- | --- | --- |
 | `atf.path` | `""` | Path to the ATF compiler. |
 | `atf.checkOnSave` | `true` | Run `atf check` on open and save and show the errors in the editor. |
+| `atf.autoImport` | `true` | Add missing `import "std/..."` lines automatically. |
 
 ## Install from source
 

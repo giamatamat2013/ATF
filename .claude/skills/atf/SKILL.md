@@ -19,7 +19,8 @@ ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), st
    atf repl
    ```
 3. Compiler errors are precise (message, `file:line:col`, a caret, often a `hint:`). Read the hint and fix; do not rewrite blindly.
-4. When unsure about a library function, check `references/stdlib.md` (copy of the repo's docs/STDLIB.md) or the repo's `docs/TUTORIAL.md`, `atf/stdlib/prelude.atf` (the always-available library, in ATF), and `examples/` (45 tested programs). Prefer the repo copies if present: they are newer than this skill.
+4. When changing the language, compiler or library in the ATF repo, follow its `CLAUDE.md`: the same piece of work updates the tutorials (English and Hebrew), README, `docs/STDLIB.md`, this skill and the VS Code extension.
+5. When unsure about a library function, check `references/stdlib.md` (copy of the repo's docs/STDLIB.md) or the repo's `docs/TUTORIAL.md`, `atf/stdlib/prelude.atf` (the always-available library, in ATF), and `examples/` (45 tested programs). Prefer the repo copies if present: they are newer than this skill.
 
 ## Program shape
 
@@ -123,7 +124,42 @@ let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 
 ### I/O, modules, misc
 `println print eprintln eprint flush`; `input(prompt)`; `read_line()` -> `str?` (nil at EOF); `read_all_stdin()`; `read_file(p)` -> `str?`; `write_file(p, text)` -> bool; `file_exists delete_file make_dir temp_dir getenv exit run_command run_process`; `rand_seed rand_int(lo,hi) rand_float rand_choice shuffle clock`; math `sqrt abs min max PI E INT_MAX INT_MIN`; `chr ord range range_from zip same copy`; GC: `gc gc_runs gc_live_bytes`.
-Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also base64, collections, csv, datetime, hash, hex). **One global namespace** across all files: give globals specific names; duplicate definitions are compile errors. `include_str("f.txt")` embeds a file at compile time.
+Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also base64, collections, csv, datetime, hash, hex, ui). **One global namespace** across all files: give globals specific names; duplicate definitions are compile errors. `include_str("f.txt")` embeds a file at compile time.
+
+### Windows and design (`import "std/ui"`)
+HTML/CSS ideas written as ATF. A view function returns a `Node` tree. It is rebuilt after every click, key press or timer tick, so handlers only change data.
+```atf
+import "std/ui"
+struct App { count: int = 0, name: str = "" }
+let CARD = style().bg(WHITE).radius(16).padding(20).gap(12).shadow(0, 8, 24, rgba(15, 23, 42, 0.1))  // like a CSS class
+let PRIMARY = style().bg(hex("#4f46e5")).color(WHITE).border(0, TRANSPARENT).hover(style().bg(hex("#4338ca"))).transition(150)
+fn view(app: App) -> Node {
+    return column([
+        text("Hello {app.name}").font_size(22).bold(),
+        textbox(app.name, |s| { app.name = s }).placeholder("Your name"),
+        row([button("-", || { app.count -= 1 }), spacer(), button("+", || { app.count += 1 }).style(PRIMARY)]).gap(8),
+    ]).style(CARD).margin(24)
+}
+fn main() { let app = App(); ui_run("Demo", 420, 300, || view(app)) }
+```
+- **Elements**: `column row box stack grid(cols, [..]) scroll text spacer divider image(path) button(label, fn()) textbox(value, fn(str)) checkbox(b, label, fn(bool)) toggle(b, fn(bool)) slider(f, fn(float)) progress(f)`. A `row` centres its children vertically by default.
+- **Style methods** chain on a `Node` or on a `style()` value:
+  - size: `width height size min_/max_width min_/max_height width_pct(50.0) height_pct grow(g=1.0)`
+  - spacing: `padding(a,b?,c?,d?) margin(..) gap` (CSS shorthand order)
+  - layout: `align(Align.Start|Center|End|Stretch) justify(Justify.Start|Center|End|Between|Around|Evenly) center wrap rtl`
+  - box: `bg gradient(from, to, angle=180.0) border(w, c) border_color radius(a,b?,c?,d?) pill shadow(x, y, blur, c, spread=0) opacity clip`
+  - text: `color font_size weight(100..900) bold italic underline family text_align(Align) line_height(f) nowrap`. Text styles are inherited by children.
+  - interaction: `cursor(Cursor.Pointer) hover(Style) pressed(Style) focused(Style) transition(ms) absolute(left?, top?, right?, bottom?)` (`UNSET` skips a side)
+  - combine styles: `.style(st)` or `a + b`
+- **Node-only methods**: `on_click(fn()) on_drag(fn(float)) on_submit(fn()) placeholder(s) password() key(k) add(child)`.
+- **Colors** are ints 0xAARRGGBB: `hex("#4f46e5")`, `hex("#fff")`, `hex("slate")` (Tailwind-like names), `rgb(r,g,b)`, `rgba(r,g,b,0.25)`, `fade(c, a)`, `mix(a, b, t)`, `lighten(c, t)`, `darken(c, t)`, `WHITE BLACK TRANSPARENT`.
+- **App functions**: `ui_run(title, w, h, view)`, `ui_every(ms, fn)` (timer; the view is rebuilt after it), `ui_refresh() ui_quit() ui_title(s)`.
+- **Without a window**: `ui_screenshot(view, w, h, "f.bmp") -> bool`, or run any UI program with the env var `ATF_UI_SCREENSHOT=f.bmp`. Use one of these to check a layout, or to test a UI program without blocking.
+- **Pitfalls**:
+  - Names starting with `ui_` / `UI_` are taken by the library, and so are `Node`, `Style`, `Align`, `Justify`, `Cursor`.
+  - In a reassigned chain use `var n = text(..)` then `n = n.style(..)`.
+  - Typed closure params need annotations when inferred types are unclear: `|label: str, c: Node| -> Node { ... }`.
+- **Examples**: `examples/ui/counter.atf`, `todo.atf`, `dashboard.atf`.
 
 ## Traps (things that commonly go wrong)
 

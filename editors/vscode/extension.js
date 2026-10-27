@@ -83,6 +83,10 @@ function check(doc) {
         return;
       }
       const found = parseOutput(stderr + "\n" + stdout, cwd, file);
+      // a library file (no fn main) is checked like a program, so its "no main" error is expected
+      if (!/^\s*fn\s+main\s*\(/m.test(doc.getText())) {
+        for (const [f, list] of found) found.set(f, list.filter((d) => !/^no 'main' function/.test(d.message)));
+      }
       // the compiler checks the whole program, so only this file's diagnostics are replaced
       diagnostics.delete(doc.uri);
       for (const [f, list] of found) diagnostics.set(vscode.Uri.file(f), list);
@@ -142,6 +146,7 @@ const PREFIX_MODULES = [
   [/^b64_/, "base64"], [/^hex_/, "hex"], [/^hash_/, "hash"], [/^csv_/, "csv"],
   [/^dt_/, "datetime"], [/^json_/, "json"],
   [/^(Stack|Deque|PriorityQueue|LinkedList|SortedMap|SortedSet|Counter|stack_new|deque_new|deque_from|pq_\w+|linked_list_\w+|sorted_map_\w+|sorted_set_\w+|counter_\w+)$/, "collections"],
+  [/^(ui_run|ui_screenshot|ui_every|ui_refresh|ui_quit|ui_title|Node|Style|Align|Justify|Cursor|style|column|row|stack|grid|scroll|button|textbox|checkbox|toggle|slider|progress|rgb|rgba|hex)$/, "ui"],
 ];
 
 let symbolCache; // { dir, mtime, map: Map<name, module> }
@@ -204,10 +209,17 @@ function autoImport(doc) {
   for (const m of clean.matchAll(/\b(?:fn|struct|enum|const|type|let|var)\s+([A-Za-z_]\w*)/g)) declared.add(m[1]);
   for (const m of clean.matchAll(/[(,|]\s*([A-Za-z_]\w*)\s*:/g)) declared.add(m[1]); // parameters
 
+  // the std modules themselves share one namespace and never import each other implicitly
+  const dir = stdlibDir(doc);
+  if (dir && path.resolve(path.dirname(doc.uri.fsPath)) === path.resolve(dir)) return;
+
   const needed = new Set();
-  for (const m of clean.matchAll(/(?<![.\w])([A-Za-z_]\w*)\b/g)) {
+  // lower-case names count only when called (text(...), row(...)): plain words like `text` or `color`
+  // are too often local names; capitalized names (types, enums, constants) count anywhere
+  for (const m of clean.matchAll(/(?<![.\w])([A-Za-z_]\w*)\b(\s*(?:\(|::<))?/g)) {
     const name = m[1];
     if (declared.has(name)) continue;
+    if (!m[2] && !/^[A-Z]/.test(name)) continue;
     const mod = moduleFor(name, symbols);
     if (mod && !imported.has(mod)) needed.add(mod);
   }

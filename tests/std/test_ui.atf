@@ -1,0 +1,81 @@
+// std/ui without a window: colors, styles, and layout checked through the pixels of ui_screenshot
+import "std/ui"
+
+let RED = hex("#ff0000")
+let BLUE = hex("#0000ff")
+let SHOT = temp_dir() + "\\atf_test_ui.bmp"
+
+// draws view into a w x h picture and returns it
+fn render(view: fn() -> Node, w: int, h: int, mx: int = -1, my: int = -1) -> str {
+    assert(ui_screenshot(view, w, h, SHOT, mx, my), "screenshot failed")
+    return read_file(SHOT)!
+}
+
+// the color of pixel (x, y) as "#rrggbb"
+fn px(pic: str, w: int, h: int, x: int, y: int) -> str {
+    let o = 54 + (h - 1 - y) * w * 4 + x * 4
+    let r = int(pic.byte_at(o + 2))
+    let g = int(pic.byte_at(o + 1))
+    let b = int(pic.byte_at(o))
+    return "#" + "{r:02x}{g:02x}{b:02x}"
+}
+
+fn colors() {
+    println("colors")
+    println("{hex("#2563eb"):X} {hex("#fff"):X} {hex("#11223380"):X} {hex("white"):X}")
+    println("{rgb(37, 99, 235):X} {rgba(0, 0, 0, 1.0):X} {fade(RED, 0.0):X}")
+    println("{mix(BLACK, WHITE, 0.5) & 0xFFFFFF:X} {lighten(BLACK, 1.0):X} {darken(WHITE, 1.0):X}")
+}
+
+fn layout() {
+    println("layout")
+    // a row with padding 10 and gap 10: boxes at x 10..50 and 60..120
+    let pic = render(|| row([box().size(40, 30).bg(RED), box().size(60, 30).bg(BLUE)])
+        .padding(10).gap(10).align(Align.Start).bg(WHITE).grow(), 200, 60)
+    println(px(pic, 200, 60, 30, 20), px(pic, 200, 60, 55, 20), px(pic, 200, 60, 90, 20), px(pic, 200, 60, 150, 20))
+
+    // grow takes the free space; spacer pushes the last box to the right edge
+    let g = render(|| column([
+        row([box().size(50, 20).bg(RED), box().height(20).grow().bg(BLUE)]),
+        row([spacer(), box().size(20, 20).bg(RED)]),
+    ]).bg(WHITE).grow(), 200, 40)
+    println(px(g, 200, 40, 25, 10), px(g, 200, 40, 190, 10), px(g, 200, 40, 170, 30), px(g, 200, 40, 190, 30))
+
+    // a percentage width replaces a fixed width set earlier (and the other way round)
+    let p = render(|| column([
+        box().width(180).width_pct(50.0).height(10).bg(RED),
+        box().width_pct(50.0).width(150).height(10).bg(BLUE),
+    ]).align(Align.Start).bg(WHITE).grow(), 200, 20)
+    println(px(p, 200, 20, 90, 5), px(p, 200, 20, 110, 5), px(p, 200, 20, 140, 15), px(p, 200, 20, 160, 15))
+
+    // grid: 2 equal columns
+    let gr = render(|| grid(2, [box().height(20).bg(RED), box().height(20).bg(BLUE)]).bg(WHITE).grow(), 200, 20)
+    println(px(gr, 200, 20, 50, 10), px(gr, 200, 20, 150, 10))
+}
+
+fn styles() {
+    println("styles")
+    // a reusable style combined with +, and a hover state
+    let base = style().size(100, 40).bg(RED)
+    let blue_on_hover = style().hover(style().bg(BLUE))
+    let view = || column([box().style(base + blue_on_hover)]).align(Align.Start).bg(WHITE).grow()
+    let normal = render(view, 120, 50)
+    let hovered = render(view, 120, 50, 50, 20)
+    println(px(normal, 120, 50, 50, 20), px(hovered, 120, 50, 50, 20))
+
+    // later properties win: .bg after .gradient replaces it
+    let st = style().gradient(RED, BLUE).bg(WHITE)
+    let w = render(|| column([box().size(50, 50).style(st)]).align(Align.Start).bg(BLACK).grow(), 60, 60)
+    println(px(w, 60, 60, 25, 5), px(w, 60, 60, 25, 45))
+
+    // absolute position inside a stack
+    let s = render(|| stack([box().size(100, 100).bg(WHITE), box().size(10, 10).bg(RED).absolute(UNSET, 0, 0)]), 100, 100)
+    println(px(s, 100, 100, 95, 5), px(s, 100, 100, 5, 5))
+}
+
+fn main() {
+    colors()
+    layout()
+    styles()
+    delete_file(SHOT)
+}

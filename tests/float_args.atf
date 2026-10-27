@@ -1,0 +1,15 @@
+// Calls with more than four arguments, where float arguments are computed expressions.
+// (Regression: a computed float first argument was overwritten while the stack arguments were copied.)
+
+fn first(a: float, b: float, c: float, d: float, e: float, f: float) -> float { return a }
+fn last(a: float, b: float, c: float, d: float, e: float, f: float) -> float { return f }
+fn mixed(a: float, b: int, c: float, d: int, e: float, f: int) -> float { return a + float(b) + c + float(d) + e + float(f) }
+
+fn main() {
+    for x in [0, 10] {
+        println(first(float(x) + 0.5, 1.0, 2.0, 3.0, 4.0, 5.0))
+        println(last(1.0, 2.0, 3.0, 4.0, 5.0, float(x) * 2.0))
+    }
+    let k = 3
+    println(mixed(float(k) / 2.0, k, 0.25, 4, float(k) + 0.5, 6))
+}

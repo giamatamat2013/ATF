@@ -298,5 +298,55 @@
     "body": [
       "defer ${0:println(\"done\")}"
     ]
+  },
+  "Window program": {
+    "prefix": "uiapp",
+    "description": "A window program with std/ui: data, a view function and ui_run",
+    "body": [
+      "import \"std/ui\"",
+      "",
+      "struct ${1:App} {",
+      "\tcount: int = 0",
+      "}",
+      "",
+      "fn view(app: ${1:App}) -> Node {",
+      "\treturn column([",
+      "\t\ttext(\"Clicked {app.count} times\").font_size(22).bold(),",
+      "\t\tbutton(\"Click me\", || { app.count += 1 }).bg(hex(\"#4f46e5\")).color(WHITE).border(0, TRANSPARENT),",
+      "\t\t$0",
+      "\t]).padding(24).gap(12).center().grow()",
+      "}",
+      "",
+      "fn main() {",
+      "\tlet app = ${1:App}()",
+      "\tui_run(\"${2:My app}\", ${3:480}, ${4:320}, || view(app))",
+      "}"
+    ]
+  },
+  "Reusable style": {
+    "prefix": "uistyle",
+    "description": "A reusable std/ui style (like a CSS class) with a hover state",
+    "body": [
+      "let ${1:CARD} = style().bg(${2:WHITE}).radius(${3:12}).padding(${4:16})",
+      "\t.hover(style().bg(${5:hex(\"#f1f5f9\")})).transition(150)"
+    ]
+  },
+  "Row of elements": {
+    "prefix": "uirow",
+    "description": "A std/ui row: children side by side with a gap",
+    "body": [
+      "row([",
+      "\t$0",
+      "]).gap(${1:8})"
+    ]
+  },
+  "Column of elements": {
+    "prefix": "uicol",
+    "description": "A std/ui column: children one under the other with a gap",
+    "body": [
+      "column([",
+      "\t$0",
+      "]).gap(${1:8})"
+    ]
   }
 }

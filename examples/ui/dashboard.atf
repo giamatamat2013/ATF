@@ -1,0 +1,211 @@
+// dashboard.atf - an analytics dashboard with a sidebar, gradient cards, a bar chart and settings.
+// Shows: a theme (light / dark) chosen at run time, reusable styles combined with +, hover and
+//        transitions, gradients, shadows, pills, grid, absolute badges, toggle, slider, progress,
+//        a timer (ui_every) that changes the data.
+// Run:   atf run examples/ui/dashboard.atf
+
+import "std/ui"
+
+struct Dash {
+    page: int = 0
+    dark: bool = false
+    live: bool = true
+    goal: float = 0.7
+    query: str = ""
+    visits: [int] = [42, 58, 37, 71, 64, 80, 55]
+    tick: int = 0
+}
+
+struct Theme {
+    page: int
+    card: int
+    ink: int
+    muted: int
+    line: int
+}
+
+fn theme(dark: bool) -> Theme {
+    if dark { return Theme(hex("#0b1120"), hex("#151e32"), hex("#e2e8f0"), hex("#8391a7"), hex("#24304a")) }
+    return Theme(hex("#f1f5f9"), WHITE, hex("#0f172a"), hex("#64748b"), hex("#e2e8f0"))
+}
+
+let ACCENT = hex("#6366f1")
+let DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+// styles that do not depend on the theme
+let ROUNDED = style().radius(16).padding(20)
+let NAV = style().padding(10, 14).radius(10).color(hex("#94a3b8")).weight(500)
+    .hover(style().bg(rgba(255, 255, 255, 0.06)).color(WHITE)).transition(150)
+let NAV_ON = style().bg(ACCENT).color(WHITE).hover(style().bg(ACCENT))
+
+fn card(t: Theme) -> Style {
+    return ROUNDED + style().bg(t.card).gap(12).shadow(0, 4, 18, rgba(15, 23, 42, 0.07))
+}
+
+fn nav_item(d: Dash, i: int, icon: str, label: str) -> Node {
+    var n = row([text(icon).family("Segoe UI Symbol").width(18), text(label)]).gap(12).style(NAV)
+        .on_click(|| { d.page = i })
+    if d.page == i { n = n.style(NAV_ON) }
+    return n
+}
+
+fn sidebar(d: Dash) -> Node {
+    return column([
+        row([
+            box([text("A").bold().color(WHITE)]).size(32, 32).radius(9).center()
+                .gradient(hex("#818cf8"), hex("#c084fc"), 135.0),
+            text("Atlas").font_size(18).bold().color(WHITE),
+        ]).gap(10).margin(0, 0, 20, 4),
+        nav_item(d, 0, "⌂", "Overview"),
+        nav_item(d, 1, "▤", "Reports"),
+        nav_item(d, 2, "☺", "Customers"),
+        nav_item(d, 3, "⚙", "Settings"),
+        spacer(),
+        column([
+            text("Pro plan").bold().color(WHITE),
+            text("Unlock live exports and more seats.").font_size(12).color(hex("#c7d2fe")),
+            text("Upgrade").font_size(13).weight(600).color(ACCENT).bg(WHITE).padding(6, 12).pill()
+                .on_click(|| {}),
+        ]).gap(8).padding(14).radius(14).gradient(hex("#4f46e5"), hex("#7c3aed"), 160.0).align(Align.Start),
+    ]).width(220).padding(20, 16).gap(4).bg(hex("#0f172a"))
+}
+
+fn stat(label: str, value: str, delta: str, from: int, to: int) -> Node {
+    return column([
+        text(label).font_size(13).color(rgba(255, 255, 255, 0.85)),
+        text(value).font_size(28).bold(),
+        text(delta).font_size(12).weight(600).bg(rgba(255, 255, 255, 0.22)).padding(2, 8).pill(),
+    ]).gap(6).padding(18).radius(16).gradient(from, to, 135.0).color(WHITE).align(Align.Start).grow()
+        .shadow(0, 8, 20, fade(to, 0.35))
+}
+
+fn chart(d: Dash, t: Theme) -> Node {
+    let bars: [Node] = []
+    var top = 1
+    for v in d.visits { top = max(top, v) }
+    for i in 0..d.visits.len() {
+        let h = d.visits[i] * 150 / top
+        var bar = box().height(h).radius(6, 6, 2, 2).gradient(hex("#a5b4fc"), ACCENT).transition(200)
+        if i == d.visits.len() - 1 { bar = bar.gradient(hex("#f9a8d4"), hex("#db2777")) }
+        bars.push(column([
+            spacer(),
+            text("{d.visits[i]}").font_size(11).color(t.muted).text_align(Align.Center),
+            bar,
+            text(DAYS[i]).font_size(11).color(t.muted).text_align(Align.Center),
+        ]).grow().gap(6))
+    }
+    return column([
+        row([
+            column([text("Visits this week").bold(), text("Updated every second").font_size(12).color(t.muted)]).gap(2),
+            spacer(),
+            text(if d.live { "● Live" } else { "Paused" }).font_size(12).weight(600)
+                .color(if d.live { hex("#16a34a") } else { t.muted })
+                .bg(if d.live { fade(hex("#22c55e"), 0.12) } else { fade(t.muted, 0.12) }).padding(4, 10).pill(),
+        ]),
+        row(bars).gap(12).height(200).align(Align.Stretch),
+    ]).style(card(t)).grow(2.0)
+}
+
+fn person(name: str, what: str, when: str, c: int) -> Node {
+    let initials = name[0..1]
+    return row([
+        box([text(initials).font_size(13).bold().color(WHITE)]).size(36, 36).pill().bg(c).center(),
+        column([text(name).weight(600), text(what).font_size(12).color(hex("#8391a7"))]).gap(1).grow(),
+        text(when).font_size(12).color(hex("#8391a7")),
+    ]).gap(10)
+}
+
+fn activity(t: Theme) -> Node {
+    return column([
+        text("Recent activity").bold(),
+        person("Noa Levi", "Upgraded to Pro", "2m", hex("#f97316")),
+        person("Omer Katz", "Exported a report", "18m", hex("#06b6d4")),
+        person("Dana Ross", "Invited 3 people", "1h", hex("#8b5cf6")),
+        person("Yossi Bar", "Opened a ticket", "3h", hex("#10b981")),
+    ]).style(card(t)).grow(1.0).gap(14)
+}
+
+fn settings(d: Dash, t: Theme) -> Node {
+    let line = |label: str, hint: str, control: Node| -> Node {
+        return row([
+            column([text(label).weight(600), text(hint).font_size(12).color(t.muted)]).gap(2).grow(),
+            control,
+        ]).gap(12)
+    }
+    return column([
+        text("Preferences").bold(),
+        line("Dark mode", "Easier on the eyes at night", toggle(d.dark, |v| { d.dark = v })),
+        divider().bg(t.line),
+        line("Live data", "Refresh the chart every second", toggle(d.live, |v| { d.live = v })),
+        divider().bg(t.line),
+        column([
+            row([text("Monthly goal").weight(600), spacer(), text("{int(d.goal * 100.0)}%").color(t.muted)]),
+            slider(d.goal, |v| { d.goal = v }).width_pct(100.0),
+        ]).gap(10),
+    ]).style(card(t)).grow(1.0)
+}
+
+fn goals(d: Dash, t: Theme) -> Node {
+    let item = |label: str, v: float, c: int| -> Node {
+        return column([
+            row([text(label).font_size(13), spacer(), text("{int(v * 100.0)}%").font_size(13).color(t.muted)]),
+            progress(v).width_pct(100.0).bg(t.line),
+        ]).gap(6)
+    }
+    return column([
+        text("Targets").bold(),
+        item("Revenue", d.goal, ACCENT),
+        item("New customers", 0.45, ACCENT),
+        item("Retention", 0.82, ACCENT),
+        grid(3, [
+            text("Q1").text_align(Align.Center).padding(6).radius(8).bg(fade(ACCENT, 0.1)).color(ACCENT).weight(600),
+            text("Q2").text_align(Align.Center).padding(6).radius(8).bg(fade(ACCENT, 0.1)).color(ACCENT).weight(600),
+            text("Q3").text_align(Align.Center).padding(6).radius(8).border(1, t.line).color(t.muted),
+        ]).gap(8),
+    ]).style(card(t)).grow(1.0)
+}
+
+fn header(d: Dash, t: Theme) -> Node {
+    return row([
+        column([
+            text("Good morning, Eden").font_size(24).bold(),
+            text("Here is what happened with your store today.").color(t.muted),
+        ]).gap(2),
+        spacer(),
+        textbox(d.query, |s| { d.query = s }).placeholder("Search…").width(200)
+            .bg(t.card).color(t.ink).border(1, t.line),
+        stack([
+            box([text("🔔").family("Segoe UI Emoji").font_size(16)]).size(40, 40).radius(12).bg(t.card)
+                .border(1, t.line).center(),
+            box().size(10, 10).pill().bg(hex("#ef4444")).border(2, t.card).absolute(UNSET, 6, 6),
+        ]),
+    ]).gap(12)
+}
+
+fn view(d: Dash) -> Node {
+    let t = theme(d.dark)
+    return row([
+        sidebar(d),
+        scroll([
+            header(d, t),
+            row([
+                stat("Revenue", "$48,210", "+12.4%", hex("#6366f1"), hex("#8b5cf6")),
+                stat("Orders", "1,284", "+4.1%", hex("#06b6d4"), hex("#3b82f6")),
+                stat("Visitors", "{d.visits[d.visits.len() - 1] * 211}", "+8.0%", hex("#f97316"), hex("#ec4899")),
+            ]).gap(16),
+            row([chart(d, t), activity(t)]).gap(16).align(Align.Stretch),
+            row([settings(d, t), goals(d, t)]).gap(16).align(Align.Stretch),
+        ]).grow().padding(24).gap(20).bg(t.page).color(t.ink),
+    ]).align(Align.Stretch)
+}
+
+fn main() {
+    let d = Dash()
+    ui_every(1000, || {
+        if not d.live { return }
+        d.tick += 1
+        let last = d.visits.len() - 1
+        d.visits[last] = 40 + (d.visits[last] * 37 + d.tick * 13) % 50
+    })
+    ui_run("Atlas dashboard", 1100, 720, || view(d))
+}

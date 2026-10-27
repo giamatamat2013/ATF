@@ -29,6 +29,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/hash](#stdhash)
   - [std/hex](#stdhex)
   - [std/json](#stdjson)
+  - [std/ui](#stdui)
 
 ## Built-in functions
 
@@ -1025,3 +1026,154 @@ enum JsonValue {
 - `.remove(key: str) -> bool` - removes a member of an object; true if it was there
 - `.push(v: JsonValue)` - appends to an array (does nothing for other values)
 - `.to_str() -> str` - compact JSON text (used by println and string interpolation)
+
+## std/ui
+
+Windows, layout and styling for graphical programs (Windows).
+
+```text
+import "std/ui"
+
+struct App { count: int = 0 }
+
+fn view(app: App) -> Node {
+    return column([
+        text("Clicked {app.count} times").font_size(22).bold(),
+        button("Click me", || { app.count += 1 }).bg(hex("#2563eb")).color(WHITE),
+    ]).padding(24).gap(12).center()
+}
+
+fn main() {
+    let app = App()
+    ui_run("Counter", 420, 260, || view(app))
+}
+```
+
+The idea is the one of HTML + CSS, written as ATF code:
+```text
+- the screen is a tree of Node values built by a view function (column, row, text, button, ...)
+- every Node takes CSS-like style methods that chain: .padding(8, 16) .bg(..) .radius(12) .shadow(..)
+- layout is flexbox: rows and columns with gap, align, justify, grow, wrap, plus grid and absolute positions
+- reusable styles are values:  let card = style().bg(WHITE).radius(16)   then  .style(card)
+  styles combine with +  (card + raised), and have states: .hover(style()...) .pressed(..) .focused(..)
+- text styles (color, font_size, bold, ...) are inherited by the children, like in CSS
+- after every event (click, typing, timer) the view function runs again and the window is redrawn,
+  so the program only changes its own data; there is no need to update widgets by hand
+```
+Colors are ints 0xAARRGGBB: hex("#2563eb"), rgb(37, 99, 235), rgba(0, 0, 0, 0.3), WHITE, BLACK, TRANSPARENT.
+Lengths are in pixels at 100% screen scale; they are scaled for high-DPI screens automatically.
+Every method of Style also works directly on a Node:  text("Hi").bold().color(WHITE).padding(8)
+Without a window (tests, docs): ui_screenshot(view, w, h, "shot.bmp"), or run any UI program with
+the environment variable ATF_UI_SCREENSHOT=shot.bmp.
+
+**Constants**
+
+- `WHITE = 0xFFFFFFFF`
+- `BLACK = 0xFF000000`
+- `TRANSPARENT = 0`
+- `UNSET = -999999`
+
+**Types**
+
+```text
+enum Align { Start, Center, End, Stretch }
+```
+
+```text
+enum Justify { Start, Center, End, Between, Around, Evenly }
+```
+
+```text
+enum Cursor { Default, Pointer, Text, Move, NotAllowed, ResizeH, ResizeV }
+```
+
+
+**Functions**
+
+- `fn rgb(r: int, g: int, b: int) -> int` - opaque color from red, green, blue (0..255): rgb(37, 99, 235)
+- `fn rgba(r: int, g: int, b: int, a: float) -> int` - color with opacity a from 0.0 (invisible) to 1.0 (opaque), like CSS: rgba(0, 0, 0, 0.25)
+- `fn hex(s: str) -> int` - CSS color text: "#rgb", "#rrggbb", "#rrggbbaa" or a name ("white", "tomato", "slate", ...)
+- `fn mix(a: int, b: int, t: float) -> int` - the color between a and b: mix(a, b, 0.0) == a, mix(a, b, 1.0) == b
+- `fn lighten(c: int, amount: float) -> int` - lighter / darker version of a color (amount 0.0 .. 1.0), keeping its opacity
+- `fn darken(c: int, amount: float) -> int`
+- `fn fade(c: int, a: float) -> int` - the same color with opacity a (0.0 .. 1.0): fade(BLACK, 0.2)
+- `fn style() -> Style` - an empty style, to build a reusable set of properties: let card = style().bg(WHITE).radius(12)
+- `fn column(children: [Node] = []) -> Node` - children one under the other (a vertical flex box)
+- `fn box(children: [Node] = []) -> Node` - same as column
+- `fn row(children: [Node] = []) -> Node` - children side by side (a horizontal flex box); they are centered vertically unless .align(..) says otherwise
+- `fn stack(children: [Node] = []) -> Node` - children on top of each other, all in the same place (for layers, overlays, badges)
+- `fn grid(cols: int, children: [Node] = []) -> Node` - a table of cols equal columns; children fill it row by row
+- `fn scroll(children: [Node] = []) -> Node` - a column whose content scrolls with the mouse wheel when it is taller than the box
+- `fn text(s: str) -> Node` - text; long text wraps at word boundaries, "\n" starts a new line
+- `fn spacer() -> Node` - an empty element that takes the free space (pushes its neighbours apart)
+- `fn divider() -> Node` - a thin line between items
+- `fn button(label: str, on_click: fn()) -> Node` - a clickable button with a text label
+- `fn textbox(value: str, on_input: fn(str)) -> Node` - a one-line text field: shows value, calls on_input(new value) when the user types
+- `fn checkbox(checked: bool, label: str, on_change: fn(bool)) -> Node` - a check box with a label; on_change gets the new state
+- `fn toggle(on: bool, on_change: fn(bool)) -> Node` - an on/off switch; on_change gets the new state
+- `fn slider(value: float, on_change: fn(float)) -> Node` - a horizontal slider for a value from 0.0 to 1.0; on_change gets the new value while dragging
+- `fn progress(value: float) -> Node` - a progress bar for a value from 0.0 to 1.0
+- `fn image(path: str) -> Node` - a picture from a file (PNG, JPG, BMP, GIF); without a size it shows at its natural size. The picture fills the box and is cut to keep its proportions (CSS object-fit: cover).
+- `fn ui_refresh()` - ask for the view to be rebuilt and the window to be redrawn (after changing data outside an event)
+- `fn ui_quit()` - close the window (ui_run returns)
+- `fn ui_title(title: str)` - change the window title
+- `fn ui_every(ms: int, f: fn())` - run f every ms milliseconds while the window is open; the view is rebuilt after each call
+- `fn ui_run(title: str, width: int, height: int, view: fn() -> Node)` - Open a window and show view() in it until the window is closed. width and height are the size of the inside of the window. view runs again after every click, key press and timer, so it should build the screen from the program's data each time. With the environment variable ATF_UI_SCREENSHOT=picture.bmp set, no window opens: the first frame is saved to that file instead (for tests and documentation of any UI program).
+- `fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1) -> bool` - Draw view() into a picture file (.bmp) of width x height pixels without opening a window (for tests, documentation and thumbnails). hover_x, hover_y: optional mouse position to show hover styles.
+
+**Methods of `Style`**
+
+- `.width(v: int) -> Style`
+- `.height(v: int) -> Style`
+- `.size(w: int, h: int) -> Style`
+- `.min_width(v: int) -> Style`
+- `.max_width(v: int) -> Style`
+- `.min_height(v: int) -> Style`
+- `.max_height(v: int) -> Style`
+- `.width_pct(p: float) -> Style` - width as a percentage of the parent's inner width
+- `.height_pct(p: float) -> Style`
+- `.padding(a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Style`
+- `.margin(a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Style`
+- `.gap(v: int) -> Style`
+- `.align(a: Align) -> Style` - cross-axis placement of the children (CSS align-items)
+- `.justify(j: Justify) -> Style` - main-axis distribution of the children (CSS justify-content)
+- `.center() -> Style` - children in the middle on both axes
+- `.wrap() -> Style` - a row that continues on the next line when it is full (CSS flex-wrap)
+- `.rtl() -> Style` - right-to-left: rows start on the right and text aligns right (Hebrew, Arabic)
+- `.bg(c: int) -> Style`
+- `.gradient(from: int, to: int, angle: float = 180.0) -> Style` - linear gradient; angle in degrees like CSS (180 = top to bottom, 90 = left to right)
+- `.border(w: int, c: int) -> Style`
+- `.border_color(c: int) -> Style`
+- `.radius(a: int, b: int = UNSET, c: int = UNSET, d: int = UNSET) -> Style` - corner radius: 1 value for all corners, or (top-left, top-right, bottom-right, bottom-left)
+- `.pill() -> Style` - fully rounded ends (a pill or a circle)
+- `.shadow(x: int, y: int, blur: int, c: int, spread: int = 0) -> Style` - drop shadow (CSS box-shadow): offset x, y, blur radius, color, spread
+- `.opacity(o: float) -> Style`
+- `.clip() -> Style` - cut the children at the edges of the box
+- `.color(c: int) -> Style`
+- `.font_size(v: int) -> Style`
+- `.weight(w: int) -> Style` - 100 (thin) .. 400 (normal) .. 700 (bold) .. 900 (black)
+- `.bold() -> Style`
+- `.italic() -> Style`
+- `.underline() -> Style`
+- `.family(f: str) -> Style`
+- `.text_align(a: Align) -> Style`
+- `.line_height(f: float) -> Style` - line height as a multiple of the font size (1.5 = one and a half)
+- `.nowrap() -> Style` - keep text on one line
+- `.cursor(c: Cursor) -> Style`
+- `.hover(h: Style) -> Style` - extra properties while the mouse is over the element (CSS :hover)
+- `.pressed(h: Style) -> Style` - extra properties while the mouse button is held on the element (CSS :active)
+- `.focused(h: Style) -> Style` - extra properties while a text box has the keyboard (CSS :focus)
+- `.transition(ms: int) -> Style` - animate color changes (background, text, border) over ms milliseconds
+- `.absolute(left: int = UNSET, top: int = UNSET, right: int = UNSET, bottom: int = UNSET) -> Style` - take the element out of the flow and place it relative to its parent's box (CSS position: absolute)
+- `.merge(o: Style) -> Style` - this style with the properties set in o on top
+
+**Methods of `Node`**
+
+- `.style(st: Style) -> Node` - add the properties of a reusable style
+- `.on_click(f: fn()) -> Node` - run f when the element is clicked (the view is rebuilt afterwards)
+- `.on_drag(f: fn(float)) -> Node` - while the mouse is pressed on the element: f(position 0.0 .. 1.0 across its width)
+- `.on_submit(f: fn()) -> Node` - text box: f runs when Enter is pressed
+- `.placeholder(s: str) -> Node` - text box: grey text shown while it is empty
+- `.password() -> Node` - text box: show dots instead of the letters
+- `.key(k: str) -> Node` - a stable name, so the element keeps its state (focus, scroll) when the list around it changes
+- `.add(c: Node) -> Node` - add one more child

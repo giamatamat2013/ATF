@@ -2315,6 +2315,99 @@ Things to remember:
 * `include_str("file.txt")` puts the contents of a file into your program as a string when it is compiled (the path is
   relative to the source file). The program then does not need the file at run time.
 
+### Windows and design: `std/ui`
+
+`import "std/ui"` gives you windows with buttons, text boxes and the rest of a modern interface. The ideas come from HTML
+and CSS, but you write ordinary ATF: the screen is a tree of `Node` values, and every node takes chained style methods.
+
+* A **view function** builds the screen from your data. After every click, key press or timer tick it runs again and the
+  window is redrawn, so your event handlers only change data; you never update a widget by hand.
+* **Elements**: `column`, `row`, `box`, `stack`, `grid(cols, ...)`, `scroll`, `text`, `button`, `textbox`, `checkbox`,
+  `toggle`, `slider`, `progress`, `image`, `spacer`, `divider`.
+* **Style methods** chain like CSS properties: `.padding(8, 16)`, `.bg(..)`, `.radius(12)`, `.shadow(..)`, `.font_size(18)`.
+  Text styles such as `color`, `font_size` and `bold` are inherited by the children, as in CSS.
+* **Reusable styles** are values, like CSS classes: `let card = style().bg(WHITE).radius(16)`, used with `.style(card)`.
+  Combine them with `+`, and give them states with `.hover(style()...)`, `.pressed(..)`, `.focused(..)` and `.transition(ms)`.
+* **Colors** are ints: `hex("#4f46e5")`, `hex("slate")`, `rgb(79, 70, 229)`, `rgba(0, 0, 0, 0.25)`, `fade(c, 0.5)`,
+  `mix(a, b, 0.3)`, `lighten`, `darken`, `WHITE`, `BLACK`, `TRANSPARENT`.
+
+<!-- id: ui-counter -->
+```atf
+import "std/ui"
+
+struct App { count: int = 0 }
+
+// a reusable style, like a CSS class
+let PRIMARY = style().bg(hex("#4f46e5")).color(WHITE).radius(10).padding(10, 18).border(0, TRANSPARENT)
+    .hover(style().bg(hex("#4338ca"))).transition(150)
+
+fn view(app: App) -> Node {
+    return column([
+        text("Clicked {app.count} times").font_size(22).bold(),
+        row([
+            button("Reset", || { app.count = 0 }),
+            button("Click me", || { app.count += 1 }).style(PRIMARY),
+        ]).gap(8),
+    ]).padding(24).gap(12).center().grow()
+}
+```
+
+`main` opens the window with `ui_run(title, width, height, view)`. The call returns when the window is closed:
+
+```atf nocheck
+fn main() {
+    let app = App()
+    ui_run("Counter", 420, 260, || view(app))
+}
+```
+
+How CSS ideas are written in ATF:
+
+| CSS | ATF |
+|---|---|
+| `display: flex; flex-direction: column` | `column([...])` (`row([...])` for a row) |
+| `gap: 12px; padding: 8px 16px` | `.gap(12).padding(8, 16)` (one to four values, like CSS) |
+| `align-items` / `justify-content` | `.align(Align.Center)` / `.justify(Justify.Between)` |
+| `flex-grow: 1` / `flex-wrap: wrap` | `.grow()` / `.wrap()` |
+| `width: 50%` | `.width_pct(50.0)` |
+| `display: grid; grid-template-columns: repeat(3, 1fr)` | `grid(3, [...])` |
+| `background: linear-gradient(135deg, a, b)` | `.gradient(a, b, 135.0)` |
+| `border-radius: 999px` | `.pill()` |
+| `box-shadow: 0 4px 18px rgba(0,0,0,.1)` | `.shadow(0, 4, 18, rgba(0, 0, 0, 0.1))` |
+| `position: absolute; top: 6px; right: 6px` | `.absolute(UNSET, 6, 6)` (left, top, right, bottom) |
+| `:hover { ... }` | `.hover(style()...)` |
+| `transition: 150ms` | `.transition(150)` |
+| `direction: rtl` | `.rtl()` (for Hebrew and Arabic) |
+| `overflow: auto` | `scroll([...])` |
+
+Data that changes over time, such as a clock or live numbers, uses `ui_every(ms, fn)`. The view is rebuilt after each call.
+To get a picture without opening a window (for tests and documentation), use `ui_screenshot(view, width, height, "file.bmp")`,
+or run any UI program with the environment variable `ATF_UI_SCREENSHOT=file.bmp`.
+
+<!-- id: ui-screenshot -->
+```atf
+import "std/ui"
+
+fn main() {
+    let card = style().bg(WHITE).radius(16).padding(20).gap(8).shadow(0, 8, 24, rgba(15, 23, 42, 0.12))
+    let view = || column([
+        column([
+            text("Pro plan").font_size(20).bold(),
+            text("Unlimited projects and live exports").color(hex("slate")),
+            text("Upgrade").color(WHITE).bg(hex("#4f46e5")).padding(6, 14).pill(),
+        ]).style(card).align(Align.Start),
+    ]).padding(24).grow().gradient(hex("#eef2ff"), hex("#fdf2f8"), 135.0)
+    println(ui_screenshot(view, 400, 220, "card.bmp"))
+}
+```
+```output
+true
+```
+
+The complete reference is in [STDLIB.md](STDLIB.md#stdui). Larger programs are in `examples/ui/`: `counter.atf`, `todo.atf` (a
+task list with a text box, check boxes and filters) and `dashboard.atf` (a sidebar, gradient cards, a bar chart, settings and
+a light and dark theme).
+
 ---
 
 ## 26. Memory and the garbage collector
