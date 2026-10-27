@@ -1,0 +1,126 @@
+// generics: nested generic structs, generic functions calling each other, inference corner cases
+struct Box<T> { value: T }
+struct Pair<A, B> { first: A, second: B }
+struct Node<T> { value: T, next: Node<T>? }
+struct Tree<K, V> { key: K, val: V, left: Tree<K, V>?, right: Tree<K, V>? }
+
+impl<T> Box<T> {
+    fn get(self) -> T { return self.value }
+    fn set(self, v: T) { self.value = v }
+    fn map<U>(self, f: fn(T) -> U) -> Box<U> { return Box(f(self.value)) }
+}
+
+impl<A, B> Pair<A, B> {
+    fn swap(self) -> Pair<B, A> { return Pair(self.second, self.first) }
+}
+
+fn tree_insert<K, V>(t: Tree<K, V>?, k: K, v: V) -> Tree<K, V> {
+    if t == nil { return Tree{ key: k, val: v, left: nil, right: nil } }
+    let n = t!
+    if k < n.key {
+        n.left = tree_insert(n.left, k, v)
+    } else if k > n.key {
+        n.right = tree_insert(n.right, k, v)
+    } else {
+        n.val = v
+    }
+    return n
+}
+
+fn tree_items<K, V>(t: Tree<K, V>?, out: [(K, V)]) {
+    if let n = t {
+        tree_items(n.left, out)
+        out.push((n.key, n.val))
+        tree_items(n.right, out)
+    }
+}
+
+fn list_from<T>(xs: [T]) -> Node<T>? {
+    var head: Node<T>? = nil
+    var i = xs.len() - 1
+    while i >= 0 {
+        head = Node(xs[i], head)
+        i -= 1
+    }
+    return head
+}
+
+fn list_len<T>(n: Node<T>?) -> int {
+    if n == nil { return 0 }
+    return 1 + list_len(n!.next)
+}
+
+fn identity<T>(x: T) -> T { return x }
+fn twice<T>(x: T, f: fn(T) -> T) -> T { return f(f(x)) }
+fn first_of<T>(xs: [T]) -> T? {
+    if xs.len() == 0 { return nil }
+    return xs[0]
+}
+fn wrap_all<T>(xs: [T]) -> [Box<T>] { return xs.map(|x| Box(x)) }
+fn unwrap_all<T>(bs: [Box<T>]) -> [T] { return bs.map(|b| b.get()) }
+fn count_if<T>(xs: [T], p: fn(T) -> bool) -> int {
+    var n = 0
+    for x in xs { if p(x) { n += 1 } }
+    return n
+}
+fn largest<T>(xs: [T]) -> T {
+    var best = xs[0]
+    for x in xs { if x > best { best = x } }
+    return best
+}
+fn pair_up<A, B>(a: A, b: B) -> (A, B) { return (a, b) }
+fn group_by<T, K>(xs: [T], key: fn(T) -> K) -> {K: [T]} {
+    var m: {K: [T]} = {}
+    for x in xs {
+        let k = key(x)
+        if not m.has(k) { m[k] = [] }
+        m[k].push(x)
+    }
+    return m
+}
+
+fn main() {
+    let b = Box(5)
+    b.set(b.get() * 2)
+    println(b, b.get(), b.map(|v| "v={v}"), b.map(|v| v > 5).value)
+    let bb = Box(Box([1, 2]))
+    bb.value.value.push(3)
+    println(bb, bb.value.value.len())
+    let p = Pair("one", 1)
+    println(p, p.swap(), p.swap().swap() == p)
+    let pp = Pair(Pair(1, 2.5), Box("x"))
+    println(pp.first.second, pp.second.value, pp)
+    var t: Tree<str, int>? = nil
+    for w in ["m", "c", "x", "a", "e", "z", "m"] { t = tree_insert(t, w, w.len() + w.byte_at(0)) }
+    var items: [(str, int)] = []
+    tree_items(t, items)
+    println(items)
+    var ti: Tree<int, [str]>? = nil
+    for i in [5, 2, 8, 1, 9, 3] { ti = tree_insert(ti, i, ["n{i}"]) }
+    var items2: [(int, [str])] = []
+    tree_items(ti, items2)
+    println(items2)
+    let l = list_from([1, 2, 3, 4])
+    println(list_len(l), list_len(list_from(["a"])), list_len(list_from([] as [float])))
+    println(identity(3), identity("s"), identity([1]), identity(Box(1.5)), identity((1, "a")))
+    println(twice(3, |x| x * x), twice("ab", |s| s + s), twice([1], |a| a + a))
+    println(first_of([7, 8]), first_of(["q"]), first_of([] as [int]), first_of([[1]]))
+    println(unwrap_all(wrap_all([1, 2, 3])), wrap_all(["a"]))
+    println(count_if([1, 2, 3, 4, 5], |x| x > 2), count_if(["a", "bb", "ccc"], |s| s.len() != 2))
+    println(largest([3, 9, 2]), largest(["b", "c", "a"]), largest([1.5, -2.0]), largest([(1, 2), (1, 3), (0, 9)]))
+    println(pair_up(1, "x"), pair_up([1], Box(2)), pair_up(nil as int?, 2.5))
+    let g = group_by(["apple", "avocado", "banana", "blueberry", "cherry"], |s| s[0])
+    println(g)
+    let g2 = group_by([1, 2, 3, 4, 5, 6, 7], |x| x % 3)
+    println(g2, g2.keys())
+    // explicit type arguments
+    let e = array_make::<Box<int>>(0)
+    println(e.len(), identity::<int>(4), set_new::<Pair<int, str>>().len())
+    let sb: Box<[int]> = Box([])
+    sb.value.push(1)
+    println(sb)
+    let ob: Box<int?> = Box(nil)
+    println(ob, ob.value == nil)
+    ob.value = 3
+    println(ob, ob.value! + 1)
+}

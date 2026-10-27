@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: unterminated {interpolation} in string
+  --> cerr_interp_unclosed.atf:3:21
+ 3 |     println("value {x")
+   |                     ^

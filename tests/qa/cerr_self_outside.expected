@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: 'self' only exists inside methods
+  --> cerr_self_outside.atf:2:12
+ 2 |     return self.x
+   |            ^
+  hint: methods are functions written in an  impl Type { ... }  block

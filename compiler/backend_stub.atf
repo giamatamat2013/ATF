@@ -1,0 +1,6 @@
+// Stand-in for the checker's FnInfo (referenced by tir.atf's FnInst.info) so that the backend test programs
+// (backend_check.atf, codegen_selftest.atf, cgcheck.atf) compile without the whole checker.
+// Never import this together with checker.atf.
+struct FnInfo {
+    id: int
+}

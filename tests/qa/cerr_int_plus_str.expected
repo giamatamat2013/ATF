@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: cannot add str and int
+  --> cerr_int_plus_str.atf:3:17
+ 3 |     let s = "x" + n
+   |                 ^
+  hint: use string interpolation "{x}" or str(x) to join text with other values

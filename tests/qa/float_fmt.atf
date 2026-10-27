@@ -1,0 +1,53 @@
+// float printing (shortest round-trip repr), special values, fixed formatting
+fn fid(x: float) -> float { return x }
+
+fn main() {
+    let zero = fid(0.0)
+    let inf = 1.0 / zero
+    let ninf = -1.0 / zero
+    let nan = zero / zero
+    println(inf, ninf, nan, -0.0, 0.0, fid(-0.0), -zero)
+    println(INF, -INF, INF - INF)
+    println(0.1, 0.2, 0.1 + 0.2, 1.0 / 3.0, 2.0 / 3.0, 100.0, 1e15, 1e16, 1.5e16, 123456789.0)
+    println(1e-4, 1e-5, 0.00012345, 1.2345e-7, 5e-324, 2.2250738585072014e-308, 1.7976931348623157e308)
+    println(1e22, 1e21, 9007199254740993.0, 0.30000000000000004, 3.0e-10)
+    println(-1.5, -0.001, -123456.789, -1e100)
+    println(fid(1e308) * 10.0, fid(-1e308) * 10.0, fid(5e-324) / 2.0)
+    // comparisons with nan / -0.0
+    println(nan == nan, nan != nan, nan < 1.0, nan > 1.0, nan <= nan, -0.0 == 0.0, inf > 1e308, ninf < -1e308)
+    println(is_nan(nan), is_nan(1.0), is_inf(inf), is_inf(ninf), is_inf(nan), is_inf(1.0), nan.is_nan())
+    // conversions
+    println(int(3.99), int(-3.99), int(0.5), int(-0.5), int(1e18), float(7), float(-7))
+    println(floor(-2.5), ceil(-2.5), trunc(-2.5), floor(2.5), ceil(2.5), trunc(2.7))
+    println(round(2.5), round(-2.5), round(0.4), round(-0.4), round(1.5), round(-1.5))
+    println(sqrt(2.0), sqrt(0.0), sqrt(-0.0), fabs(-3.5), 2.0 ** 0.5, 2.0 ** -1.0, 10.0 ** 2.0)
+    println((-8.0).abs(), 2.25.sqrt(), 3.7.floor(), 3.2.ceil(), (-3.7).trunc(), 3.5.round(), 1.5.pow(2.0))
+    println(fmod(7.5, 2.0), fmod(-7.5, 2.0), 7.5 % 2.0, -7.5 % 2.0, 7.5 % -2.0)
+    println(1.0.min(2.0), 1.0.max(2.0), 5.5.clamp(1.0, 3.0), 3.9.to_int(), (-3.9).to_int())
+    // int/float mixing
+    println(7 / 2.0, 7.0 / 2, 1 + 0.5, 3 * 1.5, 10 - 0.25, 2 == 2.0, 3 > 2.5)
+    // fixed formatting
+    let pi = 3.14159265358979
+    println("{pi:.0f}|{pi:.1f}|{pi:.2f}|{pi:.5f}|{pi:.10f}")
+    println("{-pi:.2f}|{0.0:.2f}|{-0.0:.2f}|{-0.001:.2f}|{0.005:.2f}|{0.015:.2f}|{0.025:.2f}")
+    println("{1.005:.2f}|{2.675:.2f}|{1e20:.2f}|{123456789.987654321:.3f}|{1e-10:.3f}")
+    println("{0.49999999999999994:.0f}|{0.51:.0f}|{1.49:.0f}|{-0.51:.0f}")
+    println("{inf:.2f}|{ninf:.2f}|{nan:.2f}|{inf}|{nan:8.2f}|")
+    println("{pi:10.3f}|{pi:<10.3f}|{pi:^10.3f}|{pi:>10.3f}|{pi:010.3f}|{-pi:010.3f}|")
+    println("{2.5:8}|{2.5:<8}|{2.5}|{1e20:.1f}")
+    println("[{fmt_fixed(1.26, 1)}] [{fmt_fixed(99.995, 2)}] [{fmt_fixed(-1.6, 0)}] [{fmt_fixed(1234.5, 3)}]")
+    println(str(1.0), str(-2.5), 1.0.to_str(), float_to_str(0.1), "{1.0}", "x" + str(1e-7))
+    // parsing
+    println("3.5".parse_float(), "-0.0".parse_float(), " 2.5e3 ".parse_float(), "1e400".parse_float(), ".5".parse_float(), "5.".parse_float())
+    println("abc".parse_float(), "".parse_float(), "1.5x".parse_float(), "1,5".parse_float(), "  ".parse_float())
+    println(float("1e-400"), float("123"), float("-7.25"), "0.1".to_float() + "0.2".to_float())
+    // many round trips
+    var ok = 0
+    var x = 1.0
+    for i in 0..200 {
+        x = x * 1.37 + 0.001
+        let s = str(x)
+        if s.parse_float()! == x { ok += 1 } else { println("round trip failed:", s) }
+    }
+    println("round trips ok:", ok)
+}

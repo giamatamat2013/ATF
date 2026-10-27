@@ -1,0 +1,192 @@
+// Ordering of global variable initializers: an initializer runs after the initializers of every global it
+// reads - directly or through the functions it calls.
+import "types"
+import "tir"
+
+struct RefScan {
+    globals: {int: bool},        // GlobalVar uid
+    calls: [FnInst]
+}
+
+fn scan_refs_stmts(r: RefScan, ss: [TStmt]) {
+    for s in ss { scan_refs_stmt(r, s) }
+}
+
+fn scan_refs_stmt(r: RefScan, s: TStmt) {
+    match s.k {
+        SK.Decl(v, init) => {
+            if init != nil { scan_refs(r, init!) }
+        }
+        SK.Set(t, v) => {
+            // writing a global is not a dependency, but the target expression may read other things
+            match t.k {
+                TK.GlobalRef(g) => {}
+                _ => scan_refs(r, t)
+            }
+            scan_refs(r, v)
+        }
+        SK.ExprS(e) => scan_refs(r, e)
+        SK.If(c, a, b) => {
+            scan_refs(r, c)
+            scan_refs_stmts(r, a)
+            scan_refs_stmts(r, b)
+        }
+        SK.While(c, b, st) => {
+            scan_refs(r, c)
+            scan_refs_stmts(r, b)
+            scan_refs_stmts(r, st)
+        }
+        SK.Ret(e) => {
+            if e != nil { scan_refs(r, e!) }
+        }
+        SK.Blk(ss) => scan_refs_stmts(r, ss)
+        _ => {}
+    }
+}
+
+fn scan_refs_all(r: RefScan, xs: [TExpr]) {
+    for x in xs { scan_refs(r, x) }
+}
+
+fn scan_refs(r: RefScan, e: TExpr) {
+    match e.k {
+        TK.GlobalRef(g) => r.globals[g.uid] = true
+        TK.FnRef(inst) => r.calls.push(inst)
+        TK.MkClosure(inst, caps) => r.calls.push(inst)
+        TK.Un(op, x) => scan_refs(r, x)
+        TK.Bin(op, a, b) => {
+            scan_refs(r, a)
+            scan_refs(r, b)
+        }
+        TK.And(a, b) => {
+            scan_refs(r, a)
+            scan_refs(r, b)
+        }
+        TK.Or(a, b) => {
+            scan_refs(r, a)
+            scan_refs(r, b)
+        }
+        TK.Cvt(k, x) => scan_refs(r, x)
+        TK.Call(inst, args) => {
+            r.calls.push(inst)
+            scan_refs_all(r, args)
+        }
+        TK.CallExt(x, args) => scan_refs_all(r, args)
+        TK.CallInd(f, args) => {
+            scan_refs(r, f)
+            scan_refs_all(r, args)
+        }
+        TK.Load(o, i) => scan_refs(r, o)
+        TK.PtrIdx(b, i, s) => {
+            scan_refs(r, b)
+            scan_refs(r, i)
+        }
+        TK.ArrIdx(a, i, s) => {
+            scan_refs(r, a)
+            scan_refs(r, i)
+        }
+        TK.NewObj(vals) => scan_refs_all(r, vals)
+        TK.Intr(n, args) => scan_refs_all(r, args)
+        TK.Cond(c, a, b) => {
+            scan_refs(r, c)
+            scan_refs(r, a)
+            scan_refs(r, b)
+        }
+        TK.Seq(ss, x) => {
+            scan_refs_stmts(r, ss)
+            scan_refs(r, x)
+        }
+        _ => {}
+    }
+}
+
+// all globals read by an initializer, following calls into function bodies
+fn init_deps(init: TExpr, fn_cache: {int: {int: bool}}) -> {int: bool} {
+    let r = RefScan({}, [])
+    scan_refs(r, init)
+    var seen: {int: bool} = {}
+    var todo = r.calls
+    while todo.len() > 0 {
+        let f = todo.pop()
+        if f.uid in seen or f.body == nil or f.is_prelude { continue }
+        seen[f.uid] = true
+        let fr = RefScan({}, [])
+        scan_refs_stmts(fr, f.body!)
+        for g in fr.globals.keys() { r.globals[g] = true }
+        for c in fr.calls { todo.push(c) }
+    }
+    return r.globals
+}
+
+// reorder the global-initializer statements in `body` (all statements that set a global); others keep their place
+fn order_global_inits(body: [TStmt]) -> [TStmt] {
+    var inits: [TStmt] = []
+    var owner: [int] = []                // global uid set by each init
+    var pos_of: {int: int} = {}          // global uid -> index in inits
+    for s in body {
+        match s.k {
+            SK.Set(t, v) => {
+                match t.k {
+                    TK.GlobalRef(g) => {
+                        pos_of[g.uid] = inits.len()
+                        inits.push(s)
+                        owner.push(g.uid)
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    if inits.len() < 2 { return body }
+    var deps: [[int]] = []
+    let cache: {int: {int: bool}} = {}
+    for s in inits {
+        var d: [int] = []
+        match s.k {
+            SK.Set(t, v) => {
+                for g in init_deps(v, cache).keys() {
+                    let k = pos_of.try_get(g)
+                    if k != nil { d.push(k!) }
+                }
+            }
+            _ => {}
+        }
+        deps.push(d)
+    }
+    // depth-first, keeping the declaration order where there is no dependency
+    var state = array_make::<int>(inits.len())         // 0 new, 1 in progress, 2 done
+    var order: [TStmt] = []
+    for i in 0..inits.len() { visit_init(i, deps, state, inits, order) }
+    var out: [TStmt] = []
+    var k = 0
+    for s in body {
+        var is_init = false
+        match s.k {
+            SK.Set(t, v) => {
+                match t.k {
+                    TK.GlobalRef(g) => is_init = true
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        if is_init {
+            out.push(order[k])
+            k += 1
+        } else {
+            out.push(s)
+        }
+    }
+    return out
+}
+
+fn visit_init(i: int, deps: [[int]], state: [int], inits: [TStmt], order: [TStmt]) {
+    if state[i] != 0 { return }
+    state[i] = 1
+    for d in deps[i] {
+        if d != i { visit_init(d, deps, state, inits, order) }
+    }
+    state[i] = 2
+    order.push(inits[i])
+}

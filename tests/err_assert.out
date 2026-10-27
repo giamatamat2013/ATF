@@ -1,0 +1,3 @@
+[exit 1]
+[stderr] assertion failed: x should be 4
+  at main (err_assert.atf:3)

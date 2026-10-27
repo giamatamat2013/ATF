@@ -1,0 +1,3 @@
+fn get() -> int { return 1 }
+const X = get()
+fn main() { println(X) }

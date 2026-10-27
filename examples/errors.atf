@@ -1,0 +1,85 @@
+// errors.atf - the three ways to deal with failure: nil, Result and panic.
+// Shows: T? optionals, Result<T, E> with ?, panic / assert, catch_panic to recover,
+//        runtime errors (bounds, division by zero, bad unwrap), defer.
+// Run:   python run_atf.py run examples/errors.atf
+
+// 1. nil: "there may be no answer"
+fn find_index(a: [int], x: int) -> int? {
+    for i in 0..a.len() {
+        if a[i] == x { return i }
+    }
+    return nil
+}
+
+// 2. Result: "it can fail, and here is why"
+fn parse_age(s: str) -> Result<int, str> {
+    let n = s.parse_int()
+    if n == nil { return Result.Err("'{s}' is not a number") }
+    if n! < 0 or n! > 150 { return Result.Err("{n!} is not a believable age") }
+    return Result.Ok(n!)
+}
+
+fn total_age(a: str, b: str) -> Result<int, str> {
+    let x = parse_age(a)?          // returns the Err early
+    let y = parse_age(b)?
+    return Result.Ok(x + y)
+}
+
+// 3. panic: "this is a bug, stop the program"
+fn checked_div(a: int, b: int) -> int {
+    assert(b != 0, "checked_div: divisor must not be zero")
+    return a / b
+}
+
+fn risky(kind: int) {
+    let a = [1, 2, 3]
+    var zero = 0
+    let missing: int? = nil
+    let m: {str: int} = {"a": 1}
+    match kind {
+        0 => println(a[kind + 5])
+        1 => println(10 / zero)
+        2 => println(missing!)
+        3 => panic("custom failure #{kind}")
+        4 => println(m["zzz"])
+        5 => println(checked_div(1, zero))
+        6 => println(parse_age("x").unwrap())
+        _ => println("fine")
+    }
+}
+
+fn cleanup_demo() {
+    defer println("  cleanup 1 (runs last)")
+    defer println("  cleanup 2 (runs first)")
+    println("  working")
+}
+
+fn main() {
+    let a = [4, 8, 15, 16, 23, 42]
+    println("index of 15:", find_index(a, 15), " index of 99:", find_index(a, 99))
+    println("with default:", find_index(a, 99) ?? -1)
+    if let i = find_index(a, 23) {
+        println("found 23 at {i}")
+    }
+
+    for pair in [("30", "12"), ("30", "abc"), ("200", "1")] {
+        match total_age(pair.0, pair.1) {
+            Result.Ok(v) => println("{pair.0} + {pair.1} = {v}")
+            Result.Err(e) => println("{pair.0} + {pair.1} failed: {e}")
+        }
+    }
+    println(parse_age("42").unwrap_or(0), parse_age("-1").unwrap_or(0), parse_age("7").is_ok())
+
+    // catch_panic runs a function and returns the panic message (or nil if nothing went wrong)
+    for kind in 0..8 {
+        let msg = catch_panic(|| { risky(kind) })
+        println("risky({kind}) ->", msg)
+    }
+
+    println("defer:")
+    cleanup_demo()
+
+    // after a caught panic the program simply continues
+    let r = catch_panic(|| { panic("boom") })
+    println("caught:", r, "- still running")
+}

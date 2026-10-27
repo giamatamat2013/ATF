@@ -1,0 +1,76 @@
+// Small helpers for inspecting typed IR nodes
+import "types"
+import "tir"
+
+fn is_const(e: TExpr) -> bool {
+    return match e.k {
+        TK.Const(kind, iv, fv, sv) => true
+        _ => false
+    }
+}
+
+fn const_kind(e: TExpr) -> CK {
+    return match e.k {
+        TK.Const(kind, iv, fv, sv) => kind
+        _ => CK.Nil
+    }
+}
+
+// is e a constant of the given kind?
+fn is_const_of(e: TExpr, kind: CK) -> bool {
+    return match e.k {
+        TK.Const(k, iv, fv, sv) => k == kind
+        _ => false
+    }
+}
+
+fn is_nil_const(e: TExpr) -> bool { return is_const_of(e, CK.Nil) }
+
+fn const_ival(e: TExpr) -> int {
+    return match e.k {
+        TK.Const(kind, iv, fv, sv) => iv
+        _ => 0
+    }
+}
+
+fn const_fval(e: TExpr) -> float {
+    return match e.k {
+        TK.Const(kind, iv, fv, sv) => fv
+        _ => 0.0
+    }
+}
+
+fn const_sval(e: TExpr) -> str {
+    return match e.k {
+        TK.Const(kind, iv, fv, sv) => sv
+        _ => ""
+    }
+}
+
+// a constant whose value is zero (ints, bools, nil, 0.0) - globals start zeroed so no initializer is needed
+fn is_zero_const(e: TExpr) -> bool {
+    return match e.k {
+        TK.Const(kind, iv, fv, sv) => {
+            match kind {
+                CK.Str => false
+                CK.Float => fv == 0.0
+                _ => iv == 0
+            }
+        }
+        _ => false
+    }
+}
+
+fn is_varref(e: TExpr) -> bool {
+    return match e.k {
+        TK.VarRef(v) => true
+        _ => false
+    }
+}
+
+fn mk_const_like(e: TExpr, ty: Type, pos: Pos) -> TExpr {
+    return match e.k {
+        TK.Const(kind, iv, fv, sv) => TExpr(TK.Const(kind, iv, fv, sv), ty, pos)
+        _ => e
+    }
+}

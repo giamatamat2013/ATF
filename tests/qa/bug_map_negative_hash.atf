@@ -1,0 +1,19 @@
+// a user-defined hash() that returns a negative number silently corrupts maps:
+// the map uses negative hashes as "deleted" markers, so such entries vanish from
+// printing, keys(), iteration and are dropped when the map grows.
+struct Id { v: int }
+
+impl Id {
+    fn hash(self) -> int { return -self.v - 1 }
+}
+
+fn main() {
+    var m: {Id: int} = {}
+    m[Id(1)] = 10
+    println(m.len(), m.has(Id(1)), m, m.keys().len())
+    for i in 2..=20 { m[Id(i)] = i * 10 }
+    println(m.len(), m.has(Id(1)), m.get(Id(5), -1), m.keys().len())
+    var n = 0
+    for k, v in m { n += 1 }
+    println(n)
+}

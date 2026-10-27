@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: parameter 'a' is defined twice
+  --> cerr_duplicate_param.atf:1:14
+ 1 | fn f(a: int, a: int) -> int { return a }
+   |              ^

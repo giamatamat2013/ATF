@@ -1,0 +1,25 @@
+fn main() {
+    let name = input("name? ")
+    println("Hello, {name}!")
+    var total = 0
+    loop {
+        let line = read_line()
+        if line == nil { break }
+        let n = line!.trim().parse_int()
+        if n == nil {
+            println("skip: {line!}")
+            continue
+        }
+        total += n!
+    }
+    println("total = {total}")
+    rand_seed(42)
+    let r = rand_int(1, 6)
+    println(r >= 1 and r <= 6, rand_float() < 1.0)
+    let t = clock()
+    println(time_ms() > 0, t >= 0.0)
+    write_file("build/_tmp_test.txt", "line one\nline two\n")
+    let content = read_file("build/_tmp_test.txt")
+    println(content!.lines(), file_exists("build/_tmp_test.txt"), file_exists("build/nope.txt"))
+    println(read_file("build/nope.txt") == nil)
+}

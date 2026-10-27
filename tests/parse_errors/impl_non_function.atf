@@ -1,0 +1,4 @@
+struct P { x: int }
+impl P {
+    let y = 3
+}

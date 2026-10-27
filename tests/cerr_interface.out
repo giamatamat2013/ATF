@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected Shape but found Dog
+  --> cerr_interface.atf:4:23
+ 4 |     let s: Shape = Dog(1)
+   |                       ^
+  hint: Dog does not have the method  fn area(self) -> float  required by Shape

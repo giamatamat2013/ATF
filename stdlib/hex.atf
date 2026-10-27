@@ -1,0 +1,120 @@
+// std/hex - hexadecimal encoding / decoding of bytes, and a classic hex dump.
+//
+//   import "std/hex"
+//   hex_encode("Hi!")               == "486921"
+//   hex_encode("\xff\n", upper: true) == "FF0A"
+//   hex_decode("486921").unwrap()   == "Hi!"
+//   print(hex_dump("some bytes"))   // offset, hex bytes and printable characters, 16 per line
+//
+// Text (str) is treated as raw bytes. Decoding returns Result<str, str> with a readable error.
+
+const HEX_LOWER_DIGITS = "0123456789abcdef"
+const HEX_UPPER_DIGITS = "0123456789ABCDEF"
+
+fn hex_encode_raw(p: ptr<byte>, n: int, upper: bool) -> str {
+    let digits = str_data(if upper { HEX_UPPER_DIGITS } else { HEX_LOWER_DIGITS })
+    let r = str_new(n * 2)
+    let d = str_data(r)
+    for i in 0..n {
+        let c = p[i]
+        d[i * 2] = digits[c >> 4]
+        d[i * 2 + 1] = digits[c & 15]
+    }
+    return r
+}
+
+// two hex digits per byte of s (lowercase unless upper is true)
+fn hex_encode(s: str, upper: bool = false) -> str {
+    return hex_encode_raw(str_data(s), str_len(s), upper)
+}
+
+// two hex digits per byte of the array
+fn hex_encode_bytes(b: [byte], upper: bool = false) -> str {
+    return hex_encode_raw(b.data, b.len, upper)
+}
+
+// value of a hex digit, or -1
+fn hex_digit_value(c: byte) -> int {
+    if c >= '0' and c <= '9' { return c - '0' }
+    if c >= 'a' and c <= 'f' { return c - 'a' + 10 }
+    if c >= 'A' and c <= 'F' { return c - 'A' + 10 }
+    return -1
+}
+
+// Decodes hex text into bytes. Upper and lower case digits are accepted, an optional "0x" prefix
+// is skipped, and whitespace between digit pairs is ignored ("de ad be ef" works).
+fn hex_decode(s: str) -> Result<str, str> {
+    let n = str_len(s)
+    let p = str_data(s)
+    var i = 0
+    if n >= 2 and p[0] == '0' and (p[1] == 'x' or p[1] == 'X') { i = 2 }
+    var sb = str_builder()
+    var hi = -1
+    var hi_pos = 0
+    while i < n {
+        let c = p[i]
+        if c == ' ' or c == 9 or c == 10 or c == 13 {
+            if hi >= 0 { return Result.Err("whitespace inside a byte at position {i} (hex digits come in pairs)") }
+            i += 1
+            continue
+        }
+        let v = hex_digit_value(c)
+        if v < 0 {
+            var shown = "byte 0x" + pad_zero(int_to_hex(c), 2)
+            if c >= 32 and c < 127 { shown = "'" + char_str(c) + "'" }
+            return Result.Err("invalid hex digit {shown} at position {i}")
+        }
+        if hi < 0 {
+            hi = v
+            hi_pos = i
+        } else {
+            sb.add_byte(byte(hi * 16 + v))
+            hi = -1
+        }
+        i += 1
+    }
+    if hi >= 0 { return Result.Err("odd number of hex digits (the last digit at position {hi_pos} has no partner)") }
+    return Result.Ok(sb.finish())
+}
+
+// like hex_decode, but returns a byte array
+fn hex_decode_bytes(s: str) -> Result<[byte], str> {
+    match hex_decode(s) {
+        Result.Ok(t) => return Result.Ok(t.bytes())
+        Result.Err(e) => return Result.Err(e)
+    }
+}
+
+// Classic hex dump: 8-digit offset, 16 bytes in hex (split in two groups of 8), and the
+// printable ASCII characters ('.' for the others). Every line ends with a newline.
+fn hex_dump(s: str) -> str {
+    let n = str_len(s)
+    let p = str_data(s)
+    var sb = str_builder()
+    var off = 0
+    while off < n {
+        sb.add(pad_zero(int_to_hex(off), 8))
+        sb.add("  ")
+        for j in 0..16 {
+            if off + j < n {
+                let c = p[off + j]
+                sb.add_byte(str_data(HEX_LOWER_DIGITS)[c >> 4])
+                sb.add_byte(str_data(HEX_LOWER_DIGITS)[c & 15])
+                sb.add_byte(' ')
+            } else {
+                sb.add("   ")
+            }
+            if j == 7 { sb.add_byte(' ') }
+        }
+        sb.add(" |")
+        var j = 0
+        while j < 16 and off + j < n {
+            let c = p[off + j]
+            if c >= 32 and c < 127 { sb.add_byte(c) } else { sb.add_byte('.') }
+            j += 1
+        }
+        sb.add("|\n")
+        off += 16
+    }
+    return sb.finish()
+}

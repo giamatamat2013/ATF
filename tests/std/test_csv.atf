@@ -1,0 +1,120 @@
+// tests for std/csv
+import "std/csv"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn pc(text: str) -> str {
+    return match csv_parse(text) {
+        Result.Ok(rows) => str(rows)
+        Result.Err(e) => "ERR " + e
+    }
+}
+
+fn main() -> int {
+    // ---- basic parsing
+    check("simple", pc("a,b,c\n1,2,3\n"), "[[\"a\", \"b\", \"c\"], [\"1\", \"2\", \"3\"]]")
+    check("no final newline", pc("a,b\n1,2"), "[[\"a\", \"b\"], [\"1\", \"2\"]]")
+    check("crlf", pc("a,b\r\n1,2\r\n"), "[[\"a\", \"b\"], [\"1\", \"2\"]]")
+    check("lone cr", pc("a,b\r1,2\r"), "[[\"a\", \"b\"], [\"1\", \"2\"]]")
+    check("empty text", pc(""), "[]")
+    check("only newline", pc("\n"), "[]")
+    check("empty fields", pc(",a,,b,\n"), "[[\"\", \"a\", \"\", \"b\", \"\"]]")
+    check("single empty quoted", pc("\"\"\n"), "[[\"\"]]")
+    check("blank lines skipped", pc("a\n\n\nb\n"), "[[\"a\"], [\"b\"]]")
+    check("spaces kept", pc(" a , b \n"), "[[\" a \", \" b \"]]")
+    check("ragged rows", pc("a,b,c\n1\n2,3\n"), "[[\"a\", \"b\", \"c\"], [\"1\"], [\"2\", \"3\"]]")
+    check("utf8", pc("שם,עיר\nדנה,חיפה\n"), "[[\"שם\", \"עיר\"], [\"דנה\", \"חיפה\"]]")
+    check("bom skipped", pc("\xef\xbb\xbfa,b\n"), "[[\"a\", \"b\"]]")
+
+    // ---- quoting
+    check("quoted comma", pc("\"a,b\",c\n"), "[[\"a,b\", \"c\"]]")
+    check("doubled quote", pc("\"say \"\"hi\"\"\",x\n"), "[[\"say \\\"hi\\\"\", \"x\"]]")
+    check("quoted newline", pc("\"line1\nline2\",x\ny,z\n"), "[[\"line1\\nline2\", \"x\"], [\"y\", \"z\"]]")
+    check("quoted crlf", pc("\"a\r\nb\"\r\n"), "[[\"a\\r\\nb\"]]")
+    check("quoted empty fields", pc("\"\",\"\"\n"), "[[\"\", \"\"]]")
+    check("quoted at end without newline", pc("a,\"b\""), "[[\"a\", \"b\"]]")
+    check("only quotes", pc("\"\"\"\"\n"), "[[\"\\\"\"]]")
+    check("quoted separator only", pc("\",\"\n"), "[[\",\"]]")
+
+    // ---- errors
+    println("unterminated:", pc("a,\"bc\n"))
+    println("unterminated later line:", pc("x\ny,\"never closed\nmore\n"))
+    println("after quote:", pc("\"ab\"c,d\n"))
+    println("quote in field:", pc("ab\"c\n"))
+    println("error line counting:", pc("a\n\"multi\nline\",ok\nbad\"quote\n"))
+
+    // ---- other separators and skip_empty
+    println("tab:", csv_parse("a\tb c\t\"d\te\"\n", sep: '\t').unwrap())
+    println("semicolon:", csv_parse("1;2,5;3\n", ';').unwrap())
+    println("keep empty lines:", csv_parse("a\n\nb\n", skip_empty: false).unwrap())
+
+    // ---- single rows
+    println("row:", csv_parse_row("x,\"y,z\",").unwrap())
+    println("row empty:", csv_parse_row("").unwrap())
+    println("row with quoted newline:", csv_parse_row("\"a\nb\",c").unwrap())
+    println("row two lines:", csv_parse_row("a\nb").err())
+    println("row error:", csv_parse_row("\"a").err())
+
+    // ---- records
+    let recs = csv_parse_records("name,age,city\nAda,36,London\n\"Hopper, Grace\",85,\"New York\"\n").unwrap()
+    println("records:", recs)
+    println("record field:", recs[1]["name"], recs[0]["city"])
+    println("records bad width:", csv_parse_records("a,b\n1,2\n3\n").err())
+    println("records duplicate header:", csv_parse_records("a,b,a\n1,2,3\n").err())
+    println("records empty:", csv_parse_records("").unwrap(), csv_parse_records("a,b\n").unwrap())
+    println("records parse error:", csv_parse_records("a\n\"x").err())
+
+    // ---- formatting
+    check("needs quotes", "{csv_needs_quotes("plain")} {csv_needs_quotes("a,b")} {csv_needs_quotes("q\"")} {csv_needs_quotes("nl\n")} {csv_needs_quotes(" lead")} {csv_needs_quotes("trail\t")} {csv_needs_quotes("")} {csv_needs_quotes("a;b")} {csv_needs_quotes("a;b", ';')}",
+          "false true true true true true false false true")
+    check("field plain", csv_format_field("abc"), "abc")
+    check("field comma", csv_format_field("a,b"), "\"a,b\"")
+    check("field quote", csv_format_field("say \"hi\""), "\"say \"\"hi\"\"\"")
+    check("field always", csv_format_field("abc", always_quote: true), "\"abc\"")
+    check("field cr", quote_str(csv_format_field("a\rb")), quote_str("\"a\rb\""))
+    check("row", csv_format_row(["a", "b c", "d,e", ""]), "a,b c,\"d,e\",")
+    check("row single empty", csv_format_row([""]), "\"\"")
+    check("row empty", csv_format_row([]), "")
+    check("row tab", csv_format_row(["a\tb", "c"], '\t'), "\"a\tb\"\tc")
+    let table = [["id", "text"], ["1", "plain"], ["2", "with, comma"], ["3", "with \"quotes\""], ["4", "multi\nline"], ["5", ""]]
+    let text = csv_format(table)
+    print(text)
+    check("crlf format", quote_str(csv_format([["a", "b"], ["c", "d"]], line_end: "\r\n")), quote_str("a,b\r\nc,d\r\n"))
+    check("always quote format", csv_format([["a", "1"]], always_quote: true), "\"a\",\"1\"\n")
+    check("format records", csv_format_records(["name", "age"], [{"name": "Ada", "age": "36"}, {"name": "X, Y"}]), "name,age\nAda,36\n\"X, Y\",\n")
+
+    // ---- round trips
+    println("round trip:", csv_parse(text).unwrap() == table)
+    let nasty = [["", "\"", "\"\"", ",", "\n", "\r\n", " x ", "a\"b,c\nd"], [""], ["only"]]
+    println("nasty round trip:", csv_parse(csv_format(nasty)).unwrap() == nasty)
+    println("nasty tsv round trip:", csv_parse(csv_format(nasty, '\t'), '\t').unwrap() == nasty)
+    println("nasty crlf round trip:", csv_parse(csv_format(nasty, line_end: "\r\n")).unwrap() == nasty)
+    println("column:", csv_column(table, 1), csv_column([["a"], ["b", "c"]], 1))
+
+    // ---- files
+    let path = temp_dir() + "atf_std_csv_test.csv"
+    println("write:", csv_write_file(path, table))
+    println("read back equal:", csv_read_file(path).unwrap() == table)
+    println("tsv write/read:", csv_write_file(path, table, '\t'), csv_read_file(path, '\t').unwrap() == table)
+    delete_file(path)
+    println("missing:", csv_read_file(path).is_err())
+
+    // ---- a bigger table
+    var big: [[str]] = []
+    for i in 0..3000 { big.push([str(i), "name {i}", "x,{i}", "q\"{i}"]) }
+    let big_text = csv_format(big)
+    let big_back = csv_parse(big_text).unwrap()
+    println("big:", big_text.len(), big_back.len(), big_back[2999], big_back == big)
+
+    println("failures:", failures)
+    return failures
+}

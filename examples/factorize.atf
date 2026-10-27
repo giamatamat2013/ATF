@@ -1,0 +1,86 @@
+// factorize.atf - prime factorization, gcd / lcm and divisors.
+// Shows: while loops, integer division and modulo, arrays of tuples, maps for exponents,
+//        the built-in gcd(), building text with join.
+// Run:   python run_atf.py run examples/factorize.atf
+
+// the prime factors of n in increasing order, with repetition: 360 -> [2, 2, 2, 3, 3, 5]
+fn factors(n: int) -> [int] {
+    var out: [int] = []
+    var m = n
+    var p = 2
+    while p * p <= m {
+        while m % p == 0 {
+            out.push(p)
+            m = m / p
+        }
+        p += 1
+    }
+    if m > 1 { out.push(m) }
+    return out
+}
+
+// 360 -> "2^3 * 3^2 * 5"
+fn factor_text(n: int) -> str {
+    if n < 2 { return str(n) }
+    var exps: {int: int} = {}
+    for p in factors(n) {
+        exps[p] = exps.get(p, 0) + 1
+    }
+    var parts: [str] = []
+    for p, e in exps {
+        if e == 1 { parts.push(str(p)) } else { parts.push("{p}^{e}") }
+    }
+    return " * ".join(parts)
+}
+
+fn lcm(a: int, b: int) -> int {
+    return a / gcd(a, b) * b
+}
+
+fn divisors(n: int) -> [int] {
+    var small: [int] = []
+    var large: [int] = []
+    var d = 1
+    while d * d <= n {
+        if n % d == 0 {
+            small.push(d)
+            if d != n / d { large.push(n / d) }
+        }
+        d += 1
+    }
+    return small + large.reversed()
+}
+
+fn is_perfect(n: int) -> bool {
+    var sum = 0
+    for d in divisors(n) {
+        if d != n { sum += d }
+    }
+    return sum == n
+}
+
+fn main() {
+    for n in [2, 12, 97, 360, 1001, 65536, 123456789, 600851475143] {
+        println("{n:>12} = {factor_text(n)}")
+    }
+
+    println("gcd(84, 36) =", gcd(84, 36), "  lcm(84, 36) =", lcm(84, 36))
+    println("gcd(17, 5) =", gcd(17, 5), "  gcd(0, 9) =", gcd(0, 9))
+
+    // the smallest number divisible by 1..20
+    var l = 1
+    for i in 2..=20 { l = lcm(l, i) }
+    println("smallest number divisible by all of 1..20:", l)
+
+    println("divisors of 360:", divisors(360))
+    println("number of divisors of 360:", divisors(360).len())
+
+    var perfect: [int] = []
+    for n in 2..10000 {
+        if is_perfect(n) { perfect.push(n) }
+    }
+    println("perfect numbers below 10000:", perfect)
+
+    // the largest prime factor of 600851475143
+    println("largest prime factor of 600851475143:", factors(600851475143).last())
+}

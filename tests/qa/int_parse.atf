@@ -1,0 +1,20 @@
+// integer parsing: signs, whitespace, bases, separators, limits, garbage
+fn main() {
+    println("0".parse_int(), "-0".parse_int(), "+7".parse_int(), "  42  ".parse_int(), "\t-13\r\n".parse_int())
+    println("".parse_int(), " ".parse_int(), "-".parse_int(), "+".parse_int(), "--1".parse_int(), "+-1".parse_int())
+    println("12a".parse_int(), "a12".parse_int(), "1 2".parse_int(), "1.0".parse_int(), "1e3".parse_int(), "١".parse_int())
+    println("0x1F".parse_int(), "0XfF".parse_int(), "-0x10".parse_int(), "0b101".parse_int(), "0B11".parse_int(), "0x".parse_int(), "0b".parse_int())
+    println("1_000".parse_int(), "007".parse_int(), "0x7fffffffffffffff".parse_int())
+    println("9223372036854775807".parse_int(), "-9223372036854775808".parse_int())
+    println(int("123"), int("-5"), "99".to_int() + 1, str(int("0b1111")))
+    println("ff".parse_int_base(16), "FF".parse_int_base(16), "777".parse_int_base(8), "z".parse_int_base(36), "101".parse_int_base(2), "0".parse_int_base(10))
+    // round trip of many values
+    var ok = 0
+    var v = 1
+    for i in 0..62 {
+        if str(v).parse_int()! == v and str(-v).parse_int()! == -v { ok += 1 }
+        v = v * 2 + 1
+    }
+    println("round trips:", ok)
+    println(str(INT_MIN).parse_int()! == INT_MIN, str(INT_MAX).parse_int()! == INT_MAX)
+}

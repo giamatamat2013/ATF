@@ -1,0 +1,1536 @@
+// Recursive-descent / Pratt parser (port of atf/parser.py)
+import "util"
+import "lexer"
+import "ast"
+
+const PREC_UNARY = 14
+
+// binding power of a binary operator; -1 if `op` is not a binary operator
+fn binary_prec(op: str) -> int {
+    if op == "??" { return 2 }
+    if op == "or" or op == "||" { return 3 }
+    if op == "and" or op == "&&" { return 4 }
+    if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "in" { return 6 }
+    if op == "|" { return 7 }
+    if op == "^" { return 8 }
+    if op == "&" { return 9 }
+    if op == "<<" or op == ">>" or op == ">>>" { return 10 }
+    if op == "+" or op == "-" { return 11 }
+    if op == "*" or op == "/" or op == "%" { return 12 }
+    if op == "as" { return 13 }
+    if op == "**" { return 15 }
+    return -1
+}
+
+fn binary_right_assoc(op: str) -> bool {
+    return op == "??" or op == "**"
+}
+
+fn is_assign_op(v: str) -> bool {
+    return v == "=" or v == "+=" or v == "-=" or v == "*=" or v == "/=" or v == "%=" or v == "&=" or v == "|=" or
+        v == "^=" or v == "<<=" or v == ">>=" or v == "**="
+}
+
+// decimal text of a token integer (tokens hold values up to 2^64-1 wrapped into an int)
+fn int_tok_text(v: int) -> str {
+    if v >= 0 { return str(v) }
+    let q = (v >>> 1) / 5
+    let r = v - q * 10
+    return str(q) + str(r)
+}
+
+struct Parser {
+    toks: [Token],
+    i: int,
+    file: str,
+    no_struct: bool
+}
+
+fn new_parser(toks: [Token], file: str) -> Parser {
+    return Parser(toks, 0, file, false)
+}
+
+impl Parser {
+    // ---- token helpers --------------------------------------------------
+    fn tok(self) -> Token {
+        return self.toks[self.i]
+    }
+
+    fn peek(self, k: int = 1) -> Token {
+        let j = self.i + k
+        if j < self.toks.len() { return self.toks[j] }
+        return self.toks[self.toks.len() - 1]
+    }
+
+    fn pos(self) -> Pos {
+        let t = self.tok()
+        return Pos(self.file, t.line, t.col)
+    }
+
+    fn pos_of(self, t: Token) -> Pos {
+        return Pos(self.file, t.line, t.col)
+    }
+
+    fn error(self, msg: str, hint: str = "") -> never {
+        fail(self.pos(), msg, hint)
+    }
+
+    fn describe(self, t: Token) -> str {
+        match t.kind {
+            TokKind.Eof => return "end of file"
+            TokKind.Newline => return "end of line"
+            TokKind.Str => return "a string"
+            TokKind.Int => return "'" + int_tok_text(t.ival) + "'"
+            TokKind.Char => return "'" + str(t.ival) + "'"
+            TokKind.Float => return "'" + float_to_str(t.fval) + "'"
+            _ => return "'" + t.val + "'"
+        }
+    }
+
+    fn at_op(self, v: str) -> bool {
+        let t = self.tok()
+        return t.kind == TokKind.Op and t.val == v
+    }
+
+    fn at_kw(self, v: str) -> bool {
+        let t = self.tok()
+        return t.kind == TokKind.Kw and t.val == v
+    }
+
+    fn eat_op(self, v: str) -> bool {
+        if self.at_op(v) {
+            self.i += 1
+            return true
+        }
+        return false
+    }
+
+    fn eat_kw(self, v: str) -> bool {
+        if self.at_kw(v) {
+            self.i += 1
+            return true
+        }
+        return false
+    }
+
+    fn expect_op(self, v: str, what: str = "") -> Token {
+        if not self.at_op(v) {
+            var w = ""
+            if what.len() > 0 { w = " " + what }
+            var hint = ""
+            if v == "\{" and self.at_op("=") { hint = "to compare two values use ==" }
+            if v == ")" and what == "to close the call" and self.starts_expr() { hint = "separate the arguments with commas" }
+            self.error("expected '" + v + "'" + w + " but found " + self.describe(self.tok()), hint)
+        }
+        let t = self.tok()
+        self.i += 1
+        return t
+    }
+
+    fn expect_kw(self, v: str) {
+        if not self.at_kw(v) {
+            self.error("expected '" + v + "' but found " + self.describe(self.tok()))
+        }
+        self.i += 1
+    }
+
+    fn expect_ident(self, what: str = "a name") -> Token {
+        let t = self.tok()
+        if t.kind != TokKind.Ident {
+            if t.kind == TokKind.Kw {
+                self.error("expected " + what + " but found keyword '" + t.val + "'", "'" + t.val + "' is a reserved word")
+            }
+            self.error("expected " + what + " but found " + self.describe(t))
+        }
+        self.i += 1
+        return t
+    }
+
+    fn skip_nl(self) {
+        while self.tok().kind == TokKind.Newline or self.at_op(";") {
+            self.i += 1
+        }
+    }
+
+    fn end_stmt(self) {
+        let t = self.tok()
+        if t.kind == TokKind.Newline or (t.kind == TokKind.Op and t.val == ";") {
+            self.skip_nl()
+            return
+        }
+        if t.kind == TokKind.Eof or (t.kind == TokKind.Op and t.val == "}") { return }
+        self.error("unexpected " + self.describe(t) + " (expected end of statement)")
+    }
+
+    fn expect_gt(self) {
+        let t = self.tok()
+        if t.kind == TokKind.Op {
+            if t.val == ">" {
+                self.i += 1
+                return
+            }
+            if t.val == ">>" or t.val == ">=" or t.val == ">>=" or t.val == ">>>" {
+                t.val = t.val[1..]
+                return
+            }
+        }
+        self.error("expected '>' but found " + self.describe(t))
+    }
+
+    // ---- program ----------------------------------------------------------
+    fn parse_program(self) -> [Item] {
+        var items: [Item] = []
+        self.skip_nl()
+        while self.tok().kind != TokKind.Eof {
+            items.push(self.parse_item())
+            self.skip_nl()
+        }
+        return items
+    }
+
+    fn parse_item(self) -> Item {
+        let pos = self.pos()
+        var attrs: [str] = []
+        while self.at_op("#") {
+            self.i += 1
+            self.expect_op("[")
+            let name = self.expect_ident("an attribute name").val
+            attrs.push(name)
+            self.expect_op("]")
+            self.skip_nl()
+        }
+        self.eat_kw("pub")
+        let t = self.tok()
+        if t.kind == TokKind.Kw {
+            let k = t.val
+            if k == "fn" { return Item.Fn(self.parse_fn(attrs, false)) }
+            if k == "struct" { return Item.Struct(self.parse_struct()) }
+            if k == "enum" { return Item.Enum(self.parse_enum()) }
+            if k == "impl" { return Item.Impl(self.parse_impl()) }
+            if k == "interface" { return Item.Iface(self.parse_interface()) }
+            if k == "const" {
+                self.i += 1
+                let name = self.expect_ident("a constant name").val
+                var ty: TypeExpr? = nil
+                if self.eat_op(":") { ty = self.parse_type() }
+                self.expect_op("=")
+                let val = self.parse_expr(0)
+                self.end_stmt()
+                return Item.Const(ConstDecl(name, ty, val, pos))
+            }
+            if k == "let" or k == "var" {
+                self.i += 1
+                let name = self.expect_ident("a variable name").val
+                var ty: TypeExpr? = nil
+                if self.eat_op(":") { ty = self.parse_type() }
+                var val: Expr? = nil
+                if self.eat_op("=") { val = self.parse_expr(0) }
+                self.end_stmt()
+                return Item.Global(GlobalDecl(name, ty, val, k == "var", pos))
+            }
+            if k == "import" {
+                self.i += 1
+                if self.tok().kind != TokKind.Str {
+                    self.error("expected a file name in quotes after 'import'", "example: import \"std/random\"")
+                }
+                let path = lit_parts_text(self.tok().parts)
+                self.i += 1
+                self.end_stmt()
+                return Item.Import(ImportDecl(path, pos))
+            }
+            if k == "extern" { return Item.Extern(self.parse_extern()) }
+            if k == "type" {
+                self.i += 1
+                let name = self.expect_ident("a type name").val
+                let tps = self.parse_tparams()
+                self.expect_op("=")
+                let ty = self.parse_type()
+                self.end_stmt()
+                return Item.Alias(AliasDecl(name, tps, ty, pos))
+            }
+        }
+        self.error("expected a declaration (fn, struct, enum, impl, const, let, var, import) but found " + self.describe(t))
+    }
+
+    fn parse_tparams(self) -> [str] {
+        var tps: [str] = []
+        if self.at_op("<") {
+            self.i += 1
+            loop {
+                tps.push(self.expect_ident("a type parameter").val)
+                if not self.eat_op(",") { break }
+            }
+            self.expect_gt()
+        }
+        return tps
+    }
+
+    fn parse_fn(self, attrs: [str], anonymous: bool) -> FnDecl {
+        let pos = self.pos()
+        self.expect_kw("fn")
+        var name = ""
+        var tps: [str] = []
+        if not anonymous {
+            name = self.expect_ident("a function name").val
+            tps = self.parse_tparams()
+        }
+        self.expect_op("(")
+        let params = self.parse_params()
+        var ret: TypeExpr? = nil
+        if self.eat_op("->") { ret = self.parse_type() }
+        var body = Block([], pos)
+        if self.eat_op("=>") {
+            let e = self.parse_expr(0)
+            body = Block([mk_stmt(StmtK.Return(e), e.pos)], e.pos)
+            if not anonymous { self.end_stmt() }
+        } else {
+            self.skip_nl_before_brace()
+            body = self.parse_block()
+        }
+        return FnDecl(name, tps, params, ret, body, attrs, pos)
+    }
+
+    fn skip_nl_before_brace(self) {
+        // allow `fn f()\n{` Allman style
+        if self.tok().kind == TokKind.Newline and self.peek().kind == TokKind.Op and self.peek().val == "\{" {
+            self.i += 1
+        }
+    }
+
+    fn parse_params(self) -> [Param] {
+        var params: [Param] = []
+        self.skip_nl()
+        while not self.at_op(")") {
+            let ppos = self.pos()
+            if self.at_kw("var") { self.i += 1 }
+            let name = self.expect_ident("a parameter name").val
+            var ty: TypeExpr? = nil
+            var default: Expr? = nil
+            if self.eat_op(":") {
+                ty = self.parse_type()
+            } else if name != "self" {
+                self.error("parameter '" + name + "' needs a type, like  " + name + ": int")
+            }
+            if self.eat_op("=") { default = self.parse_expr(0) }
+            params.push(Param(name, ty, default, ppos))
+            self.skip_nl()
+            if not self.eat_op(",") { break }
+            self.skip_nl()
+        }
+        self.skip_nl()
+        self.expect_op(")")
+        return params
+    }
+
+    fn parse_interface(self) -> IfaceDecl {
+        let pos = self.pos()
+        self.expect_kw("interface")
+        let name = self.expect_ident("an interface name").val
+        self.skip_nl_before_brace()
+        self.expect_op("\{")
+        self.skip_nl()
+        var methods: [FnDecl] = []
+        while not self.at_op("}") {
+            let mpos = self.pos()
+            if not self.at_kw("fn") {
+                self.error("an interface contains method signatures like  fn area(self) -> float")
+            }
+            self.i += 1
+            let mname = self.expect_ident("a method name").val
+            self.expect_op("(")
+            let params = self.parse_params()
+            if params.len() == 0 or params[0].name != "self" {
+                fail(mpos, "interface methods must take 'self' as their first parameter")
+            }
+            var ret: TypeExpr? = nil
+            if self.eat_op("->") { ret = self.parse_type() }
+            methods.push(FnDecl(mname, [], params, ret, nil, [], mpos))
+            self.end_stmt()
+            self.skip_nl()
+        }
+        self.expect_op("}")
+        self.end_stmt()
+        return IfaceDecl(name, methods, pos)
+    }
+
+    fn parse_extern(self) -> ExternDecl {
+        let pos = self.pos()
+        self.expect_kw("extern")
+        if self.tok().kind != TokKind.Str {
+            self.error("expected the DLL name in quotes, like  extern \"kernel32\" fn ...")
+        }
+        let dll = lit_parts_text(self.tok().parts)
+        self.i += 1
+        self.expect_kw("fn")
+        let name = self.expect_ident("a function name").val
+        self.expect_op("(")
+        let params = self.parse_params()
+        var ret: TypeExpr? = nil
+        if self.eat_op("->") { ret = self.parse_type() }
+        self.end_stmt()
+        return ExternDecl(dll, name, params, ret, pos)
+    }
+
+    fn parse_struct(self) -> StructDecl {
+        let pos = self.pos()
+        self.expect_kw("struct")
+        let name = self.expect_ident("a struct name").val
+        let tps = self.parse_tparams()
+        self.skip_nl_before_brace()
+        self.expect_op("\{")
+        self.skip_nl()
+        var fields: [FieldDecl] = []
+        while not self.at_op("}") {
+            let fname = self.expect_ident("a field name")
+            self.expect_op(":")
+            let fty = self.parse_type()
+            var fdef: Expr? = nil
+            if self.eat_op("=") { fdef = self.parse_expr(0) }
+            fields.push(FieldDecl(fname.val, fty, self.pos_of(fname), fdef))
+            if not self.eat_op(",") {
+                if not (self.tok().kind == TokKind.Newline or self.at_op("}") or self.at_op(";")) {
+                    self.error("expected ',' or a new line between struct fields")
+                }
+            }
+            self.skip_nl()
+        }
+        self.expect_op("}")
+        self.end_stmt()
+        return StructDecl(name, tps, fields, pos)
+    }
+
+    fn parse_enum(self) -> EnumDecl {
+        let pos = self.pos()
+        self.expect_kw("enum")
+        let name = self.expect_ident("an enum name").val
+        let tps = self.parse_tparams()
+        self.skip_nl_before_brace()
+        self.expect_op("\{")
+        self.skip_nl()
+        var variants: [VariantDecl] = []
+        while not self.at_op("}") {
+            let vt = self.expect_ident("a variant name")
+            var payload: [TypeExpr] = []
+            var value: int? = nil
+            if self.eat_op("(") {
+                self.skip_nl()
+                while not self.at_op(")") {
+                    // allow optional `name: Type`
+                    if self.tok().kind == TokKind.Ident and self.peek().kind == TokKind.Op and self.peek().val == ":" {
+                        self.i += 2
+                    }
+                    payload.push(self.parse_type())
+                    self.skip_nl()
+                    if not self.eat_op(",") { break }
+                    self.skip_nl()
+                }
+                self.expect_op(")")
+            } else if self.eat_op("=") {
+                let neg = self.eat_op("-")
+                if self.tok().kind != TokKind.Int {
+                    self.error("enum values must be integer constants")
+                }
+                if neg { value = -self.tok().ival } else { value = self.tok().ival }
+                self.i += 1
+            }
+            variants.push(VariantDecl(vt.val, payload, value, self.pos_of(vt)))
+            if not self.eat_op(",") {
+                if not (self.tok().kind == TokKind.Newline or self.at_op("}") or self.at_op(";")) {
+                    self.error("expected ',' or a new line between enum variants")
+                }
+            }
+            self.skip_nl()
+        }
+        self.expect_op("}")
+        self.end_stmt()
+        return EnumDecl(name, tps, variants, pos)
+    }
+
+    fn parse_impl(self) -> ImplDecl {
+        let pos = self.pos()
+        self.expect_kw("impl")
+        let tps = self.parse_tparams()
+        let ty = self.parse_type()
+        self.skip_nl_before_brace()
+        self.expect_op("\{")
+        self.skip_nl()
+        var methods: [FnDecl] = []
+        while not self.at_op("}") {
+            var attrs: [str] = []
+            while self.at_op("#") {
+                self.i += 1
+                self.expect_op("[")
+                attrs.push(self.expect_ident().val)
+                self.expect_op("]")
+                self.skip_nl()
+            }
+            self.eat_kw("pub")
+            if not self.at_kw("fn") {
+                self.error("only functions can appear inside 'impl' (found " + self.describe(self.tok()) + ")")
+            }
+            methods.push(self.parse_fn(attrs, false))
+            self.skip_nl()
+        }
+        self.expect_op("}")
+        self.end_stmt()
+        return ImplDecl(ty, tps, methods, pos)
+    }
+
+    // ---- types --------------------------------------------------------------
+    fn parse_type(self) -> TypeExpr {
+        var t = self.parse_type_primary()
+        while self.at_op("?") and not self.tok().space_before {
+            self.i += 1
+            t = mk_type(TypeK.Opt(t), t.pos)
+        }
+        return t
+    }
+
+    fn parse_type_primary(self) -> TypeExpr {
+        let t = self.tok()
+        let pos = self.pos()
+        if t.kind == TokKind.Op {
+            if t.val == "[" {
+                self.i += 1
+                let e = self.parse_type()
+                self.expect_op("]")
+                return mk_type(TypeK.Array(e), pos)
+            }
+            if t.val == "\{" {
+                self.i += 1
+                let k = self.parse_type()
+                self.expect_op(":")
+                let v = self.parse_type()
+                self.expect_op("}")
+                return mk_type(TypeK.Map(k, v), pos)
+            }
+            if t.val == "(" {
+                self.i += 1
+                var elems: [TypeExpr] = []
+                while not self.at_op(")") {
+                    elems.push(self.parse_type())
+                    if not self.eat_op(",") { break }
+                }
+                self.expect_op(")")
+                if elems.len() == 0 { return mk_type(TypeK.Name("void", []), pos) }
+                if elems.len() == 1 { return elems[0] }
+                return mk_type(TypeK.Tuple(elems), pos)
+            }
+        }
+        if t.kind == TokKind.Kw and t.val == "fn" {
+            self.i += 1
+            self.expect_op("(")
+            var params: [TypeExpr] = []
+            while not self.at_op(")") {
+                params.push(self.parse_type())
+                if not self.eat_op(",") { break }
+            }
+            self.expect_op(")")
+            var ret: TypeExpr? = nil
+            if self.eat_op("->") { ret = self.parse_type() }
+            return mk_type(TypeK.Fn(params, ret), pos)
+        }
+        if t.kind == TokKind.Ident {
+            self.i += 1
+            var args: [TypeExpr] = []
+            if self.at_op("<") {
+                self.i += 1
+                loop {
+                    args.push(self.parse_type())
+                    if not self.eat_op(",") { break }
+                }
+                self.expect_gt()
+            }
+            if t.val == "ptr" and args.len() == 1 { return mk_type(TypeK.Ptr(args[0]), pos) }
+            return mk_type(TypeK.Name(t.val, args), pos)
+        }
+        self.error("expected a type but found " + self.describe(t))
+    }
+
+    // ---- statements -----------------------------------------------------------
+    fn parse_block(self) -> Block {
+        let pos = self.pos()
+        self.expect_op("\{")
+        var stmts: [Stmt] = []
+        let saved = self.no_struct
+        self.no_struct = false
+        self.skip_nl()
+        while not self.at_op("}") {
+            if self.tok().kind == TokKind.Eof {
+                self.error("this '\{' is never closed")
+            }
+            stmts.push(self.parse_stmt())
+            self.skip_nl()
+        }
+        self.expect_op("}")
+        self.no_struct = saved
+        return Block(stmts, pos)
+    }
+
+    fn parse_stmt(self) -> Stmt {
+        let t = self.tok()
+        let pos = self.pos()
+        if t.kind == TokKind.Kw {
+            let k = t.val
+            if k == "let" or k == "var" or k == "const" { return self.parse_let() }
+            if k == "if" { return self.parse_if_stmt() }
+            if k == "while" {
+                self.i += 1
+                let cond = self.parse_cond()
+                self.skip_nl_before_brace()
+                let body = self.parse_block()
+                self.end_stmt_soft()
+                return mk_stmt(StmtK.While(cond, body), pos)
+            }
+            if k == "loop" {
+                self.i += 1
+                self.skip_nl_before_brace()
+                let body = self.parse_block()
+                self.end_stmt_soft()
+                return mk_stmt(StmtK.Loop(body), pos)
+            }
+            if k == "for" { return self.parse_for() }
+            if k == "break" {
+                self.i += 1
+                if self.tok().kind == TokKind.Ident {
+                    let label = self.tok().val
+                    self.i += 1
+                    self.end_stmt()
+                    return mk_stmt(StmtK.BreakL(label), pos)
+                }
+                self.end_stmt()
+                return mk_stmt(StmtK.Break, pos)
+            }
+            if k == "continue" {
+                self.i += 1
+                if self.tok().kind == TokKind.Ident {
+                    let label = self.tok().val
+                    self.i += 1
+                    self.end_stmt()
+                    return mk_stmt(StmtK.ContinueL(label), pos)
+                }
+                self.end_stmt()
+                return mk_stmt(StmtK.Continue, pos)
+            }
+            if k == "return" {
+                self.i += 1
+                var val: Expr? = nil
+                if not (self.tok().kind == TokKind.Newline or self.tok().kind == TokKind.Eof or self.at_op("}") or self.at_op(";")) {
+                    val = self.parse_expr(0)
+                }
+                self.end_stmt()
+                return mk_stmt(StmtK.Return(val), pos)
+            }
+            if k == "defer" {
+                self.i += 1
+                let st = self.parse_stmt()
+                return mk_stmt(StmtK.Defer(st), pos)
+            }
+            if k == "match" {
+                let m = self.parse_match_stmt()
+                self.end_stmt_soft()
+                return m
+            }
+        }
+        if t.kind == TokKind.Op and t.val == "\{" {
+            let b = self.parse_block()
+            self.end_stmt_soft()
+            return mk_stmt(StmtK.BlockS(b), pos)
+        }
+        // label: for/while/loop
+        if t.kind == TokKind.Ident and self.peek(1).kind == TokKind.Op and self.peek(1).val == ":" and self.peek(2).kind == TokKind.Kw {
+            let lk = self.peek(2).val
+            if lk == "for" or lk == "while" or lk == "loop" {
+                self.i += 2
+                let inner = self.parse_stmt()
+                return mk_stmt(StmtK.Labeled(t.val, inner), pos)
+            }
+        }
+        // expression or assignment
+        let e = self.parse_expr(0)
+        if self.at_op(",") { return self.parse_multi_assign(e, pos) }
+        if self.tok().kind == TokKind.Op and is_assign_op(self.tok().val) {
+            let op = self.tok().val
+            self.i += 1
+            self.skip_nl()
+            let val = self.parse_expr(0)
+            self.end_stmt()
+            return mk_stmt(StmtK.Assign(e, op, val), pos)
+        }
+        self.end_stmt()
+        return mk_stmt(StmtK.ExprS(e), pos)
+    }
+
+    // a, b = x, y   (all values are evaluated before any target is assigned)
+    // a, b = pair   (a tuple is taken apart)
+    fn parse_multi_assign(self, first: Expr, pos: Pos) -> Stmt {
+        var targets: [Expr] = [first]
+        while self.eat_op(",") { targets.push(self.parse_expr(0)) }
+        if not self.at_op("=") {
+            self.error("expected '=' after the assignment targets (as in  a, b = b, a)")
+        }
+        self.i += 1
+        self.skip_nl()
+        var vals: [Expr] = [self.parse_expr(0)]
+        while self.eat_op(",") { vals.push(self.parse_expr(0)) }
+        self.end_stmt()
+        var stmts: [Stmt] = []
+        let base = "$ma{pos.line}_{pos.col}"
+        if vals.len() == 1 {
+            stmts.push(mk_stmt(StmtK.Let([base], false, nil, vals[0], false), pos))
+            for i in 0..targets.len() {
+                let src = mk_expr(ExprK.TupleField(mk_expr(ExprK.Ident(base, nil), pos), i), pos)
+                stmts.push(mk_stmt(StmtK.Assign(targets[i], "=", src), targets[i].pos))
+            }
+        } else {
+            if vals.len() != targets.len() {
+                fail(pos, "{targets.len()} targets but {vals.len()} values in this assignment")
+            }
+            for i in 0..vals.len() {
+                stmts.push(mk_stmt(StmtK.Let([base + "_" + str(i)], false, nil, vals[i], false), vals[i].pos))
+            }
+            for i in 0..targets.len() {
+                let src = mk_expr(ExprK.Ident(base + "_" + str(i), nil), targets[i].pos)
+                stmts.push(mk_stmt(StmtK.Assign(targets[i], "=", src), targets[i].pos))
+            }
+        }
+        return mk_stmt(StmtK.BlockS(Block(stmts, pos)), pos)
+    }
+
+    // after a block-ending statement a terminator is optional
+    fn end_stmt_soft(self) {
+        let t = self.tok()
+        if t.kind == TokKind.Newline or (t.kind == TokKind.Op and t.val == ";") { self.skip_nl() }
+    }
+
+    fn parse_let(self) -> Stmt {
+        let pos = self.pos()
+        let kw = self.tok().val
+        self.i += 1
+        let mutable = kw == "var"
+        var names: [str] = []
+        var is_tuple = false
+        if self.at_op("(") {
+            self.i += 1
+            is_tuple = true
+            while not self.at_op(")") {
+                if self.tok().kind == TokKind.Ident {
+                    names.push(self.tok().val)
+                    self.i += 1
+                } else {
+                    self.error("expected a name in the tuple pattern")
+                }
+                if not self.eat_op(",") { break }
+            }
+            self.expect_op(")")
+        } else {
+            names.push(self.expect_ident("a variable name").val)
+        }
+        var ty: TypeExpr? = nil
+        if self.eat_op(":") { ty = self.parse_type() }
+        var init: Expr? = nil
+        if self.eat_op("=") {
+            self.skip_nl()
+            init = self.parse_expr(0)
+        } else if ty == nil {
+            var shown = "(..)"
+            var shown2 = "(a, b)"
+            if not is_tuple {
+                shown = names[0]
+                shown2 = names[0]
+            }
+            fail(pos, "'" + kw + " " + shown + "' needs a value:  " + kw + " " + shown2 + " = ...")
+        } else if not mutable {
+            var target = ""
+            if is_tuple {
+                // the Python parser formats the list of names with repr()
+                var q: [str] = []
+                for n in names { q.push("'" + n + "'") }
+                target = "[" + ", ".join(q) + "]"
+            } else {
+                target = names[0]
+            }
+            self.error("'let " + target + "' needs a value (use 'var' for a variable you assign later)")
+        }
+        self.end_stmt()
+        return mk_stmt(StmtK.Let(names, is_tuple, ty, init, mutable), pos)
+    }
+
+    fn parse_cond(self) -> Cond {
+        let saved = self.no_struct
+        self.no_struct = true
+        if self.at_kw("let") {
+            self.i += 1
+            let pat = self.parse_pattern()
+            self.expect_op("=")
+            let e = self.parse_expr(0)
+            self.no_struct = saved
+            return Cond.Let(pat, e)
+        }
+        let e = self.parse_expr(0)
+        self.no_struct = saved
+        return Cond.Plain(e)
+    }
+
+    // optional `else` part of an if (it may sit on the next line); an `else if` chain becomes a block
+    // holding one statement (If) or, for if-expressions, one expression statement (IfExpr)
+    fn parse_else(self, is_stmt: bool) -> Block? {
+        var j = self.i
+        while self.toks[j].kind == TokKind.Newline { j += 1 }
+        if self.toks[j].kind == TokKind.Kw and self.toks[j].val == "else" {
+            self.i = j + 1
+            if self.at_kw("if") {
+                if is_stmt {
+                    let s = self.parse_if_stmt()
+                    return Block([s], s.pos)
+                }
+                let e = self.parse_if_expr()
+                return Block([mk_stmt(StmtK.ExprS(e), e.pos)], e.pos)
+            }
+            self.skip_nl_before_brace()
+            return self.parse_block()
+        }
+        return nil
+    }
+
+    fn parse_if_stmt(self) -> Stmt {
+        let pos = self.pos()
+        self.expect_kw("if")
+        let cond = self.parse_cond()
+        self.skip_nl_before_brace()
+        let then = self.parse_block()
+        let els = self.parse_else(true)
+        self.end_stmt_soft()
+        return mk_stmt(StmtK.If(cond, then, els), pos)
+    }
+
+    fn parse_if_expr(self) -> Expr {
+        let pos = self.pos()
+        self.expect_kw("if")
+        let cond = self.parse_cond()
+        self.skip_nl_before_brace()
+        let then = self.parse_block()
+        let els = self.parse_else(false)
+        return mk_expr(ExprK.IfExpr(cond, then, els), pos)
+    }
+
+    fn parse_for(self) -> Stmt {
+        let pos = self.pos()
+        self.expect_kw("for")
+        var names: [str] = []
+        var groups: [(str, [str])] = []
+        loop {
+            if self.eat_op("(") {
+                var group: [str] = []
+                loop {
+                    group.push(self.expect_ident("a loop variable").val)
+                    if not self.eat_op(",") { break }
+                }
+                self.expect_op(")")
+                if group.len() == 1 {
+                    names.push(group[0])
+                } else {
+                    let tmp = "$for{pos.line}_{pos.col}_{names.len()}"
+                    groups.push((tmp, group))
+                    names.push(tmp)
+                }
+            } else {
+                names.push(self.expect_ident("a loop variable").val)
+            }
+            if not self.eat_op(",") { break }
+        }
+        self.expect_kw("in")
+        let saved = self.no_struct
+        self.no_struct = true
+        let it = self.parse_expr(0)
+        self.no_struct = saved
+        self.skip_nl_before_brace()
+        var body = self.parse_block()
+        self.end_stmt_soft()
+        if groups.len() > 0 {
+            var stmts: [Stmt] = []
+            for g in groups {
+                stmts.push(mk_stmt(StmtK.Let(g.1, true, nil, mk_expr(ExprK.Ident(g.0, nil), pos), false), pos))
+            }
+            for s in body.stmts { stmts.push(s) }
+            body = Block(stmts, body.pos)
+        }
+        return mk_stmt(StmtK.For(names, it, body), pos)
+    }
+
+    fn parse_match_stmt(self) -> Stmt {
+        let pos = self.pos()
+        let (subject, arms) = self.parse_match()
+        return mk_stmt(StmtK.MatchS(subject, arms), pos)
+    }
+
+    fn parse_match_expr(self) -> Expr {
+        let pos = self.pos()
+        let (subject, arms) = self.parse_match()
+        return mk_expr(ExprK.MatchExpr(subject, arms), pos)
+    }
+
+    fn parse_match(self) -> (Expr, [Arm]) {
+        self.expect_kw("match")
+        var saved = self.no_struct
+        self.no_struct = true
+        let subject = self.parse_expr(0)
+        self.no_struct = saved
+        self.skip_nl_before_brace()
+        self.expect_op("\{")
+        self.skip_nl()
+        var arms: [Arm] = []
+        saved = self.no_struct
+        self.no_struct = false
+        while not self.at_op("}") {
+            let apos = self.pos()
+            let pat = self.parse_pattern()
+            var guard: Expr? = nil
+            if self.eat_kw("if") { guard = self.parse_expr(0) }
+            self.expect_op("=>")
+            self.skip_nl()
+            var body = ArmBody.Blk(Block([], apos))
+            if self.at_op("\{") {
+                body = ArmBody.Blk(self.parse_block())
+            } else if self.tok().kind == TokKind.Kw and (self.tok().val == "return" or self.tok().val == "break" or self.tok().val == "continue") {
+                let st = self.parse_stmt()
+                arms.push(Arm(pat, guard, ArmBody.Blk(Block([st], apos)), apos))
+                self.skip_nl()
+                continue
+            } else {
+                let e = self.parse_expr(0)
+                body = ArmBody.Ex(e)
+                if self.tok().kind == TokKind.Op and is_assign_op(self.tok().val) {
+                    let op = self.tok().val
+                    self.i += 1
+                    self.skip_nl()
+                    let val = self.parse_expr(0)
+                    body = ArmBody.Blk(Block([mk_stmt(StmtK.Assign(e, op, val), e.pos)], apos))
+                }
+            }
+            arms.push(Arm(pat, guard, body, apos))
+            if not self.eat_op(",") {
+                if not (self.tok().kind == TokKind.Newline or self.at_op("}") or self.at_op(";")) {
+                    self.error("expected ',' or a new line after the match arm")
+                }
+            }
+            self.skip_nl()
+        }
+        self.no_struct = saved
+        self.expect_op("}")
+        return (subject, arms)
+    }
+
+    // ---- patterns ------------------------------------------------------------
+    fn parse_pattern(self) -> Pattern {
+        let pos = self.pos()
+        var alts: [Pattern] = [self.parse_pattern_atom()]
+        while self.at_op("|") {
+            self.i += 1
+            alts.push(self.parse_pattern_atom())
+        }
+        if alts.len() == 1 { return alts[0] }
+        return Pattern(PatK.Or(alts), pos)
+    }
+
+    fn parse_pattern_atom(self) -> Pattern {
+        let t = self.tok()
+        let pos = self.pos()
+        if t.kind == TokKind.Ident {
+            if t.val == "_" {
+                self.i += 1
+                return Pattern(PatK.Wild, pos)
+            }
+            var path: [str] = [t.val]
+            self.i += 1
+            while self.at_op(".") and self.peek().kind == TokKind.Ident {
+                self.i += 1
+                path.push(self.tok().val)
+                self.i += 1
+            }
+            if self.at_op("\{") { return self.parse_field_pattern(path, pos) }
+            var args: [Pattern]? = nil
+            if self.at_op("(") {
+                self.i += 1
+                var a: [Pattern] = []
+                self.skip_nl()
+                while not self.at_op(")") {
+                    a.push(self.parse_pattern())
+                    self.skip_nl()
+                    if not self.eat_op(",") { break }
+                    self.skip_nl()
+                }
+                self.expect_op(")")
+                args = a
+            }
+            if args == nil and path.len() == 1 { return Pattern(PatK.Bind(path[0]), pos) }
+            return Pattern(PatK.Variant(path, args), pos)
+        }
+        if t.kind == TokKind.Op and t.val == "(" {
+            self.i += 1
+            var elems: [Pattern] = []
+            while not self.at_op(")") {
+                elems.push(self.parse_pattern())
+                if not self.eat_op(",") { break }
+            }
+            self.expect_op(")")
+            return Pattern(PatK.Tuple(elems), pos)
+        }
+        // literal or range
+        let lo = self.parse_pattern_literal()
+        if self.at_op("..") or self.at_op("..=") {
+            let inclusive = self.tok().val == "..="
+            self.i += 1
+            let hi = self.parse_pattern_literal()
+            return Pattern(PatK.Range(lo, hi, inclusive), pos)
+        }
+        return Pattern(PatK.Lit(lo), pos)
+    }
+
+    // P{ x: pattern, y, .. }   (missing fields match anything; '..' may be written to say so)
+    fn parse_field_pattern(self, path: [str], pos: Pos) -> Pattern {
+        self.expect_op("\{")
+        var fields: [FieldPat] = []
+        loop {
+            self.skip_nl()
+            if self.at_op("}") { break }
+            if self.eat_op("..") {
+                self.skip_nl()
+                break
+            }
+            let fpos = self.pos()
+            let name = self.expect_ident("a field name").val
+            var p = Pattern(PatK.Bind(name), fpos)
+            if self.eat_op(":") {
+                self.skip_nl()
+                p = self.parse_pattern()
+            }
+            fields.push(FieldPat(name, p, fpos))
+            self.skip_nl()
+            if not self.eat_op(",") { break }
+        }
+        self.skip_nl()
+        self.expect_op("}", "to close the struct pattern")
+        return Pattern(PatK.Fields(path, fields), pos)
+    }
+
+    fn parse_pattern_literal(self) -> Expr {
+        var t = self.tok()
+        let pos = self.pos()
+        var neg = false
+        if t.kind == TokKind.Op and t.val == "-" {
+            neg = true
+            self.i += 1
+            t = self.tok()
+        }
+        if t.kind == TokKind.Int {
+            self.i += 1
+            if neg { return mk_expr(ExprK.IntLit(-t.ival), pos) }
+            return mk_expr(ExprK.IntLit(t.ival), pos)
+        }
+        if t.kind == TokKind.Float {
+            self.i += 1
+            if neg { return mk_expr(ExprK.FloatLit(neg_float(t.fval)), pos) }
+            return mk_expr(ExprK.FloatLit(t.fval), pos)
+        }
+        if t.kind == TokKind.Char {
+            self.i += 1
+            return mk_expr(ExprK.CharLit(t.ival), pos)
+        }
+        if t.kind == TokKind.Str {
+            self.i += 1
+            return self.make_str(t, pos)
+        }
+        if t.kind == TokKind.Kw and (t.val == "true" or t.val == "false") {
+            self.i += 1
+            return mk_expr(ExprK.BoolLit(t.val == "true"), pos)
+        }
+        if t.kind == TokKind.Kw and t.val == "nil" {
+            self.i += 1
+            return mk_expr(ExprK.NilLit, pos)
+        }
+        self.error("expected a pattern (a value, a name, a range, or '_') but found " + self.describe(t))
+    }
+
+    // ---- expressions -----------------------------------------------------------
+    fn parse_expr(self, min_prec: int) -> Expr {
+        let pos = self.pos()
+        var left = self.parse_range_or_prefix(min_prec)
+        loop {
+            let t = self.tok()
+            var op = ""
+            if t.kind == TokKind.Op {
+                op = t.val
+            } else if t.kind == TokKind.Kw and (t.val == "and" or t.val == "or" or t.val == "in" or t.val == "as" or t.val == "not") {
+                op = t.val
+            } else {
+                break
+            }
+            if op == "not" {
+                // `a not in b`
+                let p1 = self.peek()
+                if p1.kind == TokKind.Kw and p1.val == "in" {
+                    let iprec = binary_prec("in")
+                    if iprec < min_prec { break }
+                    self.i += 2
+                    let rhs = self.parse_expr(iprec + 1)
+                    left = mk_expr(ExprK.Unary("not", mk_expr(ExprK.Binary("in", left, rhs), pos)), pos)
+                    continue
+                }
+                break
+            }
+            let prec = binary_prec(op)
+            if prec < 0 { break }
+            if prec < min_prec { break }
+            let opos = self.pos()
+            self.i += 1
+            if op == "as" {
+                let ty = self.parse_type()
+                left = mk_expr(ExprK.Cast(left, ty), opos)
+                continue
+            }
+            self.skip_nl()
+            var next_prec = prec + 1
+            if binary_right_assoc(op) { next_prec = prec }
+            let rhs = self.parse_expr(next_prec)
+            if op == "??" {
+                left = mk_expr(ExprK.Coalesce(left, rhs), opos)
+            } else if op == "and" or op == "&&" {
+                left = mk_expr(ExprK.Binary("and", left, rhs), opos)
+            } else if op == "or" or op == "||" {
+                left = mk_expr(ExprK.Binary("or", left, rhs), opos)
+            } else {
+                left = mk_expr(ExprK.Binary(op, left, rhs), opos)
+            }
+        }
+        if min_prec <= 1 and (self.at_op("..") or self.at_op("..=")) {
+            let inclusive = self.tok().val == "..="
+            self.i += 1
+            var hi: Expr? = nil
+            if self.starts_expr() { hi = self.parse_expr(2) }
+            var stp: Expr? = nil
+            if self.eat_kw("step") { stp = self.parse_expr(2) }
+            return mk_expr(ExprK.Range(left, hi, inclusive, stp), pos)
+        }
+        return left
+    }
+
+    fn starts_expr(self) -> bool {
+        let t = self.tok()
+        if t.kind == TokKind.Int or t.kind == TokKind.Float or t.kind == TokKind.Str or t.kind == TokKind.Char or t.kind == TokKind.Ident {
+            return true
+        }
+        if t.kind == TokKind.Kw {
+            return t.val == "true" or t.val == "false" or t.val == "nil" or t.val == "not" or t.val == "fn" or t.val == "if" or t.val == "match"
+        }
+        if t.kind == TokKind.Op {
+            if t.val == "\{" { return not self.no_struct }
+            return t.val == "(" or t.val == "[" or t.val == "-" or t.val == "~" or t.val == "!" or t.val == "|" or t.val == "||"
+        }
+        return false
+    }
+
+    fn parse_range_or_prefix(self, min_prec: int) -> Expr {
+        let pos = self.pos()
+        if min_prec <= 1 and (self.at_op("..") or self.at_op("..=")) {
+            let inclusive = self.tok().val == "..="
+            self.i += 1
+            var hi: Expr? = nil
+            if self.starts_expr() { hi = self.parse_expr(2) }
+            var stp: Expr? = nil
+            if self.eat_kw("step") { stp = self.parse_expr(2) }
+            return mk_expr(ExprK.Range(nil, hi, inclusive, stp), pos)
+        }
+        return self.parse_unary(min_prec)
+    }
+
+    fn parse_unary(self, min_prec: int) -> Expr {
+        let t = self.tok()
+        let pos = self.pos()
+        if t.kind == TokKind.Op {
+            if t.val == "-" {
+                self.i += 1
+                let e = self.parse_expr(PREC_UNARY)
+                match e.k {
+                    ExprK.IntLit(v) => return mk_expr(ExprK.IntLit(-v), pos)
+                    ExprK.FloatLit(v) => return mk_expr(ExprK.FloatLit(neg_float(v)), pos)
+                    _ => return mk_expr(ExprK.Unary("-", e), pos)
+                }
+            }
+            if t.val == "+" {
+                self.i += 1
+                return self.parse_expr(PREC_UNARY)
+            }
+            if t.val == "!" {
+                self.i += 1
+                return mk_expr(ExprK.Unary("not", self.parse_expr(PREC_UNARY)), pos)
+            }
+            if t.val == "~" {
+                self.i += 1
+                return mk_expr(ExprK.Unary("~", self.parse_expr(PREC_UNARY)), pos)
+            }
+        } else if t.kind == TokKind.Kw and t.val == "not" {
+            self.i += 1
+            return mk_expr(ExprK.Unary("not", self.parse_expr(6)), pos)
+        }
+        return self.parse_postfix()
+    }
+
+    fn parse_postfix(self) -> Expr {
+        var e = self.parse_primary()
+        loop {
+            let t = self.tok()
+            if t.kind != TokKind.Op { break }
+            let v = t.val
+            let pos = self.pos()
+            if v == "(" {
+                self.i += 1
+                let args = self.parse_args()
+                e = mk_expr(ExprK.Call(e, args), pos)
+            } else if v == "[" {
+                self.i += 1
+                let saved = self.no_struct
+                self.no_struct = false
+                self.skip_nl()
+                let idx = self.parse_expr(0)
+                self.skip_nl()
+                self.no_struct = saved
+                self.expect_op("]")
+                e = mk_expr(ExprK.Index(e, idx), pos)
+            } else if v == "." {
+                self.i += 1
+                let nt = self.tok()
+                if nt.kind == TokKind.Ident {
+                    self.i += 1
+                    e = mk_expr(ExprK.Field(e, nt.val), self.pos_of(nt))
+                } else if nt.kind == TokKind.Int {
+                    self.i += 1
+                    e = mk_expr(ExprK.TupleField(e, nt.ival), self.pos_of(nt))
+                } else {
+                    self.error("expected a field or method name after '.' but found " + self.describe(nt))
+                }
+            } else if v == "!" and not t.space_before {
+                self.i += 1
+                e = mk_expr(ExprK.Unwrap(e), pos)
+            } else if v == "?" and not t.space_before {
+                self.i += 1
+                e = mk_expr(ExprK.Try(e), pos)
+            } else {
+                break
+            }
+        }
+        return e
+    }
+
+    fn parse_args(self) -> [Arg] {
+        var args: [Arg] = []
+        let saved = self.no_struct
+        self.no_struct = false
+        self.skip_nl()
+        while not self.at_op(")") {
+            if self.tok().kind == TokKind.Ident and self.peek().kind == TokKind.Op and self.peek().val == ":" and not self.peek().space_before {
+                let npos = self.pos()
+                let name = self.tok().val
+                self.i += 2
+                self.skip_nl()
+                args.push(Arg(name, self.parse_expr(0), npos))
+            } else {
+                let e = self.parse_expr(0)
+                args.push(Arg("", e, e.pos))
+            }
+            self.skip_nl()
+            if not self.eat_op(",") { break }
+            self.skip_nl()
+        }
+        self.no_struct = saved
+        self.skip_nl()
+        self.expect_op(")", "to close the call")
+        return args
+    }
+
+    fn make_str(self, t: Token, pos: Pos) -> Expr {
+        var parts: [StrItem] = []
+        for p in t.parts {
+            match p {
+                StrPart.Lit(s) => parts.push(StrItem.Lit(s))
+                StrPart.Interp(psrc, pline, pcol, pspec) => {
+                    let toks = tokenize(psrc, self.file)
+                    for tk in toks {
+                        if tk.line == 1 { tk.col += pcol - 1 }
+                        tk.line += pline - 1
+                    }
+                    let sub = new_parser(toks, self.file)
+                    if sub.tok().kind == TokKind.Newline and sub.peek().kind == TokKind.Eof {
+                        fail(Pos(self.file, pline, pcol), "empty \{} in string (write \\\{ for a literal brace)")
+                    }
+                    let e = sub.parse_expr(0)
+                    while sub.tok().kind == TokKind.Newline { sub.i += 1 }
+                    if sub.tok().kind != TokKind.Eof {
+                        sub.error("unexpected " + sub.describe(sub.tok()) + " inside string interpolation")
+                    }
+                    parts.push(StrItem.Interp(e, pspec))
+                }
+            }
+        }
+        return mk_expr(ExprK.StrLit(parts), pos)
+    }
+
+    fn parse_primary(self) -> Expr {
+        let t = self.tok()
+        let pos = self.pos()
+        let k = t.kind
+        if k == TokKind.Int {
+            self.i += 1
+            return mk_expr(ExprK.IntLit(t.ival), pos)
+        }
+        if k == TokKind.Float {
+            self.i += 1
+            return mk_expr(ExprK.FloatLit(t.fval), pos)
+        }
+        if k == TokKind.Str {
+            self.i += 1
+            return self.make_str(t, pos)
+        }
+        if k == TokKind.Char {
+            self.i += 1
+            return mk_expr(ExprK.CharLit(t.ival), pos)
+        }
+        if k == TokKind.Ident {
+            self.i += 1
+            var targs: [TypeExpr]? = nil
+            if self.at_op("::") and self.peek().kind == TokKind.Op and self.peek().val == "<" {
+                self.i += 2
+                var ta: [TypeExpr] = []
+                loop {
+                    ta.push(self.parse_type())
+                    if not self.eat_op(",") { break }
+                }
+                self.expect_gt()
+                targs = ta
+            }
+            let c0 = t.val.byte_at(0)
+            if not self.no_struct and self.at_op("\{") and c0 >= 'A' and c0 <= 'Z' and self.looks_like_struct_lit() {
+                return self.parse_struct_lit(t, pos, targs)
+            }
+            return mk_expr(ExprK.Ident(t.val, targs), pos)
+        }
+        if k == TokKind.Kw {
+            let v = t.val
+            if v == "true" or v == "false" {
+                self.i += 1
+                return mk_expr(ExprK.BoolLit(v == "true"), pos)
+            }
+            if v == "nil" {
+                self.i += 1
+                return mk_expr(ExprK.NilLit, pos)
+            }
+            if v == "if" { return self.parse_if_expr() }
+            if v == "match" { return self.parse_match_expr() }
+            if v == "fn" {
+                let f = self.parse_fn([], true)
+                var lps: [LParam] = []
+                for p in f.params { lps.push(LParam(p.name, p.ty)) }
+                return mk_expr(ExprK.Lambda(lps, f.ret, f.body!), pos)
+            }
+            if v == "unsafe" {
+                self.i += 1
+                return mk_expr(ExprK.BlockExpr(self.parse_block()), pos)
+            }
+        }
+        if k == TokKind.Op {
+            let v = t.val
+            if v == "(" {
+                self.i += 1
+                let saved = self.no_struct
+                self.no_struct = false
+                self.skip_nl()
+                if self.at_op(")") {
+                    self.i += 1
+                    self.no_struct = saved
+                    return mk_expr(ExprK.TupleLit([]), pos)
+                }
+                let e = self.parse_expr(0)
+                self.skip_nl()
+                if self.at_op(",") {
+                    var elems: [Expr] = [e]
+                    while self.eat_op(",") {
+                        self.skip_nl()
+                        if self.at_op(")") { break }
+                        elems.push(self.parse_expr(0))
+                        self.skip_nl()
+                    }
+                    self.no_struct = saved
+                    self.expect_op(")")
+                    return mk_expr(ExprK.TupleLit(elems), pos)
+                }
+                self.no_struct = saved
+                self.expect_op(")", "to close this '('")
+                return e
+            }
+            if v == "[" {
+                self.i += 1
+                let saved = self.no_struct
+                self.no_struct = false
+                self.skip_nl()
+                var elems: [Expr] = []
+                while not self.at_op("]") {
+                    elems.push(self.parse_expr(0))
+                    self.skip_nl()
+                    if elems.len() == 1 and self.at_kw("for") {
+                        return self.parse_comprehension(elems[0], pos, saved)
+                    }
+                    if not self.eat_op(",") { break }
+                    self.skip_nl()
+                }
+                self.no_struct = saved
+                self.skip_nl()
+                self.expect_op("]", "to close this '['")
+                return mk_expr(ExprK.ArrayLit(elems), pos)
+            }
+            if v == "\{" {
+                self.i += 1
+                let saved = self.no_struct
+                self.no_struct = false
+                self.skip_nl()
+                var pairs: [(Expr, Expr)] = []
+                while not self.at_op("}") {
+                    let kx = self.parse_expr(0)
+                    self.skip_nl()
+                    self.expect_op(":", "between key and value")
+                    self.skip_nl()
+                    let vx = self.parse_expr(0)
+                    pairs.push((kx, vx))
+                    self.skip_nl()
+                    if not self.eat_op(",") { break }
+                    self.skip_nl()
+                }
+                self.no_struct = saved
+                self.skip_nl()
+                self.expect_op("}")
+                return mk_expr(ExprK.MapLit(pairs), pos)
+            }
+            if v == "|" or v == "||" {
+                self.i += 1
+                var params: [LParam] = []
+                if v == "|" {
+                    while not self.at_op("|") {
+                        let n = self.expect_ident("a parameter name").val
+                        var ty: TypeExpr? = nil
+                        if self.eat_op(":") { ty = self.parse_type() }
+                        params.push(LParam(n, ty))
+                        if not self.eat_op(",") { break }
+                    }
+                    self.expect_op("|")
+                }
+                var ret: TypeExpr? = nil
+                var body = Block([], pos)
+                if self.eat_op("->") {
+                    ret = self.parse_type()
+                    body = self.parse_block()
+                } else if self.at_op("\{") {
+                    body = self.parse_block()
+                } else {
+                    let e = self.parse_expr(1)
+                    if self.tok().kind == TokKind.Op and is_assign_op(self.tok().val) {
+                        // |x| total += x
+                        let op = self.tok().val
+                        self.i += 1
+                        self.skip_nl()
+                        let val = self.parse_expr(1)
+                        body = Block([mk_stmt(StmtK.Assign(e, op, val), e.pos)], e.pos)
+                    } else {
+                        body = Block([mk_stmt(StmtK.Return(e), e.pos)], e.pos)
+                    }
+                }
+                return mk_expr(ExprK.Lambda(params, ret, body), pos)
+            }
+        }
+        self.error("expected an expression but found " + self.describe(t))
+    }
+
+    fn parse_comprehension(self, elem: Expr, pos: Pos, saved: bool) -> Expr {
+        // [expr for x in iter if cond]
+        self.expect_kw("for")
+        var names: [str] = []
+        loop {
+            names.push(self.expect_ident("a loop variable").val)
+            if not self.eat_op(",") { break }
+        }
+        self.expect_kw("in")
+        self.no_struct = true
+        let it = self.parse_expr(0)
+        var cond: Expr? = nil
+        if self.eat_kw("if") { cond = self.parse_expr(0) }
+        self.no_struct = saved
+        self.skip_nl()
+        self.expect_op("]")
+        var nm: [Expr] = []
+        for n in names { nm.push(mk_expr(ExprK.StrLit([StrItem.Lit(n)]), pos)) }
+        var last = mk_expr(ExprK.NilLit, pos)
+        if cond != nil { last = cond! }
+        let names_t = mk_expr(ExprK.TupleLit(nm), pos)
+        let args = [Arg("", elem, elem.pos), Arg("", names_t, pos), Arg("", it, it.pos), Arg("", last, last.pos)]
+        return mk_expr(ExprK.Call(mk_expr(ExprK.Ident("__comprehension", nil), pos), args), pos)
+    }
+
+    fn looks_like_struct_lit(self) -> bool {
+        // self.tok() is '{'
+        var j = self.i + 1
+        while self.toks[j].kind == TokKind.Newline { j += 1 }
+        let t = self.toks[j]
+        if t.kind == TokKind.Op and t.val == "}" { return true }
+        if t.kind == TokKind.Ident {
+            let n = self.toks[j + 1]
+            return n.kind == TokKind.Op and (n.val == ":" or n.val == "," or n.val == "}")
+        }
+        return false
+    }
+
+    fn parse_struct_lit(self, t: Token, pos: Pos, targs: [TypeExpr]?) -> Expr {
+        self.expect_op("\{")
+        self.skip_nl()
+        var fields: [FieldInit] = []
+        let saved = self.no_struct
+        self.no_struct = false
+        while not self.at_op("}") {
+            let fname = self.expect_ident("a field name")
+            var val = mk_expr(ExprK.NilLit, pos)
+            if self.eat_op(":") {
+                self.skip_nl()
+                val = self.parse_expr(0)
+            } else {
+                val = mk_expr(ExprK.Ident(fname.val, nil), self.pos_of(fname))
+            }
+            fields.push(FieldInit(fname.val, val, self.pos_of(fname)))
+            self.skip_nl()
+            if not self.eat_op(",") { break }
+            self.skip_nl()
+        }
+        self.no_struct = saved
+        self.skip_nl()
+        self.expect_op("}")
+        return mk_expr(ExprK.StructLit(mk_expr(ExprK.Ident(t.val, targs), pos), fields), pos)
+    }
+}
+
+// concatenation of the literal parts of a string token (interpolations are dropped)
+fn lit_parts_text(parts: [StrPart]) -> str {
+    var sb = str_builder()
+    for p in parts {
+        match p {
+            StrPart.Lit(s) => sb.add(s)
+            _ => {}
+        }
+    }
+    return sb.finish()
+}
+
+// negation that keeps -0.0
+fn neg_float(v: float) -> float {
+    return __bits2f(__f2bits(v) ^ (1 << 63))
+}
+
+fn parse_source(src: str, file: str) -> [Item] {
+    let toks = tokenize(src, file)
+    return new_parser(toks, file).parse_program()
+}

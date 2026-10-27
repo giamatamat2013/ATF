@@ -1,0 +1,170 @@
+// tests for std/datetime
+// The table of dates was cross-checked with Python's datetime module.
+import "std/datetime"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn show(r: Result<DateTime, str>) -> str {
+    return match r {
+        Result.Ok(t) => "Ok(" + t.to_iso() + ")"
+        Result.Err(e) => "Err(" + e + ")"
+    }
+}
+
+fn main() -> int {
+    // ---- helpers
+    println("floor div/mod:", dt_floor_div(7, 2), dt_floor_div(-7, 2), dt_floor_div(-8, 2), dt_floor_mod(-7, 3), dt_floor_mod(7, 3), dt_floor_mod(-9, 3), dt_floor_div(7, -2), dt_floor_mod(7, -2))
+    println("leap:", dt_is_leap_year(2024), dt_is_leap_year(2023), dt_is_leap_year(1900), dt_is_leap_year(2000), dt_is_leap_year(0), dt_is_leap_year(-4))
+    println("days in month:", [dt_days_in_month(2023, m) for m in 1..=12], dt_days_in_month(2024, 2), dt_days_in_month(2024, 13), dt_days_in_year(2024), dt_days_in_year(2100))
+    println("names:", dt_month_name(1), dt_month_name(12), quote_str(dt_month_name(0)), dt_weekday_name(0), dt_weekday_name(6), quote_str(dt_weekday_name(7)))
+    println("days from civil:", dt_days_from_civil(1970, 1, 1), dt_days_from_civil(2000, 3, 1), dt_days_from_civil(1969, 12, 31), dt_days_from_civil(1, 1, 1), dt_days_from_civil(9999, 12, 31))
+    println("civil from days:", dt_civil_from_days(0), dt_civil_from_days(-1), dt_civil_from_days(11017), dt_civil_from_days(-719162), dt_civil_from_days(2932896))
+    // every day from 1600 to 2400 converts back and forth
+    var ok = true
+    var count = 0
+    var prev = dt_days_from_civil(1599, 12, 31)
+    for y in 1600..2401 {
+        for m in 1..=12 {
+            for d in 1..=dt_days_in_month(y, m) {
+                let z = dt_days_from_civil(y, m, d)
+                if z != prev + 1 { ok = false }
+                let back = dt_civil_from_days(z)
+                if back.0 != y or back.1 != m or back.2 != d { ok = false }
+                prev = z
+                count += 1
+            }
+        }
+    }
+    println("round trip of {count} days 1600..2400:", ok)
+    println("weekday:", dt_weekday_of(1970, 1, 1), dt_weekday_of(2000, 1, 1), dt_weekday_of(2024, 2, 29), dt_weekday_of(1, 1, 1), dt_weekday_of(-1, 12, 31))
+    println("day of year:", dt_day_of_year(2023, 12, 31), dt_day_of_year(2024, 12, 31), dt_day_of_year(2024, 3, 1), dt_day_of_year(2023, 3, 1))
+    println("iso week:", dt_iso_week_of(2021, 1, 3), dt_iso_week_of(2021, 1, 4), dt_iso_week_of(2020, 12, 31), dt_iso_week_of(2026, 12, 31), dt_iso_week_of(2024, 12, 30), dt_iso_week_of(2027, 1, 1))
+    println("valid:", dt_valid_date(2024, 2, 29), dt_valid_date(2023, 2, 29), dt_valid_date(2023, 0, 1), dt_valid_date(2023, 4, 31))
+
+    // ---- timestamps <-> DateTime (compared with Python)
+    let stamps = [0, 1, -1, 86399, 86400, 951782400, 951868800, 1000000000, 1234567890, 1700000000, 1709210096,
+                  2147483647, 2147483648, -2147483648, 4102444800, 253402300799, -62135596800, -86401, 1582934400, 1735689599]
+    for s in stamps {
+        let t = dt_from_unix(s)
+        let (iy, iw) = t.iso_week()
+        println("{s} {t.to_iso()} wd={t.weekday()} yday={t.day_of_year()} iso={iy}-W{iw} back={t.unix()}")
+    }
+
+    // ---- constructors
+    let t = dt_new(2024, 3, 5, 13, 4, 5, 250)
+    check("dt_new", t.to_iso(), "2024-03-05T13:04:05.250Z")
+    check("fields", "{t.year} {t.month} {t.day} {t.hour} {t.minute} {t.second} {t.ms} {t.offset}", "2024 3 5 13 4 5 250 0")
+    check("normalise day", dt_new(2024, 1, 32).to_iso(), "2024-02-01T00:00:00Z")
+    check("normalise month 13", dt_new(2023, 13, 1).to_iso(), "2024-01-01T00:00:00Z")
+    check("normalise month 0", dt_new(2024, 0, 15).to_iso(), "2023-12-15T00:00:00Z")
+    check("normalise month -13", dt_new(2024, -13, 1).date_str(), "2022-11-01")
+    check("normalise hour 24", dt_new(2024, 2, 28, 24).to_iso(), "2024-02-29T00:00:00Z")
+    check("normalise negative minutes", dt_new(2024, 1, 1, 0, -1).to_iso(), "2023-12-31T23:59:00Z")
+    check("normalise day 0", dt_new(2024, 3, 0).date_str(), "2024-02-29")
+    check("dt_date", dt_date(1999, 12, 31).to_iso(), "1999-12-31T00:00:00Z")
+    check("with offset", dt_new(2024, 7, 1, 12, 30, offset: 7200).to_iso(), "2024-07-01T12:30:00+02:00")
+    check("offset unix", int_to_str(dt_new(2024, 7, 1, 12, 30, offset: 7200).unix()), "1719829800")
+    check("negative offset", dt_new(2024, 7, 1, 12, 30, offset: -19800).to_iso(), "2024-07-01T12:30:00-05:30")
+    println("dt_make ok:", show(dt_make(2024, 2, 29, 23, 59, 59, 999)))
+    println("dt_make errors:", show(dt_make(2023, 2, 29)), "|", show(dt_make(2023, 13, 1)), "|", show(dt_make(2023, 1, 1, 24)),
+            "|", show(dt_make(2023, 1, 1, 0, 60)), "|", show(dt_make(2023, 1, 1, 0, 0, 60)), "|", show(dt_make(2023, 1, 1, 0, 0, 0, 1000)), "|", show(dt_make(2023, 1, 1, offset: 86400)))
+    println("from unix ms:", dt_from_unix_ms(1700000000123).to_iso(), dt_from_unix_ms(-1).to_iso(), dt_from_unix_ms(-1).unix(), dt_from_unix_ms(-1).unix_ms())
+    println("from unix with offset:", dt_from_unix(0, 3600).to_iso(), dt_from_unix(0, -3600).to_iso(), dt_from_unix(0, 19800).unix())
+
+    // ---- methods
+    let d = dt_new(2024, 2, 29, 18, 45, 7)
+    println("weekday:", d.weekday(), d.weekday_name(), d.month_name(), d.day_of_year(), d.iso_week(), d.is_leap_year(), d.days_in_month(), d.days_since_epoch())
+    println("utc / offsets:", d.with_offset(3600 * 9).to_iso(), d.with_offset(-3600 * 9).to_iso(), d.with_offset(19800).to_utc().to_iso(), d.start_of_day().to_iso())
+    println("start_of_day keeps offset:", dt_new(2024, 1, 1, 1, offset: 3600).start_of_day().to_iso())
+    println("add:", d.add_seconds(53).to_iso(), d.add_minutes(-46).to_iso(), d.add_hours(6).to_iso(), d.add_days(1).to_iso(), d.add_days(-366).to_iso(), d.add_weeks(52).to_iso(), d.add_ms(1).to_iso())
+    println("add duration:", d.add(dur_hours(30)).to_iso(), d.sub(dur_days(60)).to_iso())
+    println("add months:", dt_date(2024, 1, 31).add_months(1).date_str(), dt_date(2023, 1, 31).add_months(1).date_str(), dt_date(2024, 3, 31).add_months(-1).date_str(),
+            dt_date(2024, 12, 15).add_months(1).date_str(), dt_date(2024, 1, 15).add_months(-13).date_str(), dt_date(2024, 5, 31).add_months(25).date_str())
+    println("add years:", dt_date(2024, 2, 29).add_years(1).date_str(), dt_date(2024, 2, 29).add_years(4).date_str(), dt_date(2024, 2, 29).add_years(-100).date_str())
+    let a = dt_new(2024, 1, 1)
+    let b = dt_new(2024, 3, 1, 12)
+    println("diff:", b.diff(a), a.diff(b), b.diff(a).total_days(), b.diff(a).total_hours(), a.days_until(b), b.days_until(a))
+    println("compare:", a < b, a > b, a <= a, b >= a, a.is_before(b), a.is_after(b), a.cmp(b), b.cmp(a), a.cmp(dt_new(2024, 1, 1)))
+    let same1 = dt_new(2024, 1, 1, 12)
+    let same2 = same1.with_offset(7200)
+    println("same instant:", same1.same_instant(same2), same1 == same2, same1.cmp(same2), same1 == dt_new(2024, 1, 1, 12))
+    var dates = [dt_date(2024, 5, 1), dt_date(1999, 1, 1), dt_date(2024, 1, 1), dt_new(2023, 12, 31, 23, 59, 59, offset: -3600)]
+    dates.sort()
+    println("sorted:", dates)
+
+    // ---- formatting
+    let f = dt_new(2009, 2, 13, 23, 31, 30, 7)
+    check("format all", f.format("%Y|%y|%m|%d|%e|%j|%H|%I|%p|%M|%S|%f|%B|%b|%A|%a|%u|%w|%V|%G|%z|%Z|%s|%F|%T|%%|%q"),
+          "2009|09|02|13|13|044|23|11|PM|31|30|007|February|Feb|Friday|Fri|5|5|07|2009|+0000|UTC|1234567890|2009-02-13|23:31:30|%|%q")
+    check("format morning", dt_new(2024, 1, 7, 0, 5).format("%I:%M %p, %a %e %b"), "12:05 AM, Sun  7 Jan")
+    check("format noon", dt_new(2024, 1, 7, 12, 5).format("%I %p %u %w"), "12 PM 7 0")
+    check("format offset", dt_new(2024, 1, 7, 12, 5, offset: -34200).format("%z %Z"), "-0930 -09:30")
+    check("format iso week year", dt_date(2021, 1, 3).format("%G-W%V-%u"), "2020-W53-7")
+    check("format trailing percent", dt_date(2021, 1, 3).format("100%"), "100%")
+    check("time_str", dt_new(2024, 1, 1, 9, 8, 7).time_str(), "09:08:07")
+    check("time_str ms", dt_new(2024, 1, 1, 9, 8, 7, 5).time_str(), "09:08:07.005")
+    check("to_str", str(dt_date(2024, 1, 1)), "2024-01-01T00:00:00Z")
+    check("year 0", dt_date(0, 1, 1).to_iso(), "0000-01-01T00:00:00Z")
+    check("negative year", dt_date(-44, 3, 15).to_iso(), "-0044-03-15T00:00:00Z")
+    check("big year", dt_date(12345, 6, 7).to_iso(), "+12345-06-07T00:00:00Z")
+    check("year 99 %y", dt_date(1999, 1, 1).format("%y"), "99")
+    check("offset_str", dt_from_unix(0, 3600 * 5 + 1800).offset_str(), "+05:30")
+
+    // ---- parsing
+    let inputs = ["2024-03-05", "2024-03-05T13:04", "2024-03-05T13:04:05", "2024-03-05 13:04:05.250", "2024-03-05t13:04:05,5",
+                  "2024-03-05T13:04:05Z", "2024-03-05T13:04:05z", "2024-03-05T13:04:05+02:00", "2024-03-05T13:04:05-0530",
+                  "2024-03-05T13:04+01", "2024-03-05T13:04:05.123456789Z", "  2024-03-05  ", "2024-12-31T24:00", "1969-12-31T23:59:59Z",
+                  "", "2024", "24-03-05", "2024/03/05", "2024-3-5", "2024-02-30", "2023-02-29T00:00", "2024-03-05X13:04", "2024-03-05T1304",
+                  "2024-03-05T13", "2024-03-05T13:4", "2024-03-05T25:00", "2024-03-05T13:60", "2024-03-05T13:04:61", "2024-03-05T13:04:05.",
+                  "2024-03-05T13:04:05+2", "2024-03-05T13:04:05+25:00", "2024-03-05T13:04:05+02:61", "2024-03-05T13:04:05 extra",
+                  "2024-03-05T13:04:05Zjunk", "2024-12-31T24:01", "2024-02-30T24:00"]
+    for s in inputs {
+        let r = dt_parse_iso(s)
+        var unix_text = ""
+        if let v = r.ok() { unix_text = " unix={v.unix()}" }
+        println("parse {quote_str(s)}: {show(r)}{unix_text}")
+    }
+    println("parse round trip:", dt_parse_iso(f.to_iso()).unwrap() == f, dt_parse_iso(d.with_offset(-12600).to_iso()).unwrap().same_instant(d))
+
+    // ---- durations
+    println("dur ctor:", dur_ms(1500), dur_seconds(90), dur_minutes(61), dur_hours(25), dur_days(2), dur_weeks(1), dur_ms(0), dur_ms(-90000), dur_from_secs_f(1.2345), dur_ms(86400001))
+    println("dur special:", dur_ms(1), dur_ms(999), dur_ms(1000), dur_ms(60500), dur_ms(3600050), dur_ms(-1))
+    let du = dur_hours(26) + dur_minutes(3) + dur_seconds(4) + dur_ms(5)
+    println("dur parts:", du.parts(), du.total_ms(), du.total_seconds(), du.total_minutes(), du.total_hours(), du.total_days(), du.as_secs_f())
+    println("dur ops:", du - dur_hours(26), -du, du * 2, du.abs(), (-du).abs(), (-du).is_negative(), du.is_negative())
+    println("dur compare:", dur_seconds(59) < dur_minutes(1), dur_hours(1) > dur_minutes(59), dur_seconds(60) == dur_minutes(1), dur_seconds(1).cmp(dur_ms(1000)))
+    println("dur clock:", du.clock(), dur_ms(0).clock(), dur_ms(-61000).clock(), dur_ms(1).clock(), dur_hours(100).clock())
+    println("dur negative parts:", dur_ms(-90061001).parts(), dur_ms(-90061001).total_seconds())
+    let dtexts = ["90s", "1h30m", "2d 4h", "1.5h", "250ms", "-10m", "+1w", "1w2d3h4m5s6ms", "0s", "1 h 30 m", "2 days 1 hr", "1.25s", "3MIN",
+                  "", "  ", "10", "h", "1x", "1h-30m", "-", "1..5s", "5m s"]
+    for s in dtexts {
+        let r = dur_parse(s)
+        match r {
+            Result.Ok(v) => println("dur_parse {quote_str(s)}: {v} ({v.total_ms()} ms)")
+            Result.Err(e) => println("dur_parse {quote_str(s)}: error: {e}")
+        }
+    }
+
+    // ---- the current time (only loose checks: the output must not depend on when the test runs)
+    let now = dt_now()
+    let now_unix = dt_now_unix()
+    let now_ms = dt_now_unix_ms()
+    println("now is after 2024:", now.year >= 2024, now_unix > 1704067200, now_ms / 1000 - now_unix <= 1, now.offset == 0)
+    println("now consistent:", fabs((now.unix() - now_unix) as float) <= 2.0)
+    let off = dt_local_offset()
+    let local = dt_now_local()
+    println("local offset sane:", off > -86400 and off < 86400, off % 60 == 0, local.offset == off, fabs((local.unix() - now_unix) as float) <= 2.0)
+    println("local wall clock differs by the offset:", fabs((local.diff(now.with_offset(0)).total_seconds()) as float) <= 2.0)
+
+    println("failures:", failures)
+    return failures
+}

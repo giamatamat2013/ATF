@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: values of type Q cannot be ordered with < > <= >=
+  --> cerr_sort_struct.atf:4:11
+ 4 |     x.sort()
+   |           ^
+  hint: define  fn cmp(self, other: Q) -> int  in an impl block (negative, zero, or positive)  (the problem is inside the library function [T].sort<Q>)

@@ -1,0 +1,34 @@
+wrapped to 32 columns (5 lines):
+|ATF is a small compiled         |
+|language. It is easy to learn,  |
+|produces native Windows programs|
+|and has a garbage collector, so |
+|you never free memory by hand.  |
+
+justified:
+|ATF    is   a   small   compiled|
+|language.  It  is easy to learn,|
+|produces native Windows programs|
+|and  has a garbage collector, so|
+|you never free memory by hand.  |
+
+centered:
+|ATF is a small compiled language. It is |
+| easy to learn, produces native Windows |
+|programs and has a garbage collector, so|
+|     you never free memory by hand.     |
+
+right aligned:
+| ATF is a small compiled language. It is|
+|  easy to learn, produces native Windows|
+|programs and has a garbage collector, so|
+|          you never free memory by hand.|
+
++----------------------------+
+| ATF is a small compiled    |
+| language. It is easy to    |
+| learn, produces native     |
+| Windows programs and has a |
+| garbage collector, so you  |
+| never free memory by hand. |
++----------------------------+

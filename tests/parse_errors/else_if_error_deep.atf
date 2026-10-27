@@ -1,0 +1,7 @@
+fn main() {
+    if a {
+    } else if b {
+    } else if c {
+        let = 3
+    }
+}

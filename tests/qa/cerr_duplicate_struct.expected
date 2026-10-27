@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: type 'A' is defined twice
+  --> cerr_duplicate_struct.atf:2:1
+ 2 | struct A { y: int }
+   | ^

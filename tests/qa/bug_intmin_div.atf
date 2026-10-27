@@ -1,0 +1,12 @@
+// INT_MIN / -1 and INT_MIN % -1 must wrap (INT_MIN and 0), not crash the process with a hardware exception
+fn id(x: int) -> int { return x }
+
+fn main() {
+    println("start")
+    println(id(INT_MIN) % id(-1))
+    println(id(INT_MIN) / id(-1))
+    var v = INT_MIN
+    v /= id(-1)
+    println(v)
+    println("end")
+}

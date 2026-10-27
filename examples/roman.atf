@@ -1,0 +1,90 @@
+// roman.atf - Roman numerals in both directions.
+// Shows: arrays of tuples, destructuring in for loops, match on characters, Result for errors.
+// Run:   python run_atf.py run examples/roman.atf
+
+let TABLE = [
+    (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+    (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+    (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")
+]
+
+fn to_roman(n: int) -> Result<str, str> {
+    if n < 1 or n > 3999 { return Result.Err("{n} is outside 1..3999") }
+    var out = ""
+    var left = n
+    // WORKAROUND: "for (value, symbol) in TABLE" does not destructure tuples (it binds index and
+    // element), so the tuple is unpacked with let.
+    for entry in TABLE {
+        let (value, symbol) = entry
+        while left >= value {
+            out = out + symbol
+            left -= value
+        }
+    }
+    return Result.Ok(out)
+}
+
+fn digit_value(c: str) -> int {
+    return match c {
+        "I" => 1
+        "V" => 5
+        "X" => 10
+        "L" => 50
+        "C" => 100
+        "D" => 500
+        "M" => 1000
+        _ => 0
+    }
+}
+
+fn from_roman(s: str) -> Result<int, str> {
+    var total = 0
+    let n = s.len()
+    for i in 0..n {
+        let v = digit_value(s[i])
+        if v == 0 { return Result.Err("'{s[i]}' is not a roman digit") }
+        // a smaller digit in front of a bigger one is subtracted: IV = 4
+        if i + 1 < n and v < digit_value(s[i + 1]) {
+            total -= v
+        } else {
+            total += v
+        }
+    }
+    return Result.Ok(total)
+}
+
+fn main() {
+    for n in [1, 4, 9, 14, 40, 90, 400, 1994, 2024, 3999, 0, 4000] {
+        match to_roman(n) {
+            Result.Ok(r) => println("{n:>5} -> {r}")
+            Result.Err(e) => println("{n:>5} -> error: {e}")
+        }
+    }
+
+    for r in ["MCMXCIV", "XLII", "MMXXIV", "ABC", "iv"] {
+        match from_roman(r) {
+            Result.Ok(n) => println("{r:>8} -> {n}")
+            Result.Err(e) => println("{r:>8} -> error: {e}")
+        }
+    }
+
+    // every number from 1 to 3999 survives the round trip
+    var bad = 0
+    for n in 1..=3999 {
+        let r = to_roman(n).unwrap()
+        if from_roman(r).unwrap() != n { bad += 1 }
+    }
+    println("round trip failures for 1..3999: {bad}")
+
+    // the longest numeral
+    var longest = ""
+    var at = 0
+    for n in 1..=3999 {
+        let r = to_roman(n).unwrap()
+        if r.len() > longest.len() {
+            longest = r
+            at = n
+        }
+    }
+    println("longest numeral: {at} = {longest} ({longest.len()} letters)")
+}

@@ -1,0 +1,144 @@
+floor div/mod: 3 -4 -4 2 1 0 -4 -1
+leap: true false false true true true
+days in month: [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] 29 0 366 365
+names: January December "" Monday Sunday ""
+days from civil: 0 11017 -1 -719162 2932896
+civil from days: (1970, 1, 1) (1969, 12, 31) (2000, 3, 1) (1, 1, 1) (9999, 12, 31)
+round trip of 292560 days 1600..2400: true
+weekday: 3 5 3 0 4
+day of year: 365 366 61 60
+iso week: (2020, 53) (2021, 1) (2020, 53) (2026, 53) (2025, 1) (2026, 53)
+valid: true false false false
+0 1970-01-01T00:00:00Z wd=3 yday=1 iso=1970-W1 back=0
+1 1970-01-01T00:00:01Z wd=3 yday=1 iso=1970-W1 back=1
+-1 1969-12-31T23:59:59Z wd=2 yday=365 iso=1970-W1 back=-1
+86399 1970-01-01T23:59:59Z wd=3 yday=1 iso=1970-W1 back=86399
+86400 1970-01-02T00:00:00Z wd=4 yday=2 iso=1970-W1 back=86400
+951782400 2000-02-29T00:00:00Z wd=1 yday=60 iso=2000-W9 back=951782400
+951868800 2000-03-01T00:00:00Z wd=2 yday=61 iso=2000-W9 back=951868800
+1000000000 2001-09-09T01:46:40Z wd=6 yday=252 iso=2001-W36 back=1000000000
+1234567890 2009-02-13T23:31:30Z wd=4 yday=44 iso=2009-W7 back=1234567890
+1700000000 2023-11-14T22:13:20Z wd=1 yday=318 iso=2023-W46 back=1700000000
+1709210096 2024-02-29T12:34:56Z wd=3 yday=60 iso=2024-W9 back=1709210096
+2147483647 2038-01-19T03:14:07Z wd=1 yday=19 iso=2038-W3 back=2147483647
+2147483648 2038-01-19T03:14:08Z wd=1 yday=19 iso=2038-W3 back=2147483648
+-2147483648 1901-12-13T20:45:52Z wd=4 yday=347 iso=1901-W50 back=-2147483648
+4102444800 2100-01-01T00:00:00Z wd=4 yday=1 iso=2099-W53 back=4102444800
+253402300799 9999-12-31T23:59:59Z wd=4 yday=365 iso=9999-W52 back=253402300799
+-62135596800 0001-01-01T00:00:00Z wd=0 yday=1 iso=1-W1 back=-62135596800
+-86401 1969-12-30T23:59:59Z wd=1 yday=364 iso=1970-W1 back=-86401
+1582934400 2020-02-29T00:00:00Z wd=5 yday=60 iso=2020-W9 back=1582934400
+1735689599 2024-12-31T23:59:59Z wd=1 yday=366 iso=2025-W1 back=1735689599
+ok   dt_new: 2024-03-05T13:04:05.250Z
+ok   fields: 2024 3 5 13 4 5 250 0
+ok   normalise day: 2024-02-01T00:00:00Z
+ok   normalise month 13: 2024-01-01T00:00:00Z
+ok   normalise month 0: 2023-12-15T00:00:00Z
+ok   normalise month -13: 2022-11-01
+ok   normalise hour 24: 2024-02-29T00:00:00Z
+ok   normalise negative minutes: 2023-12-31T23:59:00Z
+ok   normalise day 0: 2024-02-29
+ok   dt_date: 1999-12-31T00:00:00Z
+ok   with offset: 2024-07-01T12:30:00+02:00
+ok   offset unix: 1719829800
+ok   negative offset: 2024-07-01T12:30:00-05:30
+dt_make ok: Ok(2024-02-29T23:59:59.999Z)
+dt_make errors: Err(day 29 is out of range for February 2023 (1..28)) | Err(month 13 is out of range 1..12) | Err(hour 24 is out of range 0..23) | Err(minute 60 is out of range 0..59) | Err(second 60 is out of range 0..59) | Err(millisecond 1000 is out of range 0..999) | Err(offset 86400 seconds is out of range)
+from unix ms: 2023-11-14T22:13:20.123Z 1969-12-31T23:59:59.999Z -1 -1
+from unix with offset: 1970-01-01T01:00:00+01:00 1969-12-31T23:00:00-01:00 0
+weekday: 3 Thursday February 60 (2024, 9) true 29 19782
+utc / offsets: 2024-03-01T03:45:07+09:00 2024-02-29T09:45:07-09:00 2024-02-29T18:45:07Z 2024-02-29T00:00:00Z
+start_of_day keeps offset: 2024-01-01T00:00:00+01:00
+add: 2024-02-29T18:46:00Z 2024-02-29T17:59:07Z 2024-03-01T00:45:07Z 2024-03-01T18:45:07Z 2023-02-28T18:45:07Z 2025-02-27T18:45:07Z 2024-02-29T18:45:07.001Z
+add duration: 2024-03-02T00:45:07Z 2023-12-31T18:45:07Z
+add months: 2024-02-29 2023-02-28 2024-02-29 2025-01-15 2022-12-15 2026-06-30
+add years: 2025-02-28 2028-02-29 1924-02-29
+diff: 60d 12h -60d 12h 60 1452 60 -60
+compare: true false true true true false -1 1 0
+same instant: true false 0 true
+sorted: [1999-01-01T00:00:00Z, 2024-01-01T00:00:00Z, 2023-12-31T23:59:59-01:00, 2024-05-01T00:00:00Z]
+ok   format all: 2009|09|02|13|13|044|23|11|PM|31|30|007|February|Feb|Friday|Fri|5|5|07|2009|+0000|UTC|1234567890|2009-02-13|23:31:30|%|%q
+ok   format morning: 12:05 AM, Sun  7 Jan
+ok   format noon: 12 PM 7 0
+ok   format offset: -0930 -09:30
+ok   format iso week year: 2020-W53-7
+ok   format trailing percent: 100%
+ok   time_str: 09:08:07
+ok   time_str ms: 09:08:07.005
+ok   to_str: 2024-01-01T00:00:00Z
+ok   year 0: 0000-01-01T00:00:00Z
+ok   negative year: -0044-03-15T00:00:00Z
+ok   big year: +12345-06-07T00:00:00Z
+ok   year 99 %y: 99
+ok   offset_str: +05:30
+parse "2024-03-05": Ok(2024-03-05T00:00:00Z) unix=1709596800
+parse "2024-03-05T13:04": Ok(2024-03-05T13:04:00Z) unix=1709643840
+parse "2024-03-05T13:04:05": Ok(2024-03-05T13:04:05Z) unix=1709643845
+parse "2024-03-05 13:04:05.250": Ok(2024-03-05T13:04:05.250Z) unix=1709643845
+parse "2024-03-05t13:04:05,5": Ok(2024-03-05T13:04:05.500Z) unix=1709643845
+parse "2024-03-05T13:04:05Z": Ok(2024-03-05T13:04:05Z) unix=1709643845
+parse "2024-03-05T13:04:05z": Ok(2024-03-05T13:04:05Z) unix=1709643845
+parse "2024-03-05T13:04:05+02:00": Ok(2024-03-05T13:04:05+02:00) unix=1709636645
+parse "2024-03-05T13:04:05-0530": Ok(2024-03-05T13:04:05-05:30) unix=1709663645
+parse "2024-03-05T13:04+01": Ok(2024-03-05T13:04:00+01:00) unix=1709640240
+parse "2024-03-05T13:04:05.123456789Z": Ok(2024-03-05T13:04:05.123Z) unix=1709643845
+parse "  2024-03-05  ": Ok(2024-03-05T00:00:00Z) unix=1709596800
+parse "2024-12-31T24:00": Ok(2025-01-01T00:00:00Z) unix=1735689600
+parse "1969-12-31T23:59:59Z": Ok(1969-12-31T23:59:59Z) unix=-1
+parse "": Err(expected a 4-digit year at the start of "")
+parse "2024": Err(expected a date like 2024-03-05 in "2024")
+parse "24-03-05": Err(expected a 4-digit year at the start of "24-03-05")
+parse "2024/03/05": Err(expected a date like 2024-03-05 in "2024/03/05")
+parse "2024-3-5": Err(expected a date like 2024-03-05 in "2024-3-5")
+parse "2024-02-30": Err(day 30 is out of range for February 2024 (1..29))
+parse "2023-02-29T00:00": Err(day 29 is out of range for February 2023 (1..28))
+parse "2024-03-05X13:04": Err(expected 'T' or a space after the date in "2024-03-05X13:04")
+parse "2024-03-05T1304": Err(expected a time like 13:04 after the date in "2024-03-05T1304")
+parse "2024-03-05T13": Err(expected a time like 13:04 after the date in "2024-03-05T13")
+parse "2024-03-05T13:4": Err(expected a time like 13:04 after the date in "2024-03-05T13:4")
+parse "2024-03-05T25:00": Err(hour 25 is out of range 0..23)
+parse "2024-03-05T13:60": Err(minute 60 is out of range 0..59)
+parse "2024-03-05T13:04:61": Err(second 61 is out of range 0..59)
+parse "2024-03-05T13:04:05.": Err(expected digits after the decimal point in "2024-03-05T13:04:05.")
+parse "2024-03-05T13:04:05+2": Err(expected an offset like +02:00 in "2024-03-05T13:04:05+2")
+parse "2024-03-05T13:04:05+25:00": Err(offset out of range in "2024-03-05T13:04:05+25:00")
+parse "2024-03-05T13:04:05+02:61": Err(offset out of range in "2024-03-05T13:04:05+02:61")
+parse "2024-03-05T13:04:05 extra": Err(unexpected ' ' at position 19 in "2024-03-05T13:04:05 extra")
+parse "2024-03-05T13:04:05Zjunk": Err(unexpected text after the time in "2024-03-05T13:04:05Zjunk")
+parse "2024-12-31T24:01": Err(hour 24 is out of range 0..23)
+parse "2024-02-30T24:00": Err(invalid date in "2024-02-30T24:00")
+parse round trip: true true
+dur ctor: 1.5s 1m 30s 1h 1m 1d 1h 2d 7d 0s -1m 30s 1.235s 1d 1ms
+dur special: 1ms 999ms 1s 1m 500ms 1h 50ms -1ms
+dur parts: (1, 2, 3, 4, 5) 93784005 93784 1563 26 1 93784.005
+dur ops: 3m 4.005s -1d 2h 3m 4.005s 2d 4h 6m 8.01s 1d 2h 3m 4.005s 1d 2h 3m 4.005s true false
+dur compare: true true true 0
+dur clock: 26:03:04.005 0:00:00 -0:01:01 0:00:00.001 100:00:00
+dur negative parts: (1, 1, 1, 1, 1) -90061
+dur_parse "90s": 1m 30s (90000 ms)
+dur_parse "1h30m": 1h 30m (5400000 ms)
+dur_parse "2d 4h": 2d 4h (187200000 ms)
+dur_parse "1.5h": 1h 30m (5400000 ms)
+dur_parse "250ms": 250ms (250 ms)
+dur_parse "-10m": -10m (-600000 ms)
+dur_parse "+1w": 7d (604800000 ms)
+dur_parse "1w2d3h4m5s6ms": 9d 3h 4m 5.006s (788645006 ms)
+dur_parse "0s": 0s (0 ms)
+dur_parse "1 h 30 m": 1h 30m (5400000 ms)
+dur_parse "2 days 1 hr": 2d 1h (176400000 ms)
+dur_parse "1.25s": 1.25s (1250 ms)
+dur_parse "3MIN": 3m (180000 ms)
+dur_parse "": error: empty duration
+dur_parse "  ": error: empty duration
+dur_parse "10": error: missing unit after "10" in duration "10" (use w, d, h, m, s or ms)
+dur_parse "h": error: expected a number at position 0 in duration "h"
+dur_parse "1x": error: unknown unit "x" in duration "1x" (use w, d, h, m, s or ms)
+dur_parse "1h-30m": error: expected a number at position 2 in duration "1h-30m"
+dur_parse "-": error: no value in duration "-"
+dur_parse "1..5s": error: invalid number "1..5" in duration "1..5s"
+dur_parse "5m s": error: expected a number at position 3 in duration "5m s"
+now is after 2024: true true true true
+now consistent: true
+local offset sane: true true true true
+local wall clock differs by the offset: true
+failures: 0

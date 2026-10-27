@@ -1,0 +1,5 @@
+fn parse(s: str) -> Result<int, str> { return Result.Ok(1) }
+fn main() {
+    let v = parse("1")?
+    println(v)
+}

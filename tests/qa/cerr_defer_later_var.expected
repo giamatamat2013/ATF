@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: unknown name 'y'
+  --> cerr_defer_later_var.atf:3:34
+ 3 |     defer println("later " + str(y))
+   |                                  ^

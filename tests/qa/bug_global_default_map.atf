@@ -1,0 +1,7 @@
+// a global 'var NAME: {str: int}' without a value must start as {} (locals do); actual: null pointer -> crash
+var gm: {str: int}
+fn main() {
+    println(gm.len())
+    gm["k"] = 2
+    println(gm)
+}

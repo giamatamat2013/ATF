@@ -1,0 +1,1572 @@
+// Statements, control flow, pattern matching (port of atf/check_stmt.py)
+import "util"
+import "ast"
+import "types"
+import "tir"
+import "tirutil"
+import "checker"
+import "check_expr"
+import "check_call"
+
+struct Cover {
+    all: bool,
+    names: [str]
+}
+
+struct Place {
+    texpr: TExpr?,               // ordinary assignable place
+    obj: TExpr?,                 // or  obj[idx] through op_set_index
+    idx: TExpr?
+}
+
+fn pow8(n: int) -> int {
+    var d = n
+    if d > 5 { d = 5 }
+    return int_pow(8, d)
+}
+
+// does this list of statements (or a block nested in it) contain `defer`?  (lambdas are separate functions)
+fn stmts_have_defer(stmts: [Stmt]) -> bool {
+    for s in stmts {
+        if stmt_has_defer(s) { return true }
+    }
+    return false
+}
+
+fn stmt_has_defer(s: Stmt) -> bool {
+    match s.k {
+        StmtK.Defer(x) => return true
+        StmtK.If(c, then, els) => {
+            if stmts_have_defer(then.stmts) { return true }
+            if els != nil { return stmts_have_defer(els!.stmts) }
+            return false
+        }
+        StmtK.While(c, b) => return stmts_have_defer(b.stmts)
+        StmtK.Loop(b) => return stmts_have_defer(b.stmts)
+        StmtK.For(n, it, b) => return stmts_have_defer(b.stmts)
+        StmtK.BlockS(b) => return stmts_have_defer(b.stmts)
+        StmtK.Labeled(l, inner) => return stmt_has_defer(inner)
+        StmtK.MatchS(subj, arms) => {
+            for a in arms {
+                match a.body {
+                    ArmBody.Blk(b) => {
+                        if stmts_have_defer(b.stmts) { return true }
+                    }
+                    _ => {}
+                }
+            }
+            return false
+        }
+        _ => return false
+    }
+}
+
+fn direct_defer(stmts: [Stmt]) -> bool {
+    for s in stmts {
+        match s.k {
+            StmtK.Defer(x) => return true
+            _ => {}
+        }
+    }
+    return false
+}
+
+impl Checker {
+    // ------------------------------------------------------------------ defer
+    // A function that uses defer keeps a list of closures. `defer stmt` adds a closure; leaving a block runs
+    // (newest first) the closures added in it; return runs all of them. A panic that leaves the function is
+    // caught, the closures run, and the panic continues.
+    fn init_defers(self, ctx: FnCtx) {
+        let saved = self.cx
+        self.cx = ctx
+        let fty = Type.Func([], TVoid)
+        ctx.defer_var = self.new_tmp(Type.Struct(self.array_info!, [fty]), "$defers")
+        ctx.catch_saved = self.new_tmp(Type.Ptr(TInt), "$catch")
+        self.cx = saved
+    }
+
+    fn catch_buf_ref(self) -> TExpr {
+        let g = self.resolve_global(self.lib_globals["catch_buf"])
+        return texpr(TK.GlobalRef(g), g.ty, NOPOS)
+    }
+
+    // run the deferred closures registered after the list had `n` entries
+    fn run_defers_stmt(self, n: TExpr) -> TStmt {
+        let dv = self.ctx().defer_var!
+        return tstmt(SK.ExprS(self.call_rt("__run_defers", [texpr(TK.VarRef(dv), dv.ty, NOPOS), n])), NOPOS)
+    }
+
+    fn restore_catch_stmt(self) -> TStmt {
+        let cs = self.ctx().catch_saved!
+        return tstmt(SK.Set(self.catch_buf_ref(), texpr(TK.VarRef(cs), cs.ty, NOPOS)), NOPOS)
+    }
+
+    fn wrap_defer_fn(self, ctx: FnCtx, body: [TStmt]) -> [TStmt] {
+        let saved = self.cx
+        self.cx = ctx
+        let dv = ctx.defer_var!
+        let cs = ctx.catch_saved!
+        let fty = Type.Func([], TVoid)
+        let pty = Type.Ptr(TInt)
+        let jb = self.new_tmp(pty, "$jmpbuf")
+        var out: [TStmt] = []
+        out.push(tstmt(SK.Decl(dv, self.call_rt("array_raw", [self.ci(0)], [fty])), NOPOS))
+        out.push(tstmt(SK.Decl(cs, self.catch_buf_ref()), NOPOS))
+        out.push(tstmt(SK.Decl(jb, texpr(TK.Cvt("nop", self.call_rt("__alloc", [self.ci(256)])), pty, NOPOS)), NOPOS))
+        out.push(tstmt(SK.Set(self.catch_buf_ref(), texpr(TK.VarRef(jb), pty, NOPOS)), NOPOS))
+        let jumped = texpr(TK.Bin("ne", texpr(TK.Intr("setjmp", [texpr(TK.VarRef(jb), pty, NOPOS)]), TInt, NOPOS), self.ci(0)), TBool, NOPOS)
+        let on_panic: [TStmt] = [
+            self.restore_catch_stmt(),
+            self.run_defers_stmt(self.ci(0)),
+            tstmt(SK.ExprS(self.call_rt("__rethrow", [])), NOPOS)
+        ]
+        out.push(tstmt(SK.If(jumped, on_panic, []), NOPOS))
+        for s in body { out.push(s) }
+        if not self.terminates(body) { out.push(self.restore_catch_stmt()) }
+        self.cx = saved
+        return out
+    }
+
+    // at the start of a block that contains `defer`: remember how many closures were registered before it
+    fn begin_defer_block(self, stmts: [Stmt], out: [TStmt]) {
+        let cx = self.ctx()
+        if cx.defer_var == nil or not direct_defer(stmts) { return }
+        let dv = cx.defer_var!
+        let dn = self.new_tmp(TInt, "$dn")
+        out.push(tstmt(SK.Decl(dn, texpr(TK.Load(texpr(TK.VarRef(dv), dv.ty, NOPOS), 1), TInt, NOPOS)), NOPOS))
+        cx.scope_dn[cx.scope_dn.len() - 1] = dn
+    }
+
+    fn end_defer_block(self, out: [TStmt]) {
+        let cx = self.ctx()
+        let dn = cx.scope_dn[cx.scope_dn.len() - 1]
+        if dn != nil and not self.terminates(out) { out.push(self.run_defers_stmt(texpr(TK.VarRef(dn!), TInt, NOPOS))) }
+    }
+
+    // ------------------------------------------------------------------ blocks
+    fn check_block_stmts(self, stmts: [Stmt], new_scope: bool = true) -> [TStmt] {
+        let cx = self.ctx()
+        if new_scope { cx.push() }
+        var out: [TStmt] = []
+        self.begin_defer_block(stmts, out)
+        let me = self
+        for s in stmts {
+            let depth = cx.scopes.len()
+            let loops = cx.loop_scope_depth.len()
+            let saved_cx = self.cx
+            let ok = guarded(|| { me.check_stmt(s, out) })
+            if not ok {
+                // the error was reported; restore the state and keep checking the following statements
+                self.cx = saved_cx
+                while cx.scopes.len() > depth { cx.scopes.pop() }
+                while cx.scope_dn.len() > depth { cx.scope_dn.pop() }
+                while cx.loop_scope_depth.len() > loops { cx.loop_scope_depth.pop() }
+                while cx.loop_labels.len() > loops { cx.loop_labels.pop() }
+                cx.next_label = ""
+                match s.k {
+                    StmtK.Let(names, tup, ty, init, mutable) => {
+                        for n in names { self.failed_names[n] = true }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.end_defer_block(out)
+        if new_scope { cx.pop() }
+        return out
+    }
+
+    // check a block used as a value; returns (stmts, final expression or nil)
+    fn check_value_block(self, block: Block, expected: Type?) -> ([TStmt], TExpr?) {
+        let cx = self.ctx()
+        cx.push()
+        var out: [TStmt] = []
+        var val: TExpr? = nil
+        let stmts = block.stmts
+        self.begin_defer_block(stmts, out)
+        for i in 0..stmts.len() {
+            var s = stmts[i]
+            if i == stmts.len() - 1 {
+                s = self.stmt_as_expr(s)
+                match s.k {
+                    StmtK.ExprS(ex) => {
+                        let v = self.ce(ex, expected)
+                        if v.ty == TVoid {
+                            out.push(tstmt(SK.ExprS(v), s.pos))
+                        } else {
+                            val = v
+                        }
+                        break
+                    }
+                    _ => {}
+                }
+            }
+            self.check_stmt(s, out)
+        }
+        if cx.scope_dn[cx.scope_dn.len() - 1] != nil and val != nil and not is_const(val!) {
+            let v = self.new_tmp(val!.ty, "$bv")
+            out.push(tstmt(SK.Decl(v, val), NOPOS))
+            val = texpr(TK.VarRef(v), v.ty, NOPOS)
+        }
+        self.end_defer_block(out)
+        cx.pop()
+        return (out, val)
+    }
+
+    fn stmt_as_expr(self, s: Stmt) -> Stmt {
+        match s.k {
+            StmtK.If(cond, then, els) => {
+                if els != nil {
+                    return Stmt(StmtK.ExprS(Expr(ExprK.IfExpr(cond, then, els), s.pos)), s.pos)
+                }
+            }
+            StmtK.MatchS(subject, arms) => {
+                return Stmt(StmtK.ExprS(Expr(ExprK.MatchExpr(subject, arms), s.pos)), s.pos)
+            }
+            _ => {}
+        }
+        return s
+    }
+
+    // ------------------------------------------------------------------ termination analysis
+    fn terminates(self, stmts: [TStmt]) -> bool {
+        for s in stmts {
+            if self.stmt_terminates(s) { return true }
+        }
+        return false
+    }
+
+    fn stmt_terminates(self, s: TStmt) -> bool {
+        match s.k {
+            SK.Ret(e) => return true
+            SK.Blk(ss) => return self.terminates(ss)
+            SK.If(c, then, els) => {
+                if is_const(c) and const_ival(c) != 0 { return self.terminates(then) }
+                return els.len() > 0 and self.terminates(then) and self.terminates(els)
+            }
+            SK.While(c, body, stp) => {
+                return is_const(c) and const_ival(c) == 1 and not self.has_break(body, 0)
+            }
+            SK.ExprS(e) => return self.expr_never(e)
+            _ => return false
+        }
+    }
+
+    fn expr_never(self, e: TExpr) -> bool {
+        if e.ty == TNever { return true }
+        match e.k {
+            TK.Seq(stmts, x) => return self.terminates(stmts) or self.expr_never(x)
+            _ => return false
+        }
+    }
+
+    // does a break leave the loop whose body this is? (depth = loops nested inside it so far)
+    fn has_break(self, stmts: [TStmt], depth: int) -> bool {
+        for s in stmts {
+            match s.k {
+                SK.Break => {
+                    if depth == 0 { return true }
+                }
+                SK.BreakN(n) => {
+                    if n >= depth { return true }
+                }
+                SK.Blk(ss) => {
+                    if self.has_break(ss, depth) { return true }
+                }
+                SK.If(c, then, els) => {
+                    if self.has_break(then, depth) or self.has_break(els, depth) { return true }
+                }
+                SK.While(c, body, stp) => {
+                    if self.has_break(body, depth + 1) or self.has_break(stp, depth + 1) { return true }
+                }
+                _ => {}
+            }
+        }
+        return false
+    }
+
+
+    // ------------------------------------------------------------------ dispatch
+    fn check_stmt(self, s: Stmt, out: [TStmt]) {
+        match s.k {
+            StmtK.Let(names, tup, ty, init, mutable) => self.s_Let(s, names, tup, ty, init, mutable, out)
+            StmtK.Assign(target, op, value) => self.s_Assign(s, target, op, value, out)
+            StmtK.ExprS(ex) => {
+                let e = self.ce(ex)
+                out.push(tstmt(SK.ExprS(e), s.pos))
+            }
+            StmtK.If(cond, then, els) => self.s_If(s, cond, then, els, out)
+            StmtK.While(cond, body) => self.s_While(s, cond, body, out)
+            StmtK.Loop(body) => {
+                let label = self.take_label()
+                let b = self.loop_body(|| { return self.check_block_stmts(body.stmts) }, label)
+                out.push(tstmt(SK.While(c_bool(true, NOPOS), b, []), s.pos))
+            }
+            StmtK.For(names, it, body) => {
+                let me = self
+                let r = self.lower_for(names, it, || { return me.check_block_stmts(body.stmts) }, s.pos)
+                for x in r { out.push(x) }
+            }
+            StmtK.Break => {
+                if self.ctx().loop_scope_depth.len() == 0 { fail(s.pos, "'break' can only be used inside a loop") }
+                self.break_defers(out)
+                out.push(tstmt(SK.Break, s.pos))
+            }
+            StmtK.Continue => {
+                if self.ctx().loop_scope_depth.len() == 0 { fail(s.pos, "'continue' can only be used inside a loop") }
+                self.break_defers(out)
+                out.push(tstmt(SK.Continue, s.pos))
+            }
+            StmtK.BreakL(label) => {
+                let n = self.loop_levels(label, s.pos)
+                self.break_defers_to(out, n)
+                if n == 0 { out.push(tstmt(SK.Break, s.pos)) } else { out.push(tstmt(SK.BreakN(n), s.pos)) }
+            }
+            StmtK.ContinueL(label) => {
+                let n = self.loop_levels(label, s.pos)
+                self.break_defers_to(out, n)
+                if n == 0 { out.push(tstmt(SK.Continue, s.pos)) } else { out.push(tstmt(SK.ContinueN(n), s.pos)) }
+            }
+            StmtK.Labeled(label, inner) => {
+                var is_loop = false
+                match inner.k {
+                    StmtK.For(a, b, c) => is_loop = true
+                    StmtK.While(a, b) => is_loop = true
+                    StmtK.Loop(b) => is_loop = true
+                    _ => {}
+                }
+                if not is_loop { fail(s.pos, "only loops can have a label") }
+                if self.ctx().loop_labels.contains(label) { fail(s.pos, "the label '{label}' is already used by an enclosing loop") }
+                self.ctx().next_label = label
+                self.check_stmt(inner, out)
+            }
+            StmtK.Return(value) => self.s_Return(s, value, out)
+            StmtK.Defer(st) => {
+                let cx = self.ctx()
+                if cx.defer_var == nil or cx.scope_dn[cx.scope_dn.len() - 1] == nil {
+                    fail(s.pos, "'defer' can only be used as a statement of a block")
+                }
+                let fty = Type.Func([], TVoid)
+                let lam = Expr(ExprK.Lambda([], nil, Block([st], st.pos)), st.pos)
+                let clo = self.ce(lam, fty)
+                let dv = cx.defer_var!
+                let push = self.try_method(texpr(TK.VarRef(dv), dv.ty, NOPOS), "push", [clo], s.pos)
+                out.push(tstmt(SK.ExprS(push!), s.pos))
+            }
+            StmtK.MatchS(subject, arms) => {
+                let r = self.lower_match(subject, arms, false, nil, s.pos)
+                for x in r.0 { out.push(x) }
+            }
+            StmtK.BlockS(b) => out.push(tstmt(SK.Blk(self.check_block_stmts(b.stmts)), s.pos))
+        }
+    }
+
+    // ------------------------------------------------------------------ let
+    fn default_value(self, ty: Type, pos: Pos) -> TExpr {
+        if ty == TInt or ty == TByte { return c_int(0, ty, pos) }
+        if ty == TFloat { return c_float(0.0, pos) }
+        if ty == TBool { return c_bool(false, pos) }
+        if ty == TStr { return c_str("", pos) }
+        if is_opt(ty) or is_ptr(ty) { return c_nil(ty, pos) }
+        if is_simple_enum(ty) { return c_int(self.enum_info_of(ty).tags[0], ty, pos) }
+        if self.is_array_t(ty) { return self.call_rt("array_make", [self.ci(0)], [type_args(ty)[0]], pos) }
+        if self.is_map_t(ty) { return self.call_rt("map_new", [], type_args(ty), pos) }
+        fail(pos, "a variable of type {ty.to_str()} needs an initial value")
+    }
+
+    fn s_Let(self, s: Stmt, names: [str], tup_pat: bool, tx: TypeExpr?, initx: Expr?, mutable: bool, out: [TStmt]) {
+        let cx = self.ctx()
+        var ty: Type? = nil
+        if tx != nil { ty = self.resolve_type(tx!, cx.tscope) }
+        var init: TExpr? = nil
+        if initx != nil {
+            var i = self.ce(initx!, ty)
+            if i.ty == TVoid {
+                fail(initx!.pos, "this expression does not produce a value", "the function called here returns nothing")
+            }
+            if ty != nil {
+                i = self.coerce(i, ty!, initx!.pos)
+            } else {
+                if i.ty == TNil {
+                    var kw = "let"
+                    if mutable { kw = "var" }
+                    fail(s.pos, "cannot tell the type from 'nil'", "add a type:  {kw} x: int? = nil")
+                }
+                if i.ty == TNever { fail(initx!.pos, "this expression never produces a value") }
+            }
+            init = i
+        }
+        if tup_pat {
+            if init == nil or not is_tuple(init!.ty) or tuple_elems(init!.ty).len() != names.len() {
+                fail(s.pos, "this pattern needs a tuple of {names.len()} values")
+            }
+            let tup = self.bind_tmp(init!, out)
+            let es = tuple_elems(init!.ty)
+            for i in 0..names.len() {
+                let v = self.declare_var(names[i], es[i], mutable, s.pos)
+                if names[i] != "_" {
+                    out.push(tstmt(SK.Decl(v, texpr(TK.Load(tup, i), es[i], NOPOS)), s.pos))
+                }
+            }
+            return
+        }
+        if init == nil { init = self.default_value(ty!, s.pos) }
+        var vty = init!.ty
+        if ty != nil { vty = ty! }
+        let v = self.declare_var(names[0], vty, mutable, s.pos)
+        out.push(tstmt(SK.Decl(v, init), s.pos))
+    }
+
+    // ------------------------------------------------------------------ assignment
+    // typed assignable place; for  obj[idx]  on maps/user types: a Place with obj/idx set
+    fn lvalue(self, t: Expr) -> Place {
+        match t.k {
+            ExprK.Ident(name, targs) => {
+                let v = self.lookup_var(name)
+                if v != nil {
+                    if not v!.mutable {
+                        fail(t.pos, "cannot assign to '{name}' because it was declared with 'let'",
+                             "declare it with 'var {name} = ...' to allow changes")
+                    }
+                    v!.root_var().assigned = true
+                    self.touch(v!)
+                    return Place(texpr(TK.VarRef(v!), v!.ty, t.pos), nil, nil)
+                }
+                let gi = self.find_global(name)
+                if gi != nil {
+                    let g = self.resolve_global(gi!)
+                    if not gi!.decl.mutable {
+                        fail(t.pos, "cannot assign to '{name}' because it was declared with 'let'", "declare it with 'var' to allow changes")
+                    }
+                    return Place(texpr(TK.GlobalRef(g), g.ty, t.pos), nil, nil)
+                }
+                if self.find_const(name) != nil { fail(t.pos, "cannot assign to the constant '{name}'") }
+                fail(t.pos, "unknown variable '{name}'", suggest(name, self.visible_names()))
+            }
+            ExprK.Field(objx, name) => {
+                let obj = self.ce_value(objx)
+                let place = self.field_of(obj, name, t.pos)
+                return Place(place, nil, nil)
+            }
+            ExprK.TupleField(objx, idx) => {
+                let obj = self.ce_value(objx)
+                self.tuple_field_of(obj, idx, t.pos)
+                fail(t.pos, "tuples cannot be modified", "create a new tuple instead")
+            }
+            ExprK.Index(objx, idxx) => {
+                let obj = self.ce_value(objx)
+                let ot = obj.ty
+                if self.is_array_t(ot) {
+                    let elem = type_args(ot)[0]
+                    return Place(texpr(TK.ArrIdx(obj, self.ce_as(idxx, TInt), self.esize(elem)), elem, t.pos), nil, nil)
+                }
+                if is_ptr(ot) {
+                    let elem = ptr_elem(ot)
+                    return Place(texpr(TK.PtrIdx(obj, self.ce_as(idxx, TInt), self.esize(elem)), elem, t.pos), nil, nil)
+                }
+                let idx = self.ce_value(idxx)
+                return Place(nil, obj, idx)
+            }
+            ExprK.Unwrap(x) => fail(t.pos, "cannot assign to the result of '!'")
+            _ => fail(t.pos, "this cannot be assigned to")
+        }
+    }
+
+    fn stabilize(self, place: TExpr, out: [TStmt]) -> TExpr {
+        match place.k {
+            TK.Load(obj, idx) => return texpr(TK.Load(self.bind_tmp(obj, out), idx), place.ty, place.pos)
+            TK.ArrIdx(arr, idx, es) => {
+                let a = self.bind_tmp(arr, out)
+                let i = self.bind_tmp(idx, out)
+                return texpr(TK.ArrIdx(a, i, es), place.ty, place.pos)
+            }
+            TK.PtrIdx(base, idx, es) => {
+                let b = self.bind_tmp(base, out)
+                let i = self.bind_tmp(idx, out)
+                return texpr(TK.PtrIdx(b, i, es), place.ty, place.pos)
+            }
+            _ => return place
+        }
+    }
+
+    fn s_Assign(self, s: Stmt, target: Expr, op: str, value: Expr, out: [TStmt]) {
+        let pl = self.lvalue(target)
+        let pos = s.pos
+        if pl.texpr == nil {                          // obj[idx] = v through op_set_index
+            var obj = pl.obj!
+            var idx = pl.idx!
+            if op == "=" {
+                var hint: Type? = nil
+                if self.is_map_t(obj.ty) { hint = type_args(obj.ty)[1] }
+                let val = self.ce_value(value, hint)
+                let call = self.try_method(obj, "op_set_index", [idx, val], pos)
+                if call == nil { fail(pos, "{obj.ty.to_str()} does not support  x[i] = v") }
+                out.push(tstmt(SK.ExprS(call!), pos))
+                return
+            }
+            obj = self.bind_tmp(obj, out)
+            idx = self.bind_tmp(idx, out)
+            let cur = self.try_method(obj, "op_index", [idx], pos)
+            if cur == nil { fail(pos, "{obj.ty.to_str()} cannot be indexed") }
+            var rhint: Type? = nil
+            if cur!.ty == TInt or cur!.ty == TFloat { rhint = cur!.ty }
+            let rhs = self.ce_value(value, rhint)
+            var val = self.binop(op[..op.len() - 1], cur!, rhs, pos)
+            val = self.coerce(val, cur!.ty, pos)
+            let call = self.try_method(obj, "op_set_index", [idx, val], pos)
+            out.push(tstmt(SK.ExprS(call!), pos))
+            return
+        }
+        var place = pl.texpr!
+        if op == "=" {
+            var val = self.ce_value(value, place.ty)
+            val = self.coerce(val, place.ty, value.pos)
+            out.push(tstmt(SK.Set(place, val), pos))
+            return
+        }
+        place = self.stabilize(place, out)
+        var rhint: Type? = nil
+        if place.ty == TInt or place.ty == TFloat { rhint = place.ty }
+        let rhs = self.ce_value(value, rhint)
+        var val = self.binop(op[..op.len() - 1], place, rhs, pos)
+        val = self.coerce(val, place.ty, pos)
+        out.push(tstmt(SK.Set(place, val), pos))
+    }
+
+    // ------------------------------------------------------------------ return
+    fn s_Return(self, s: Stmt, value: Expr?, out: [TStmt]) {
+        let cx = self.ctx()
+        let pos = s.pos
+        var val: TExpr? = nil
+        if value != nil {
+            var hint: Type? = nil
+            if cx.ret != nil and cx.ret! != TVoid { hint = cx.ret }
+            val = self.ce(value!, hint)
+        }
+        if cx.ret == nil {                      // lambda with inferred return type
+            if val == nil or val!.ty == TVoid { cx.ret = TVoid } else { cx.ret = val!.ty }
+        }
+        let ret = cx.ret!
+        if ret == TVoid or ret == TNever {
+            if val != nil {
+                if val!.ty != TVoid {
+                    fail(pos, "this function does not return a value", "remove the value, or declare a return type:  fn name() -> int")
+                }
+                out.push(tstmt(SK.ExprS(val!), pos))
+            }
+            val = nil
+        } else {
+            if val == nil { fail(pos, "this function must return a value of type {ret.to_str()}") }
+            val = self.coerce(val!, ret, value!.pos)
+        }
+        self.emit_return(val, out, pos)
+    }
+
+    fn emit_return(self, val0: TExpr?, out: [TStmt], pos: Pos) {
+        var val = val0
+        let cx = self.ctx()
+        if cx.defer_var != nil {
+            // the value is computed first, then the deferred code runs
+            if val != nil and not is_const(val!) {
+                let v = self.new_tmp(val!.ty, "$ret")
+                out.push(tstmt(SK.Decl(v, val), NOPOS))
+                val = texpr(TK.VarRef(v), v.ty, NOPOS)
+            }
+            out.push(self.run_defers_stmt(self.ci(0)))
+            out.push(self.restore_catch_stmt())
+        }
+        out.push(tstmt(SK.Ret(val), pos))
+    }
+
+    // ------------------------------------------------------------------ if
+    fn s_If(self, s: Stmt, cond: Cond, then: Block, els: Block?, out: [TStmt]) {
+        let pos = s.pos
+        match cond {
+            Cond.Let(pat, ex) => {
+                out.push(self.if_let_stmt(s, pat, ex, then, els))
+                return
+            }
+            Cond.Plain(cx_) => {
+                let c = self.ce_as(cx_, TBool)
+                let t = self.check_block_stmts(then.stmts)
+                var e: [TStmt] = []
+                if els != nil { e = self.check_block_stmts(els!.stmts) }
+                out.push(tstmt(SK.If(c, t, e), pos))
+            }
+        }
+    }
+
+    fn if_let_stmt(self, s: Stmt, pat: Pattern, ex: Expr, then: Block, els: Block?) -> TStmt {
+        let cx = self.ctx()
+        var subj = self.ce_value(ex)
+        let pre: [TStmt] = []
+        subj = self.bind_tmp(subj, pre)
+        cx.push()
+        let pc = self.pattern_cond(pat, subj, s.pos, true)
+        var t = pc.1
+        for x in self.check_block_stmts(then.stmts) { t.push(x) }
+        cx.pop()
+        var e: [TStmt] = []
+        if els != nil { e = self.check_block_stmts(els!.stmts) }
+        var cond = pc.0
+        if cond == nil { cond = c_bool(true, NOPOS) }
+        var all: [TStmt] = []
+        for x in pre { all.push(x) }
+        all.push(tstmt(SK.If(cond!, t, e), s.pos))
+        return tstmt(SK.Blk(all), s.pos)
+    }
+
+    fn if_let_expr(self, e: Expr, pat: Pattern, ex: Expr, then: Block, els: Block, expected: Type?) -> TExpr {
+        let cx = self.ctx()
+        var subj = self.ce_value(ex)
+        let pre: [TStmt] = []
+        subj = self.bind_tmp(subj, pre)
+        cx.push()
+        let pc = self.pattern_cond(pat, subj, e.pos, true)
+        let ra = self.check_value_block(then, expected)
+        cx.pop()
+        let rb = self.check_value_block(els, expected)
+        if ra.1 == nil or rb.1 == nil {
+            fail(e.pos, "both branches of an 'if' used as a value must end with a value")
+        }
+        let j = self.join(ra.1!, rb.1!, e.pos)
+        let a = j.0
+        let b = j.1
+        var ty = a.ty
+        if a.ty == TNever { ty = b.ty }
+        var cond = pc.0
+        if cond == nil { cond = c_bool(true, NOPOS) }
+        var astmts: [TStmt] = []
+        for x in pc.1 { astmts.push(x) }
+        for x in ra.0 { astmts.push(x) }
+        let cnd = texpr(TK.Cond(cond!, texpr(TK.Seq(astmts, a), a.ty, NOPOS), texpr(TK.Seq(rb.0, b), b.ty, NOPOS)), ty, e.pos)
+        return texpr(TK.Seq(pre, cnd), ty, e.pos)
+    }
+
+    // ------------------------------------------------------------------ loops
+    fn loop_body(self, body_fn: fn() -> [TStmt], label: str = "") -> [TStmt] {
+        let cx = self.ctx()
+        cx.loop_scope_depth.push(cx.scopes.len())
+        cx.loop_labels.push(label)
+        let r = body_fn()
+        cx.loop_scope_depth.pop()
+        cx.loop_labels.pop()
+        return r
+    }
+
+    // the label set by `label:` for the loop being entered now (consumed once)
+    fn take_label(self) -> str {
+        let l = self.ctx().next_label
+        self.ctx().next_label = ""
+        return l
+    }
+
+    // how many loops out is the loop with this label? (0 = innermost)
+    fn loop_levels(self, label: str, pos: Pos) -> int {
+        let cx = self.ctx()
+        var i = cx.loop_labels.len() - 1
+        while i >= 0 {
+            if cx.loop_labels[i] == label { return cx.loop_labels.len() - 1 - i }
+            i -= 1
+        }
+        if cx.loop_labels.len() == 0 { fail(pos, "'break'/'continue' can only be used inside a loop") }
+        fail(pos, "there is no enclosing loop labeled '{label}'", "label a loop like  {label}: for x in items \{ ... \}")
+    }
+
+    // run the defers of every scope that a break/continue n levels out leaves
+    fn break_defers_to(self, out: [TStmt], n: int) {
+        let cx = self.ctx()
+        if cx.defer_var == nil { return }
+        let depth = cx.loop_scope_depth[cx.loop_scope_depth.len() - 1 - n]
+        var i = depth
+        while i < cx.scope_dn.len() {
+            let dn = cx.scope_dn[i]
+            if dn != nil {
+                out.push(self.run_defers_stmt(texpr(TK.VarRef(dn!), TInt, NOPOS)))
+                return
+            }
+            i += 1
+        }
+    }
+
+    fn s_While(self, s: Stmt, cond: Cond, body: Block, out: [TStmt]) {
+        let cx = self.ctx()
+        let pos = s.pos
+        let label = self.take_label()
+        match cond {
+            Cond.Let(pat, subj_ast) => {
+                let me = self
+                let body_fn = || {
+                    let stmts: [TStmt] = []
+                    var subj = me.ce_value(subj_ast)
+                    subj = me.bind_tmp(subj, stmts)
+                    cx.push()
+                    let pc = me.pattern_cond(pat, subj, pos, true)
+                    var inner = pc.1
+                    for x in me.check_block_stmts(body.stmts) { inner.push(x) }
+                    cx.pop()
+                    if pc.0 != nil {
+                        stmts.push(tstmt(SK.If(texpr(TK.Un("not", pc.0!), TBool, NOPOS), [tstmt(SK.Break, NOPOS)], []), NOPOS))
+                    }
+                    for x in inner { stmts.push(x) }
+                    return stmts
+                }
+                out.push(tstmt(SK.While(c_bool(true, NOPOS), self.loop_body(body_fn, label), []), pos))
+            }
+            Cond.Plain(cx_) => {
+                let c = self.ce_as(cx_, TBool)
+                let b = self.loop_body(|| { return self.check_block_stmts(body.stmts) }, label)
+                out.push(tstmt(SK.While(c, b, []), pos))
+            }
+        }
+    }
+
+    fn break_defers(self, out: [TStmt]) { self.break_defers_to(out, 0) }
+
+    fn lower_for(self, names: [str], it: Expr, body_fn: fn() -> [TStmt], pos: Pos) -> [TStmt] {
+        let cx = self.ctx()
+        let label = self.take_label()
+        var out: [TStmt] = []
+        // ---- range loops
+        match it.k {
+            ExprK.Range(rlo, rhi, inclusive, rstep) => {
+                if names.len() != 1 { fail(pos, "a range loop has one variable:  for i in a..b") }
+                if rlo == nil { fail(pos, "a range loop needs a start:  for i in 0..n") }
+                let lo = self.ce_as(rlo!, TInt)
+                var hi: TExpr? = nil
+                if rhi != nil { hi = self.ce_as(rhi!, TInt) }
+                var stp = 1
+                if rstep != nil {
+                    let st = self.ce_as(rstep!, TInt)
+                    if not is_const(st) or const_ival(st) == 0 {
+                        fail(rstep!.pos, "'step' must be a non-zero constant number")
+                    }
+                    stp = const_ival(st)
+                }
+                cx.push()
+                let user = self.declare_var(names[0], TInt, false, pos)
+                var body = self.loop_body(body_fn, label)
+                cx.pop()
+                var end: TExpr? = nil
+                if hi != nil {
+                    end = hi
+                    if not is_const(hi!) {                      // the end bound is evaluated once
+                        let ev = self.new_tmp(TInt, "$end")
+                        out.push(tstmt(SK.Decl(ev, hi), pos))
+                        end = texpr(TK.VarRef(ev), TInt, NOPOS)
+                    }
+                }
+                var cur_var = user
+                if user.root_var().assigned or user.root_var().captured {
+                    let cnt = self.new_tmp(TInt, "$i")
+                    out.push(tstmt(SK.Decl(cnt, lo), pos))
+                    cur_var = cnt
+                    var nb: [TStmt] = [tstmt(SK.Decl(user, texpr(TK.VarRef(cnt), TInt, NOPOS)), pos)]
+                    for x in body { nb.push(x) }
+                    body = nb
+                } else {
+                    out.push(tstmt(SK.Decl(user, lo), pos))
+                }
+                let cur = texpr(TK.VarRef(cur_var), TInt, NOPOS)
+                var cond = c_bool(true, NOPOS)
+                if end != nil {
+                    var op = "lt"
+                    if stp > 0 {
+                        if inclusive { op = "le" }
+                    } else {
+                        if inclusive { op = "ge" } else { op = "gt" }
+                    }
+                    cond = texpr(TK.Bin(op, cur, end!), TBool, NOPOS)
+                }
+                let inc = tstmt(SK.Set(cur, texpr(TK.Bin("add", cur, self.ci(stp)), TInt, NOPOS)), pos)
+                var d = cx.loop_scope_depth.len() + 1
+                if d > 5 { d = 5 }
+                cur_var.root_var().weight += int_pow(8, d) * 3
+                out.push(tstmt(SK.While(cond, body, [inc]), pos))
+                return out
+            }
+            _ => {}
+        }
+        // ---- everything else: evaluate the iterable once
+        var coll = self.ce_value(it)
+        let ct = coll.ty
+        coll = self.bind_tmp(coll, out, "$coll")
+        if self.is_array_t(ct) {
+            let elem = type_args(ct)[0]
+            let es = self.esize(elem)
+            if names.len() > 2 { fail(pos, "for loops over arrays take at most two variables:  for i, x in arr") }
+            let idx = self.new_tmp(TInt, "$i")
+            out.push(tstmt(SK.Decl(idx, self.ci(0)), pos))
+            let idxr = texpr(TK.VarRef(idx), TInt, NOPOS)
+            cx.push()
+            var iv: Var? = nil
+            var xv: Var? = nil
+            if names.len() == 2 {
+                iv = self.declare_var(names[0], TInt, false, pos)
+                xv = self.declare_var(names[1], elem, false, pos)
+            } else {
+                xv = self.declare_var(names[0], elem, false, pos)
+            }
+            let body = self.loop_body(body_fn, label)
+            cx.pop()
+            let pty = Type.Ptr(elem)
+            let data = texpr(TK.PtrIdx(texpr(TK.Load(coll, 0), pty, NOPOS), idxr, es), elem, NOPOS)
+            var pre: [TStmt] = []
+            if iv != nil { pre.push(tstmt(SK.Decl(iv!, idxr), pos)) }
+            pre.push(tstmt(SK.Decl(xv!, data), pos))
+            let cond = texpr(TK.Bin("lt", idxr, texpr(TK.Load(coll, 1), TInt, NOPOS)), TBool, NOPOS)
+            let inc = tstmt(SK.Set(idxr, texpr(TK.Bin("add", idxr, self.ci(1)), TInt, NOPOS)), NOPOS)
+            var d = cx.loop_scope_depth.len() + 1
+            if d > 5 { d = 5 }
+            idx.weight += int_pow(8, d) * 3
+            for x in body { pre.push(x) }
+            out.push(tstmt(SK.While(cond, pre, [inc]), pos))
+            return out
+        }
+        if ct == TStr {
+            if names.len() > 2 { fail(pos, "for loops over text take at most two variables:  for i, c in text") }
+            let idx = self.new_tmp(TInt, "$i")
+            out.push(tstmt(SK.Decl(idx, self.ci(0)), pos))
+            let idxr = texpr(TK.VarRef(idx), TInt, NOPOS)
+            cx.push()
+            var iv: Var? = nil
+            var xv: Var? = nil
+            if names.len() == 2 {
+                iv = self.declare_var(names[0], TInt, false, pos)
+                xv = self.declare_var(names[1], TStr, false, pos)
+            } else {
+                xv = self.declare_var(names[0], TStr, false, pos)
+            }
+            let body = self.loop_body(body_fn, label)
+            cx.pop()
+            var pre: [TStmt] = []
+            if iv != nil { pre.push(tstmt(SK.Decl(iv!, idxr), pos)) }
+            let bptr = Type.Ptr(TByte)
+            let ch = texpr(TK.PtrIdx(texpr(TK.Cvt("nop", coll), bptr, NOPOS), texpr(TK.Bin("add", idxr, self.ci(8)), TInt, NOPOS), 1), TByte, NOPOS)
+            pre.push(tstmt(SK.Decl(xv!, self.call_rt("char_str", [ch], [], NOPOS)), pos))
+            let cond = texpr(TK.Bin("lt", idxr, texpr(TK.Load(coll, 0), TInt, NOPOS)), TBool, NOPOS)
+            let inc = tstmt(SK.Set(idxr, texpr(TK.Bin("add", idxr, self.ci(1)), TInt, NOPOS)), NOPOS)
+            for x in body { pre.push(x) }
+            out.push(tstmt(SK.While(cond, pre, [inc]), pos))
+            return out
+        }
+        if self.is_map_t(ct) {
+            let kt = type_args(ct)[0]
+            let vt = type_args(ct)[1]
+            if names.len() > 2 { fail(pos, "for loops over maps take at most two variables:  for k, v in map") }
+            // for (k, v) in map: the parser made one variable that is unpacked as a (key, value) pair
+            var pair_name = ""
+            if names.len() == 1 and names[0].starts_with("$for") { pair_name = names[0] }
+            let kty = Type.Struct(self.array_info!, [kt])
+            let ks = self.new_tmp(kty, "$keys")
+            out.push(tstmt(SK.Decl(ks, self.try_method(coll, "keys", [], pos)), pos))
+            var vs: Var? = nil
+            let vty = Type.Struct(self.array_info!, [vt])
+            if names.len() == 2 or pair_name != "" {
+                vs = self.new_tmp(vty, "$vals")
+                out.push(tstmt(SK.Decl(vs!, self.try_method(coll, "values", [], pos)), pos))
+            }
+            let idx = self.new_tmp(TInt, "$i")
+            out.push(tstmt(SK.Decl(idx, self.ci(0)), pos))
+            let idxr = texpr(TK.VarRef(idx), TInt, NOPOS)
+            cx.push()
+            var kv = self.new_tmp(kt, "$k")
+            var vv: Var? = nil
+            var pv: Var? = nil
+            let pty = Type.Tuple([kt, vt])
+            if pair_name != "" {
+                vv = self.new_tmp(vt, "$v")
+                pv = self.declare_var(pair_name, pty, false, pos)
+            } else {
+                kv = self.declare_var(names[0], kt, false, pos)
+                if names.len() == 2 { vv = self.declare_var(names[1], vt, false, pos) }
+            }
+            let body = self.loop_body(body_fn, label)
+            cx.pop()
+            let ksr = texpr(TK.VarRef(ks), kty, NOPOS)
+            var pre: [TStmt] = [tstmt(SK.Decl(kv, texpr(TK.PtrIdx(texpr(TK.Load(ksr, 0), Type.Ptr(kt), NOPOS), idxr, self.esize(kt)), kt, NOPOS)), pos)]
+            if vv != nil {
+                let vsr = texpr(TK.VarRef(vs!), vty, NOPOS)
+                pre.push(tstmt(SK.Decl(vv!, texpr(TK.PtrIdx(texpr(TK.Load(vsr, 0), Type.Ptr(vt), NOPOS), idxr, self.esize(vt)), vt, NOPOS)), pos))
+            }
+            if pv != nil {
+                let pair = texpr(TK.NewObj([texpr(TK.VarRef(kv), kt, NOPOS), texpr(TK.VarRef(vv!), vt, NOPOS)]), pty, NOPOS)
+                pre.push(tstmt(SK.Decl(pv!, pair), pos))
+            }
+            let cond = texpr(TK.Bin("lt", idxr, texpr(TK.Load(ksr, 1), TInt, NOPOS)), TBool, NOPOS)
+            let inc = tstmt(SK.Set(idxr, texpr(TK.Bin("add", idxr, self.ci(1)), TInt, NOPOS)), NOPOS)
+            for x in body { pre.push(x) }
+            out.push(tstmt(SK.While(cond, pre, [inc]), pos))
+            return out
+        }
+        fail(pos, "cannot loop over a value of type {ct.to_str()}", "you can loop over ranges (0..10), arrays, text and maps")
+    }
+
+    fn build_comprehension(self, elem_ast: Expr, names: [str], iter_ast: Expr, cond_ast: Expr?, hint: Type?, pos: Pos) -> TExpr {
+        let arr = new_var("$comp", TVoid, true, NOPOS)
+        var arr_ty_set = false
+        self.ctx().inst.vars.push(arr)
+        let me = self
+        let body_fn = || {
+            let stmts: [TStmt] = []
+            me.ctx().push()
+            var cond: TExpr? = nil
+            if cond_ast != nil { cond = me.ce_as(cond_ast!, TBool) }
+            var el = me.ce_value(elem_ast, hint)
+            if hint != nil { el = me.coerce(el, hint!, elem_ast.pos) }
+            if not arr_ty_set {
+                if el.ty == TNil or el.ty == TNever { fail(pos, "cannot tell the element type") }
+                arr.ty = Type.Struct(me.array_info!, [el.ty])
+                arr_ty_set = true
+            }
+            let push = me.try_method(texpr(TK.VarRef(arr), arr.ty, NOPOS), "push", [el], pos)
+            let st = tstmt(SK.ExprS(push!), pos)
+            if cond != nil {
+                stmts.push(tstmt(SK.If(cond!, [st], []), pos))
+            } else {
+                stmts.push(st)
+            }
+            me.ctx().pop()
+            return stmts
+        }
+        if hint != nil {
+            arr.ty = Type.Struct(self.array_info!, [hint!])
+            arr_ty_set = true
+        }
+        let lp = self.lower_for(names, iter_ast, body_fn, pos)
+        let decl = tstmt(SK.Decl(arr, self.call_rt("array_make", [self.ci(0)], [type_args(arr.ty)[0]], pos)), pos)
+        var all: [TStmt] = [decl]
+        for x in lp { all.push(x) }
+        return texpr(TK.Seq(all, texpr(TK.VarRef(arr), arr.ty, NOPOS)), arr.ty, pos)
+    }
+
+    // ------------------------------------------------------------------ match
+    fn x_MatchExpr(self, e: Expr, subject: Expr, arms: [Arm], expected: Type?) -> TExpr {
+        let r = self.lower_match(subject, arms, true, expected, e.pos)
+        return texpr(TK.Seq(r.0, r.1!), r.1!.ty, e.pos)
+    }
+
+    // returns (cond or nil, [Decl...]) and declares the bound variables in the current scope
+    fn pattern_cond(self, pat: Pattern, subj: TExpr, pos: Pos, unwrap: bool = false) -> (TExpr?, [TStmt]) {
+        var binds: [(str, TExpr)] = []
+        let cond = self.compile_pattern(pat, subj, binds, pos, unwrap)
+        var decls: [TStmt] = []
+        for b in binds {
+            let v = self.declare_var(b.0, b.1.ty, false, pos)
+            decls.push(tstmt(SK.Decl(v, b.1), pos))
+        }
+        return (cond, decls)
+    }
+
+    fn and_(self, a: TExpr?, b: TExpr?) -> TExpr? {
+        if a == nil { return b }
+        if b == nil { return a }
+        return texpr(TK.And(a!, b!), TBool, NOPOS)
+    }
+
+    fn compile_pattern(self, pat: Pattern, subj: TExpr, binds: [(str, TExpr)], pos: Pos, top: bool = false) -> TExpr? {
+        let t = subj.ty
+        match pat.k {
+            PatK.Wild => return nil
+            PatK.Bind(n) => {
+                if is_enum_t(t) and n in self.enum_info_of(t).vindex {
+                    return self.compile_pattern(Pattern(PatK.Variant([n], nil), pat.pos), subj, binds, pos)
+                }
+                if is_opt(t) and top {
+                    // `if let v = opt`  binds the unwrapped value; the condition is "not nil"
+                    binds.push((n, self.unwrap_opt(subj)))
+                    return texpr(TK.Bin("ne", subj, c_nil(t, NOPOS)), TBool, NOPOS)
+                }
+                binds.push((n, subj))
+                return nil
+            }
+            PatK.Lit(ex) => {
+                var hint: Type? = nil
+                if not is_opt(t) { hint = t }
+                let lit = self.ce(ex, hint)
+                if lit.ty == TNil {
+                    if not (is_opt(t) or is_ptr(t)) { fail(pat.pos, "{t.to_str()} can never be nil") }
+                    return texpr(TK.Bin("eq", subj, c_nil(t, NOPOS)), TBool, NOPOS)
+                }
+                if is_opt(t) {
+                    fail(pat.pos, "matching an optional against a value: bind it first with a name, or use  if let")
+                }
+                if is_numeric_t(t) and is_numeric_t(lit.ty) { return self.compare("==", subj, lit, pat.pos) }
+                if lit.ty != t {
+                    fail(pat.pos, "this pattern has type {lit.ty.to_str()} but the value being matched is {t.to_str()}")
+                }
+                return self.compare("==", subj, lit, pat.pos)
+            }
+            PatK.Range(lox, hix, inclusive) => {
+                let lo = self.ce(lox, t)
+                let hi = self.ce(hix, t)
+                if not is_numeric_t(t) { fail(pat.pos, "range patterns work on numbers") }
+                let c1 = self.compare(">=", subj, lo, pat.pos)
+                var op = "<"
+                if inclusive { op = "<=" }
+                let c2 = self.compare(op, subj, hi, pat.pos)
+                return texpr(TK.And(c1, c2), TBool, NOPOS)
+            }
+            PatK.Tuple(elems) => {
+                if not is_tuple(t) or tuple_elems(t).len() != elems.len() {
+                    fail(pat.pos, "this pattern has {elems.len()} parts but the value is {t.to_str()}")
+                }
+                let es = tuple_elems(t)
+                var c: TExpr? = nil
+                for i in 0..elems.len() {
+                    let sub = texpr(TK.Load(subj, i), es[i], NOPOS)
+                    c = self.and_(c, self.compile_pattern(elems[i], sub, binds, pos))
+                }
+                return c
+            }
+            PatK.Or(alts) => {
+                var conds: [TExpr?] = []
+                for alt in alts {
+                    var b2: [(str, TExpr)] = []
+                    let c = self.compile_pattern(alt, subj, b2, pos)
+                    if b2.len() > 0 { fail(alt.pos, "alternatives with '|' cannot bind names") }
+                    conds.push(c)
+                }
+                for c in conds {
+                    if c == nil { return nil }
+                }
+                var r = conds[0]!
+                for i in 1..conds.len() { r = texpr(TK.Or(r, conds[i]!), TBool, NOPOS) }
+                return r
+            }
+            PatK.Fields(path, fields) => {
+                let sf = self.pattern_struct(t, path, pat.pos)
+                var seen: {str: bool} = {}
+                var c: TExpr? = nil
+                for f in fields {
+                    if f.name in seen { fail(f.pos, "field '{f.name}' appears twice in this pattern") }
+                    seen[f.name] = true
+                    var idx = -1
+                    for i in 0..sf.len() {
+                        if sf[i].name == f.name { idx = i }
+                    }
+                    if idx < 0 {
+                        var names: [str] = []
+                        for x in sf { names.push(x.name) }
+                        fail(f.pos, "{t.to_str()} has no field '{f.name}'", suggest(f.name, names))
+                    }
+                    let sub = texpr(TK.Load(subj, idx), sf[idx].ty, NOPOS)
+                    c = self.and_(c, self.compile_pattern(f.pat, sub, binds, pos))
+                }
+                return c
+            }
+            PatK.Variant(path, pargs) => {
+                if self.is_struct_pattern(t, path) {
+                    let sf = self.pattern_struct(t, path, pat.pos)
+                    var args: [Pattern] = []
+                    if pargs != nil { args = pargs! }
+                    if args.len() != sf.len() {
+                        fail(pat.pos, "{t.to_str()} has {sf.len()} field(s) but the pattern has {args.len()}",
+                             "list every field in order, or name them:  {path[path.len() - 1]}\{ field: pattern \}")
+                    }
+                    var c: TExpr? = nil
+                    for i in 0..args.len() {
+                        let sub = texpr(TK.Load(subj, i), sf[i].ty, NOPOS)
+                        c = self.and_(c, self.compile_pattern(args[i], sub, binds, pos))
+                    }
+                    return c
+                }
+                if path.len() == 1 and path[0] in self.structs { self.pattern_struct(t, path, pat.pos) }
+                if not is_enum_t(t) {
+                    fail(pat.pos, "this pattern names an enum variant, but the value being matched is {t.to_str()}")
+                }
+                let info = self.enum_info_of(t)
+                let vname = path[path.len() - 1]
+                if path.len() == 2 and path[0] != info.name {
+                    fail(pat.pos, "this pattern is for {path[0]} but the value is {t.to_str()}")
+                }
+                if path.len() > 2 { fail(pat.pos, "bad pattern") }
+                let vi0 = info.vindex.try_get(vname)
+                if vi0 == nil {
+                    var vnames: [str] = []
+                    for v in info.decl.variants { vnames.push(v.name) }
+                    fail(pat.pos, "{info.name} has no variant '{vname}'", suggest(vname, vnames))
+                }
+                let vi = vi0!
+                let payload = self.variant_payload(t, vi)
+                var args: [Pattern] = []
+                if pargs != nil { args = pargs! }
+                if pargs != nil and args.len() != payload.len() {
+                    fail(pat.pos, "{info.name}.{vname} carries {payload.len()} value(s) but the pattern has {args.len()}")
+                }
+                if pargs == nil and payload.len() > 0 {
+                    args = []
+                    for p in payload { args.push(Pattern(PatK.Wild, pat.pos)) }
+                }
+                var cond: TExpr? = nil
+                if info.simple {
+                    cond = texpr(TK.Bin("eq", subj, c_int(info.tags[vi], t, NOPOS)), TBool, NOPOS)
+                } else {
+                    cond = texpr(TK.Bin("eq", texpr(TK.Load(subj, 0), TInt, NOPOS), self.ci(vi)), TBool, NOPOS)
+                }
+                for i in 0..args.len() {
+                    let sub = texpr(TK.Load(subj, i + 1), payload[i], NOPOS)
+                    cond = self.and_(cond, self.compile_pattern(args[i], sub, binds, pos))
+                }
+                return cond
+            }
+        }
+    }
+
+    // does  Name(...)  in a pattern mean the struct being matched?
+    fn is_struct_pattern(self, t: Type, path: [str]) -> bool {
+        if not is_struct_t(t) or self.is_array_t(t) or self.is_map_t(t) { return false }
+        let tn = t.to_str()
+        let base = match t {
+            Type.Struct(info, args) => info.name
+            _ => tn
+        }
+        return path.len() == 1 and path[0] == base
+    }
+
+    // the fields of the struct a pattern names (and checks that it is the matched type)
+    fn pattern_struct(self, t: Type, path: [str], pos: Pos) -> [Field] {
+        if not self.is_struct_pattern(t, path) {
+            let shown = ".".join(path)
+            if is_struct_t(t) and not self.is_array_t(t) and not self.is_map_t(t) {
+                fail(pos, "this pattern is for {shown} but the value is {t.to_str()}")
+            }
+            fail(pos, "this pattern is for the struct {shown} but the value being matched is {t.to_str()}")
+        }
+        return self.struct_fields(t)
+    }
+
+    // ---- exhaustiveness: values (one string per column) that no row matches
+    fn is_wild_pat(self, p: Pattern, t: Type) -> bool {
+        match p.k {
+            PatK.Wild => return true
+            PatK.Bind(n) => {
+                if is_enum_t(t) and n in self.enum_info_of(t).vindex { return false }
+                return true
+            }
+            _ => return false
+        }
+    }
+
+    // rows: patterns of each arm (one per column); all: collect every uncovered top-level case, not just one
+    fn uncovered(self, rows0: [[Pattern]], types: [Type], all: bool) -> [[str]] {
+        if types.len() == 0 {
+            if rows0.len() > 0 { return [] }
+            return [[]]
+        }
+        // split or-patterns in the first column
+        var rows: [[Pattern]] = []
+        for r in rows0 {
+            match r[0].k {
+                PatK.Or(alts) => {
+                    for a in alts {
+                        var nr: [Pattern] = [a]
+                        for i in 1..r.len() { nr.push(r[i]) }
+                        rows.push(nr)
+                    }
+                }
+                _ => rows.push(r)
+            }
+        }
+        let t = types[0]
+        let rest_types = types[1..]
+        var out: [[str]] = []
+        // no arm left: anything is uncovered
+        if rows.len() == 0 {
+            var w: [str] = []
+            for x in types { w.push("_") }
+            return [w]
+        }
+        // a column of catch-alls only: skip it (this also stops the recursion on recursive types)
+        var all_wild = true
+        for r in rows {
+            if not self.is_wild_pat(r[0], t) { all_wild = false }
+        }
+        if all_wild {
+            var sub: [[Pattern]] = []
+            for r in rows { sub.push(r[1..]) }
+            let miss = self.uncovered(sub, rest_types, false)
+            if miss.len() == 0 { return [] }
+            var col: [str] = ["_"]
+            for x in miss[0] { col.push(x) }
+            return [col]
+        }
+        if is_enum_t(t) {
+            let info = self.enum_info_of(t)
+            for vi in 0..info.decl.variants.len() {
+                let vname = info.decl.variants[vi].name
+                let payload = self.variant_payload(t, vi)
+                var sub: [[Pattern]] = []
+                for r in rows {
+                    let p = r[0]
+                    var args: [Pattern]? = nil
+                    var matches = false
+                    if self.is_wild_pat(p, t) {
+                        matches = true
+                    } else {
+                        match p.k {
+                            PatK.Bind(n) => matches = n == vname
+                            PatK.Variant(path, pargs) => {
+                                matches = path[path.len() - 1] == vname
+                                args = pargs
+                            }
+                            _ => {}
+                        }
+                    }
+                    if not matches { continue }
+                    var nr: [Pattern] = []
+                    if args != nil and args!.len() == payload.len() {
+                        for a in args! { nr.push(a) }
+                    } else {
+                        for x in payload { nr.push(Pattern(PatK.Wild, p.pos)) }
+                    }
+                    for i in 1..r.len() { nr.push(r[i]) }
+                    sub.push(nr)
+                }
+                var sub_types: [Type] = []
+                for x in payload { sub_types.push(x) }
+                for x in rest_types { sub_types.push(x) }
+                let miss = self.uncovered(sub, sub_types, false)
+                if miss.len() > 0 {
+                    let w = miss[0]
+                    var name = info.name + "." + vname
+                    if payload.len() > 0 { name = name + "(" + ", ".join(w[..payload.len()]) + ")" }
+                    var col: [str] = [name]
+                    for i in payload.len()..w.len() { col.push(w[i]) }
+                    out.push(col)
+                    if not all { return out }
+                }
+            }
+            return out
+        }
+        if t == TBool {
+            for v in [true, false] {
+                var sub: [[Pattern]] = []
+                for r in rows {
+                    var matches = self.is_wild_pat(r[0], t)
+                    match r[0].k {
+                        PatK.Lit(ex) => {
+                            match ex.k {
+                                ExprK.BoolLit(b) => matches = b == v
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                    if matches { sub.push(r[1..]) }
+                }
+                let miss = self.uncovered(sub, rest_types, false)
+                if miss.len() > 0 {
+                    var col: [str] = [str(v)]
+                    for x in miss[0] { col.push(x) }
+                    out.push(col)
+                    if not all { return out }
+                }
+            }
+            return out
+        }
+        if is_tuple(t) {
+            let es = tuple_elems(t)
+            var sub: [[Pattern]] = []
+            for r in rows {
+                var nr: [Pattern] = []
+                if self.is_wild_pat(r[0], t) {
+                    for x in es { nr.push(Pattern(PatK.Wild, r[0].pos)) }
+                } else {
+                    match r[0].k {
+                        PatK.Tuple(ps) => {
+                            if ps.len() != es.len() { continue }
+                            for x in ps { nr.push(x) }
+                        }
+                        _ => continue
+                    }
+                }
+                for i in 1..r.len() { nr.push(r[i]) }
+                sub.push(nr)
+            }
+            var sub_types: [Type] = []
+            for x in es { sub_types.push(x) }
+            for x in rest_types { sub_types.push(x) }
+            let miss = self.uncovered(sub, sub_types, false)
+            if miss.len() == 0 { return [] }
+            let w = miss[0]
+            var col: [str] = ["(" + ", ".join(w[..es.len()]) + ")"]
+            for i in es.len()..w.len() { col.push(w[i]) }
+            return [col]
+        }
+        if is_struct_t(t) and not self.is_array_t(t) and not self.is_map_t(t) {
+            let sf = self.struct_fields(t)
+            var sub: [[Pattern]] = []
+            for r in rows {
+                var nr: [Pattern] = []
+                for x in sf { nr.push(Pattern(PatK.Wild, r[0].pos)) }
+                if not self.is_wild_pat(r[0], t) {
+                    match r[0].k {
+                        PatK.Variant(path, pargs) => {
+                            if pargs == nil or pargs!.len() != sf.len() { continue }
+                            for i in 0..sf.len() { nr[i] = pargs![i] }
+                        }
+                        PatK.Fields(path, fields) => {
+                            for f in fields {
+                                for i in 0..sf.len() {
+                                    if sf[i].name == f.name { nr[i] = f.pat }
+                                }
+                            }
+                        }
+                        _ => continue
+                    }
+                }
+                for i in 1..r.len() { nr.push(r[i]) }
+                sub.push(nr)
+            }
+            var sub_types: [Type] = []
+            for x in sf { sub_types.push(x.ty) }
+            for x in rest_types { sub_types.push(x) }
+            let miss = self.uncovered(sub, sub_types, false)
+            if miss.len() == 0 { return [] }
+            let w = miss[0]
+            let name = match t {
+                Type.Struct(info, args) => info.name
+                _ => t.to_str()
+            }
+            var col: [str] = [name + "(" + ", ".join(w[..sf.len()]) + ")"]
+            for i in sf.len()..w.len() { col.push(w[i]) }
+            return [col]
+        }
+        if is_opt(t) {
+            // two cases: nil, and a value
+            var nil_rows: [[Pattern]] = []
+            var val_rows: [[Pattern]] = []
+            for r in rows {
+                if self.is_wild_pat(r[0], t) {
+                    nil_rows.push(r[1..])
+                    val_rows.push(r[1..])
+                } else {
+                    match r[0].k {
+                        PatK.Lit(ex) => {
+                            match ex.k {
+                                ExprK.NilLit => nil_rows.push(r[1..])
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let m1 = self.uncovered(nil_rows, rest_types, false)
+            if m1.len() > 0 {
+                var col: [str] = ["nil"]
+                for x in m1[0] { col.push(x) }
+                out.push(col)
+                if not all { return out }
+            }
+            let m2 = self.uncovered(val_rows, rest_types, false)
+            if m2.len() > 0 {
+                var col: [str] = ["_"]
+                for x in m2[0] { col.push(x) }
+                out.push(col)
+            }
+            return out
+        }
+        // numbers, text, ...: only a catch-all covers everything
+        var sub: [[Pattern]] = []
+        for r in rows {
+            if self.is_wild_pat(r[0], t) { sub.push(r[1..]) }
+        }
+        let miss = self.uncovered(sub, rest_types, false)
+        if miss.len() == 0 { return [] }
+        var col: [str] = ["_"]
+        for x in miss[0] { col.push(x) }
+        return [col]
+    }
+
+    // which enum variants does this pattern fully cover?
+    fn arm_covers(self, pat: Pattern, subj_ty: Type?) -> Cover {
+        match pat.k {
+            PatK.Wild => return Cover(true, [])
+            PatK.Bind(n) => {
+                if subj_ty != nil and is_enum_t(subj_ty!) and n in self.enum_info_of(subj_ty!).vindex {
+                    return Cover(false, [n])
+                }
+                return Cover(true, [])
+            }
+            PatK.Variant(path, args) => {
+                var irrefutable = true
+                if args != nil {
+                    for a in args! {
+                        if not self.arm_covers(a, nil).all { irrefutable = false }
+                    }
+                }
+                if irrefutable { return Cover(false, [path[path.len() - 1]]) }
+                return Cover(false, [])
+            }
+            PatK.Or(alts) => {
+                var res: [str] = []
+                for a in alts {
+                    let c = self.arm_covers(a, subj_ty)
+                    if c.all { return Cover(true, []) }
+                    for n in c.names { res.push(n) }
+                }
+                return Cover(false, res)
+            }
+            PatK.Lit(ex) => {
+                match ex.k {
+                    ExprK.BoolLit(v) => {
+                        if v { return Cover(false, ["true"]) }
+                        return Cover(false, ["false"])
+                    }
+                    _ => {}
+                }
+                return Cover(false, [])
+            }
+            _ => return Cover(false, [])
+        }
+    }
+
+    fn lower_match(self, subject_ast: Expr, arms: [Arm], is_expr: bool, expected: Type?, pos: Pos) -> ([TStmt], TExpr?) {
+        let cx = self.ctx()
+        let subj0 = self.ce_value(subject_ast)
+        var out: [TStmt] = []
+        let subj = self.bind_tmp(subj0, out, "$m")
+        let st = subj.ty
+        // exhaustiveness (arms with a guard do not count)
+        var rows: [[Pattern]] = []
+        for arm in arms {
+            if arm.guard == nil { rows.push([arm.pat]) }
+        }
+        let missing = self.uncovered(rows, [st], true)
+        var exhaustive = missing.len() == 0
+        if not exhaustive {
+            if is_enum_t(st) or st == TBool or is_tuple(st) or is_opt(st) or (is_struct_t(st) and not self.is_array_t(st) and not self.is_map_t(st)) {
+                var shown: [str] = []
+                for m in missing {
+                    if shown.len() < 6 { shown.push(m[0]) }
+                }
+                var list = ", ".join(shown)
+                if missing.len() > 6 { list = list + ", ..." }
+                fail(pos, "this match does not cover: {list}", "add the missing cases or a catch-all arm:  _ => ...")
+            }
+            if is_expr {
+                fail(pos, "a match used as a value must cover every case", "add a catch-all arm:  _ => ...")
+            }
+        }
+        var arm_vals: [TExpr] = []
+        var c_cond: [TExpr?] = []
+        var c_decls: [[TStmt]] = []
+        var c_stmts: [[TStmt]] = []
+        for arm in arms {
+            cx.push()
+            let pc = self.pattern_cond(arm.pat, subj, arm.pos)
+            var cond = pc.0
+            var decls = pc.1
+            if arm.guard != nil {
+                let g = self.ce_as(arm.guard!, TBool)
+                let gexpr = texpr(TK.Seq(decls, g), TBool, NOPOS)
+                cond = self.and_(cond, gexpr)
+                decls = []
+            }
+            if is_expr {
+                var stmts: [TStmt] = []
+                var val: TExpr? = nil
+                match arm.body {
+                    ArmBody.Blk(b) => {
+                        let r = self.check_value_block(b, expected)
+                        stmts = r.0
+                        val = r.1
+                    }
+                    ArmBody.Ex(x) => val = self.ce(x, expected)
+                }
+                if val == nil and self.terminates(stmts) { val = c_int(0, TNever, NOPOS) }
+                if val == nil { fail(arm.pos, "this arm must end with a value") }
+                if val!.ty == TVoid { fail(arm.pos, "this arm does not produce a value") }
+                arm_vals.push(val!)
+                c_cond.push(cond)
+                c_decls.push(decls)
+                c_stmts.push(stmts)
+            } else {
+                var stmts: [TStmt] = []
+                match arm.body {
+                    ArmBody.Blk(b) => stmts = self.check_block_stmts(b.stmts)
+                    ArmBody.Ex(x) => {
+                        let be = self.ce(x)
+                        stmts = [tstmt(SK.ExprS(be), arm.pos)]
+                    }
+                }
+                c_cond.push(cond)
+                c_decls.push(decls)
+                c_stmts.push(stmts)
+            }
+            cx.pop()
+        }
+        if is_expr {
+            // common type
+            var ty: Type? = nil
+            for v in arm_vals {
+                if v.ty == TNever { continue }
+                if ty == nil {
+                    ty = v.ty
+                } else if self.try_coerce(v, ty!) != nil {
+                    // fine
+                } else if is_numeric_t(ty!) and is_numeric_t(v.ty) and v.ty == TFloat {
+                    ty = TFloat
+                } else if is_opt(v.ty) and self.try_coerce(c_int(0, ty!, NOPOS), v.ty) != nil {
+                    ty = v.ty
+                } else if v.ty == TNil and (is_struct_t(ty!) or ty! == TStr or is_tuple(ty!) or is_func(ty!) or is_enum_t(ty!)) {
+                    ty = Type.Opt(ty!)
+                } else if ty! == TNil {
+                    ty = Type.Opt(v.ty)
+                } else {
+                    fail(pos, "the arms of this match have different types: {ty!.to_str()} and {v.ty.to_str()}")
+                }
+            }
+            if ty == nil { ty = TNever }
+            var vty = ty!
+            if ty! == TNever { vty = TInt }
+            let res = self.new_tmp(vty, "$mr")
+            out.push(tstmt(SK.Decl(res, nil), pos))
+            var tail: [TStmt]? = nil
+            if not exhaustive {
+                tail = [tstmt(SK.ExprS(self.call_rt("match_fail", [], [], pos)), NOPOS)]
+            } else {
+                tail = [tstmt(SK.ExprS(self.call_rt("match_fail", [], [], pos)), NOPOS)]
+            }
+            var k = arm_vals.len() - 1
+            while k >= 0 {
+                var val = arm_vals[k]
+                var body: [TStmt] = []
+                for x in c_decls[k] { body.push(x) }
+                for x in c_stmts[k] { body.push(x) }
+                if val.ty != TNever {
+                    val = self.coerce(val, ty!, pos)
+                    body.push(tstmt(SK.Set(texpr(TK.VarRef(res), ty!, NOPOS), val), pos))
+                } else {
+                    body.push(tstmt(SK.ExprS(val), NOPOS))
+                }
+                var cond = c_cond[k]
+                if cond == nil { cond = c_bool(true, NOPOS) }
+                var rest: [TStmt] = []
+                if tail != nil { rest = tail! }
+                tail = [tstmt(SK.If(cond!, body, rest), pos)]
+                k -= 1
+            }
+            if tail != nil {
+                for x in tail! { out.push(x) }
+            }
+            return (out, texpr(TK.VarRef(res), ty!, pos))
+        }
+        var tail: [TStmt] = []
+        if exhaustive { tail = [tstmt(SK.ExprS(self.call_rt("match_fail", [], [], pos)), NOPOS)] }
+        var k = c_cond.len() - 1
+        while k >= 0 {
+            var cond = c_cond[k]
+            if cond == nil { cond = c_bool(true, NOPOS) }
+            var body: [TStmt] = []
+            for x in c_decls[k] { body.push(x) }
+            for x in c_stmts[k] { body.push(x) }
+            tail = [tstmt(SK.If(cond!, body, tail), pos)]
+            k -= 1
+        }
+        for x in tail { out.push(x) }
+        return (out, nil)
+    }
+}

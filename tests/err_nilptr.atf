@@ -1,0 +1,7 @@
+fn main() {
+    let p: ptr<int> = nil
+    println("before")
+    let m = catch_panic(|| { println(p[3]) })
+    println("caught:", m)
+    println(p[5])
+}

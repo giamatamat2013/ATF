@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: Shape.Rect carries 2 value(s) but the pattern has 1
+  --> cerr_pattern_arity.atf:4:9
+ 4 |         Shape.Rect(w) => w
+   |         ^

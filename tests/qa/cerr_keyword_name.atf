@@ -1,0 +1,4 @@
+fn main() {
+    let step = 2
+    println(step)
+}

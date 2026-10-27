@@ -1,0 +1,9 @@
+list: [5, 10, 20, 30, 40, 50] size 6
+sum: 155
+contains 30? true  contains 31? false
+reversed: [50, 40, 30, 20, 10, 5]
+popped: 50 now [40, 30, 20, 10, 5]
+popped value + 1 = 51
+popping an empty list gives: nil
+with a default: -1
+is it nil? true

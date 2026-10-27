@@ -1,0 +1,5 @@
+fn main() {
+    var z = 0
+    println("before")
+    println(10 / z)
+}

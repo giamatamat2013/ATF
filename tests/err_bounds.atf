@@ -1,0 +1,6 @@
+fn main() {
+    let a = [1, 2, 3]
+    println("before")
+    var i = 5
+    println(a[i])
+}

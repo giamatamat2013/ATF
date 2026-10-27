@@ -1,0 +1,206 @@
+// std/csv - reading and writing CSV (comma-separated values, RFC 4180).
+//
+//   import "std/csv"
+//   let rows = csv_parse("name,age\nAda,36\n\"Lovelace, A.\",\"say \"\"hi\"\"\"\n").unwrap()
+//   // [["name", "age"], ["Ada", "36"], ["Lovelace, A.", "say \"hi\""]]
+//   let people = csv_parse_records("name,age\nAda,36\n").unwrap()     // [{"name": "Ada", "age": "36"}]
+//   print(csv_format([["a", "b,c"], ["1", "x\"y"]]))                // a,"b,c"\n1,"x""y"\n
+//   let tsv = csv_parse("a\tb\n", sep: '\t')                        // any one-byte separator
+//
+// Parsing rules: fields may be quoted with "..."; inside quotes the separator, CR and LF are ordinary
+// characters and "" stands for one quote. Lines end with LF or CRLF (a lone CR also works).
+// A final line break does not create an extra row. Blank lines are skipped unless skip_empty is false
+// (then they become rows with one empty field). Errors (Result.Err) name the line and column.
+
+// Parses CSV text into rows of fields.
+fn csv_parse(text: str, sep: byte = ',', skip_empty: bool = true) -> Result<[[str]], str> {
+    let n = str_len(text)
+    let p = str_data(text)
+    var rows: [[str]] = []
+    var row: [str] = []
+    var field = str_builder()
+    var i = 0
+    if n >= 3 and p[0] == 0xEF and p[1] == 0xBB and p[2] == 0xBF { i = 3 }    // UTF-8 byte order mark
+    var line = 1
+    var line_start = i
+    var at_row_start = true
+    while i < n {
+        let c = p[i]
+        if c == '"' and field.len() == 0 {
+            // quoted field
+            let q_line = line
+            let q_col = i - line_start + 1
+            i += 1
+            var closed = false
+            while i < n {
+                let d = p[i]
+                if d == '"' {
+                    if i + 1 < n and p[i + 1] == '"' {
+                        field.add_byte('"')
+                        i += 2
+                        continue
+                    }
+                    i += 1
+                    closed = true
+                    break
+                }
+                if d == 10 {
+                    line += 1
+                    line_start = i + 1
+                }
+                field.add_byte(d)
+                i += 1
+            }
+            if not closed {
+                return Result.Err("line {q_line}, column {q_col}: unterminated quoted field (missing closing quote)")
+            }
+            // after the closing quote: separator, line end or end of text
+            if i < n and p[i] != sep and p[i] != 10 and p[i] != 13 {
+                return Result.Err("line {line}, column {i - line_start + 1}: unexpected character '{char_str(p[i])}' after a closing quote (expected the separator or a line end)")
+            }
+            at_row_start = false
+            // an empty quoted field "" must still count as a field: mark it by continuing to the separator logic
+            if i >= n { break }
+            continue
+        }
+        if c == sep {
+            row.push(field.finish())
+            field.clear()
+            at_row_start = false
+            i += 1
+            continue
+        }
+        if c == 10 or c == 13 {
+            if at_row_start and field.len() == 0 {
+                if not skip_empty { rows.push([""]) }
+            } else {
+                row.push(field.finish())
+                rows.push(row)
+                row = []
+            }
+            field.clear()
+            at_row_start = true
+            if c == 13 and i + 1 < n and p[i + 1] == 10 { i += 1 }
+            i += 1
+            line += 1
+            line_start = i
+            continue
+        }
+        if c == '"' {
+            return Result.Err("line {line}, column {i - line_start + 1}: quote character inside an unquoted field (quote the whole field and double the quote)")
+        }
+        field.add_byte(c)
+        at_row_start = false
+        i += 1
+    }
+    if not at_row_start or field.len() > 0 {
+        row.push(field.finish())
+        rows.push(row)
+    }
+    return Result.Ok(rows)
+}
+
+// Parses one CSV record (a line without its line break; quoted fields may still contain line breaks).
+fn csv_parse_row(line: str, sep: byte = ',') -> Result<[str], str> {
+    let r = csv_parse(line, sep, false)?
+    if r.len() == 0 { return Result.Ok([""]) }
+    if r.len() > 1 { return Result.Err("expected one record but found {r.len()} lines") }
+    return Result.Ok(r[0])
+}
+
+// Parses CSV whose first row is a header; returns one map (column name -> value) per data row.
+// Every row must have exactly as many fields as the header.
+fn csv_parse_records(text: str, sep: byte = ',') -> Result<[{str: str}], str> {
+    let rows = csv_parse(text, sep)?
+    var out: [{str: str}] = []
+    if rows.len() == 0 { return Result.Ok(out) }
+    let header = rows[0]
+    let seen = set_new::<str>()
+    for h in header {
+        if seen.has(h) { return Result.Err("duplicate column name " + quote_str(h) + " in the header") }
+        seen.add(h)
+    }
+    for r in 1..rows.len() {
+        let row = rows[r]
+        if row.len() != header.len() {
+            return Result.Err("row {r + 1} (the header is row 1) has {row.len()} field(s) but the header has {header.len()}")
+        }
+        var m: {str: str} = {}
+        for k in 0..header.len() { m[header[k]] = row[k] }
+        out.push(m)
+    }
+    return Result.Ok(out)
+}
+
+// true if the field must be quoted: it contains the separator, a quote, CR or LF,
+// or starts / ends with a space or tab
+fn csv_needs_quotes(s: str, sep: byte = ',') -> bool {
+    let n = str_len(s)
+    let p = str_data(s)
+    if n == 0 { return false }
+    if p[0] == ' ' or p[0] == 9 or p[n - 1] == ' ' or p[n - 1] == 9 { return true }
+    for i in 0..n {
+        let c = p[i]
+        if c == sep or c == '"' or c == 10 or c == 13 { return true }
+    }
+    return false
+}
+
+// one field, quoted only when necessary (always when always_quote is true)
+fn csv_format_field(s: str, sep: byte = ',', always_quote: bool = false) -> str {
+    if not always_quote and not csv_needs_quotes(s, sep) { return s }
+    return "\"" + s.replace("\"", "\"\"") + "\""
+}
+
+// one record without a line break
+fn csv_format_row(fields: [str], sep: byte = ',', always_quote: bool = false) -> str {
+    var sb = str_builder()
+    for i in 0..fields.len() {
+        if i > 0 { sb.add_byte(sep) }
+        sb.add(csv_format_field(fields[i], sep, always_quote))
+    }
+    // a record with a single empty field would read back as a blank line
+    if fields.len() == 1 and str_len(fields[0]) == 0 { return "\"\"" }
+    return sb.finish()
+}
+
+// whole CSV text; every record (including the last) ends with line_end ("\n" or "\r\n")
+fn csv_format(rows: [[str]], sep: byte = ',', line_end: str = "\n", always_quote: bool = false) -> str {
+    var sb = str_builder()
+    for r in rows {
+        sb.add(csv_format_row(r, sep, always_quote))
+        sb.add(line_end)
+    }
+    return sb.finish()
+}
+
+// CSV text with a header row from the given column names, then one row per map
+// (missing keys give empty fields)
+fn csv_format_records(columns: [str], records: [{str: str}], sep: byte = ',', line_end: str = "\n") -> str {
+    var rows: [[str]] = [columns]
+    for m in records {
+        var row: [str] = []
+        for c in columns { row.push(m.get(c, "")) }
+        rows.push(row)
+    }
+    return csv_format(rows, sep, line_end)
+}
+
+// the values of one column (rows that are too short give "")
+fn csv_column(rows: [[str]], index: int) -> [str] {
+    var out: [str] = []
+    for r in rows { out.push(r.get(index, "")) }
+    return out
+}
+
+// reads and parses a CSV file
+fn csv_read_file(path: str, sep: byte = ',') -> Result<[[str]], str> {
+    let text = read_file(path)
+    if text == nil { return Result.Err("cannot read file '{path}'") }
+    return csv_parse(text!, sep)
+}
+
+// writes rows to a CSV file; false if the file cannot be written
+fn csv_write_file(path: str, rows: [[str]], sep: byte = ',') -> bool {
+    return write_file(path, csv_format(rows, sep))
+}

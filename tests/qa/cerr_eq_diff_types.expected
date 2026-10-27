@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: cannot compare int with str
+  --> cerr_eq_diff_types.atf:2:15
+ 2 |     println(1 == "1")
+   |               ^

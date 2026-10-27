@@ -1,0 +1,368 @@
+// Assembles a long list of instructions with compiler/x64.atf and prints them (one line per instruction).
+// build/x64dump.py does the exact same sequence with atf/x64.py; the outputs must be identical.
+import "x64"
+
+let HEXD = "0123456789abcdef"
+
+var a: Asm = new_asm()
+var last: int = 0
+var out: StrBuilder = str_builder()
+
+fn hex_range(b: Bytes, lo: int, hi: int) -> str {
+    let sb = str_builder()
+    for i in lo..hi {
+        let v = b.get(i)
+        sb.add_byte(HEXD.byte_at(v >> 4))
+        sb.add_byte(HEXD.byte_at(v & 15))
+    }
+    return sb.finish()
+}
+
+fn line(s: str) {
+    out.add(s)
+    out.add_byte('\n')
+}
+
+fn snap(name: str) {
+    line(name + ":" + hex_range(a.buf, last, a.buf.len()))
+    last = a.buf.len()
+}
+
+// (base, index, scale, disp, sym)   -1: none
+fn mk(t: (int, int, int, int, str)) -> Operand {
+    let (b, i, s, d, sym) = t
+    return Operand.M(Mem(b, i, s, d, sym))
+}
+
+fn mems() -> [(int, int, int, int, str)] {
+    return [
+        (0, -1, 1, 0, ""), (1, -1, 1, 8, ""), (3, -1, 1, -8, ""), (4, -1, 1, 0, ""), (4, -1, 1, 127, ""),
+        (4, -1, 1, 128, ""), (4, -1, 1, -129, ""), (5, -1, 1, 0, ""), (5, -1, 1, -128, ""), (12, -1, 1, 0, ""),
+        (12, -1, 1, 16, ""), (13, -1, 1, 0, ""), (13, -1, 1, 0x12345, ""), (6, -1, 1, 0x7fffffff, ""),
+        (7, -1, 1, -0x80000000, ""), (0, 1, 1, 0, ""), (0, 1, 2, 4, ""), (3, 2, 4, -4, ""), (4, 0, 8, 0x100, ""),
+        (12, 13, 8, 0, ""), (13, 12, 1, 5, ""), (5, 15, 2, 0, ""), (8, 9, 4, 1000, ""), (15, 14, 8, -1000, ""),
+        (4, 15, 1, 0, ""), (13, 8, 8, 0, ""), (12, 5, 2, 127, ""),
+        (-1, 0, 1, 0x10, ""), (-1, 1, 2, 0, ""), (-1, 9, 4, -1, ""), (-1, 15, 8, 0x100000, ""),
+        (-1, -1, 1, 0x1000, ""), (-1, -1, 1, -4, ""), (-1, -1, 1, 0, ""),
+        (-1, -1, 1, 0, "tb"), (-1, -1, 1, 12, "flt0"), (-1, -1, 1, -3, "imp:kernel32.dll!ExitProcess")
+    ]
+}
+
+fn imms() -> [int] {
+    return [0, 1, -1, 5, 127, 128, -128, -129, 255, 256, 0x7fffffff, -0x80000000, 0x80000000, 0xFFFFFFFF, 0x100000000,
+            -0x80000001, 0x123456789ABCDEF0, -0x123456789ABCDEF0, 0x7FFFFFFFFFFFFFFF, 1 << 63]
+}
+
+fn imms32() -> [int] {
+    var r: [int] = []
+    for v in imms() {
+        if v >= -2147483648 and v < 2147483648 { r.push(v) }
+    }
+    return r
+}
+
+fn main() {
+    let MEMS = mems()
+    let IMMS = imms()
+    let IMMS32 = imms32()
+    let IMMS_SMALL = [0, 1, -1, 127, 128, -128, -129, 0x7fffffff, -0x80000000, 1000]
+    let CCS = ["o", "no", "b", "c", "ae", "nc", "e", "z", "ne", "nz", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"]
+    let ALUS = ["add", "or", "and", "sub", "xor", "cmp"]
+    let SSES = ["addsd", "mulsd", "subsd", "divsd", "sqrtsd", "minsd", "maxsd"]
+
+    // ---------------------------------------------------------------- moves
+    for d in 0..16 {
+        for s in 0..16 {
+            a.mov(REGS[d], REGS[s]); snap("mov r" + str(d) + ",r" + str(s))
+        }
+    }
+    for d in 0..16 {
+        for mi in 0..MEMS.len() {
+            let t = MEMS[mi]
+            a.mov(REGS[d], mk(t)); snap("mov r" + str(d) + ",m" + str(mi))
+            a.mov(mk(t), REGS[d]); snap("mov m" + str(mi) + ",r" + str(d))
+        }
+    }
+    for mi in 0..MEMS.len() {
+        for v in IMMS32 {
+            a.mov(mk(MEMS[mi]), oimm(v)); snap("mov m" + str(mi) + "," + str(v))
+        }
+    }
+    for d in 0..16 {
+        for v in IMMS {
+            a.mov(REGS[d], oimm(v)); snap("mov r" + str(d) + "," + str(v))
+            a.mov_imm(REGS[d], v); snap("mov_imm r" + str(d) + "," + str(v))
+            a.mov_imm_keepflags(REGS[d], v); snap("mov_imm_keepflags r" + str(d) + "," + str(v))
+        }
+    }
+    for d in 0..16 {
+        for mi in 0..MEMS.len() {
+            a.mov_mem_reg8(mk(MEMS[mi]), REGS[d]); snap("mov_mem_reg8 m" + str(mi) + ",r" + str(d))
+        }
+    }
+    for d in 0..16 {
+        for s in 0..16 {
+            let sd = "r" + str(d) + ",r" + str(s)
+            a.movzx8(REGS[d], REGS[s]); snap("movzx8 " + sd)
+            a.movzx16(REGS[d], REGS[s]); snap("movzx16 " + sd)
+            a.movsx32(REGS[d], REGS[s]); snap("movsx32 " + sd)
+            a.movsx8(REGS[d], REGS[s]); snap("movsx8 " + sd)
+            a.xchg(REGS[d], REGS[s]); snap("xchg " + sd)
+        }
+    }
+    for d in 0..16 {
+        for mi in 0..MEMS.len() {
+            let t = MEMS[mi]
+            let rm = "r" + str(d) + ",m" + str(mi)
+            let mr = "m" + str(mi) + ",r" + str(d)
+            a.movzx8(REGS[d], mk(t)); snap("movzx8 " + rm)
+            a.movzx16(REGS[d], mk(t)); snap("movzx16 " + rm)
+            a.mov32_load(REGS[d], mk(t)); snap("mov32_load " + rm)
+            a.mov32_store(mk(t), REGS[d]); snap("mov32_store " + mr)
+            a.movsx32(REGS[d], mk(t)); snap("movsx32 " + rm)
+            a.movsx8(REGS[d], mk(t)); snap("movsx8 " + rm)
+            a.lea(REGS[d], mk(t)); snap("lea " + rm)
+            a.xchg(REGS[d], mk(t)); snap("xchg " + rm)
+        }
+    }
+    for d in 0..16 {
+        a.push(REGS[d]); snap("push r" + str(d))
+        a.pop(REGS[d]); snap("pop r" + str(d))
+    }
+
+    // ---------------------------------------------------------------- ALU
+    for op in ALUS {
+        for d in 0..16 {
+            for s in 0..16 {
+                a.alu(op, REGS[d], REGS[s]); snap(op + " r" + str(d) + ",r" + str(s))
+            }
+            for mi in 0..MEMS.len() {
+                let t = MEMS[mi]
+                a.alu(op, REGS[d], mk(t)); snap(op + " r" + str(d) + ",m" + str(mi))
+                a.alu(op, mk(t), REGS[d]); snap(op + " m" + str(mi) + ",r" + str(d))
+            }
+            for v in IMMS32 {
+                a.alu(op, REGS[d], oimm(v)); snap(op + " r" + str(d) + "," + str(v))
+            }
+        }
+        for mi in 0..MEMS.len() {
+            for v in IMMS_SMALL {
+                a.alu(op, mk(MEMS[mi]), oimm(v)); snap(op + " m" + str(mi) + "," + str(v))
+            }
+        }
+    }
+    a.add(RAX, RBX); snap("add rax,rbx")
+    a.sub(R8, oimm(5)); snap("sub r8,5")
+    a.and_(RCX, oimm(-16)); snap("and rcx,-16")
+    a.or_(RDX, mk(MEMS[3])); snap("or rdx,m3")
+    a.xor(R15, R15); snap("xor r15,r15")
+    a.cmp(mk(MEMS[1]), oimm(1000)); snap("cmp m1,1000")
+    for mi in 0..MEMS.len() {
+        for v in [0, 1, 127, 128, 255, -1, -128, 300] {
+            a.cmp8_mem_imm(mk(MEMS[mi]), v); snap("cmp8_mem_imm m" + str(mi) + "," + str(v))
+        }
+    }
+    for d in 0..16 {
+        for s in 0..16 {
+            a.test(REGS[d], REGS[s]); snap("test r" + str(d) + ",r" + str(s))
+            a.imul(REGS[d], REGS[s]); snap("imul r" + str(d) + ",r" + str(s))
+        }
+        for mi in 0..MEMS.len() {
+            let t = MEMS[mi]
+            a.test(mk(t), REGS[d]); snap("test m" + str(mi) + ",r" + str(d))
+            a.imul(REGS[d], mk(t)); snap("imul r" + str(d) + ",m" + str(mi))
+        }
+        for v in IMMS32 {
+            a.test(REGS[d], oimm(v)); snap("test r" + str(d) + "," + str(v))
+            let s2 = (d * 7 + 3) % 16
+            a.imul3(REGS[d], REGS[s2], v); snap("imul3 r" + str(d) + ",r" + str(s2) + "," + str(v))
+        }
+    }
+    for mi in 0..MEMS.len() {
+        let t = MEMS[mi]
+        for v in IMMS_SMALL {
+            a.test(mk(t), oimm(v)); snap("test m" + str(mi) + "," + str(v))
+            let r2 = (mi * 5) % 16
+            a.imul3(REGS[r2], mk(t), v); snap("imul3 r" + str(r2) + ",m" + str(mi) + "," + str(v))
+        }
+    }
+    a.cqo(); snap("cqo")
+    for d in 0..16 {
+        a.idiv(REGS[d]); snap("idiv r" + str(d))
+        a.neg(REGS[d]); snap("neg r" + str(d))
+        a.not_(REGS[d]); snap("not r" + str(d))
+        a.inc(REGS[d]); snap("inc r" + str(d))
+        a.dec(REGS[d]); snap("dec r" + str(d))
+    }
+    for mi in 0..MEMS.len() {
+        let t = MEMS[mi]
+        a.idiv(mk(t)); snap("idiv m" + str(mi))
+        a.neg(mk(t)); snap("neg m" + str(mi))
+        a.not_(mk(t)); snap("not m" + str(mi))
+        a.inc(mk(t)); snap("inc m" + str(mi))
+        a.dec(mk(t)); snap("dec m" + str(mi))
+    }
+    for kind in ["shl", "shr", "sar"] {
+        for d in 0..16 {
+            for amt in [0, 1, 2, 5, 31, 63, 64, 65, 255] {
+                a.shift(kind, REGS[d], oimm(amt)); snap(kind + " r" + str(d) + "," + str(amt))
+            }
+            a.shift(kind, REGS[d], RCX); snap(kind + " r" + str(d) + ",cl")
+        }
+        for mi in 0..MEMS.len() {
+            let t = MEMS[mi]
+            for amt in [1, 7] {
+                a.shift(kind, mk(t), oimm(amt)); snap(kind + " m" + str(mi) + "," + str(amt))
+            }
+            a.shift(kind, mk(t), RCX); snap(kind + " m" + str(mi) + ",cl")
+        }
+    }
+    for ccn in CCS {
+        let cc = cc_code(ccn)
+        for d in 0..16 {
+            a.setcc(cc, REGS[d]); snap("set" + ccn + " r" + str(d))
+        }
+        for mi in 0..MEMS.len() {
+            a.setcc(cc, mk(MEMS[mi])); snap("set" + ccn + " m" + str(mi))
+        }
+        for p in [(0, 1), (8, 9), (0, 8), (8, 0), (15, 7), (7, 15), (4, 5)] {
+            let (d, s) = p
+            a.cmov(cc, REGS[d], REGS[s]); snap("cmov" + ccn + " r" + str(d) + ",r" + str(s))
+        }
+        for mi in 0..MEMS.len() {
+            let r2 = (mi * 3) % 16
+            a.cmov(cc, REGS[r2], mk(MEMS[mi])); snap("cmov" + ccn + " r" + str(r2) + ",m" + str(mi))
+        }
+    }
+    for d in 0..16 {
+        for s in 0..16 {
+            let sd = "r" + str(d) + ",r" + str(s)
+            a.popcnt(REGS[d], REGS[s]); snap("popcnt " + sd)
+            a.bsr(REGS[d], REGS[s]); snap("bsr " + sd)
+            a.bsf(REGS[d], REGS[s]); snap("bsf " + sd)
+        }
+        for mi in 0..MEMS.len() {
+            let t = MEMS[mi]
+            let rm = "r" + str(d) + ",m" + str(mi)
+            a.popcnt(REGS[d], mk(t)); snap("popcnt " + rm)
+            a.bsr(REGS[d], mk(t)); snap("bsr " + rm)
+            a.bsf(REGS[d], mk(t)); snap("bsf " + rm)
+        }
+    }
+
+    // ---------------------------------------------------------------- control flow
+    a.call_sym("imp:kernel32.dll!ExitProcess"); snap("call_sym")
+    for d in 0..16 {
+        a.call_reg(REGS[d]); snap("call_reg r" + str(d))
+        a.jmp_reg(REGS[d]); snap("jmp_reg r" + str(d))
+    }
+    a.ret(); snap("ret")
+    a.leave(); snap("leave")
+    a.int3(); snap("int3")
+    a.ud2(); snap("ud2")
+    a.rep_movsb(); snap("rep_movsb")
+    a.rep_stosb(); snap("rep_stosb")
+
+    // labels: backward and forward references
+    let lab_back = a.new_label()
+    a.bind(lab_back)
+    a.push(RBP); snap("body")
+    let lab_fwd = a.new_label()
+    let lab_end = a.new_label()
+    a.jmp(lab_fwd); snap("jmp fwd")
+    a.jmp(lab_back); snap("jmp back")
+    for ccn in CCS {
+        let cc = cc_code(ccn)
+        a.jcc(cc, lab_fwd); snap("j" + ccn + " fwd")
+        a.jcc(cc, lab_back); snap("j" + ccn + " back")
+    }
+    a.call(lab_fwd); snap("call fwd")
+    a.call(lab_back); snap("call back")
+    for d in 0..16 {
+        a.lea_label(REGS[d], lab_fwd); snap("lea_label fwd r" + str(d))
+        a.lea_label(REGS[d], lab_back); snap("lea_label back r" + str(d))
+    }
+    a.bind(lab_fwd)
+    a.ret(); snap("ret2")
+    let lab_far = a.new_label()
+    a.jmp(lab_far); snap("jmp far")
+    for i in 0..300 { a.int3() }
+    snap("pad")
+    a.bind(lab_far)
+    a.jmp(lab_end); snap("jmp end")
+    a.bind(lab_end)
+    a.ret(); snap("ret3")
+    let lab_unref = a.new_label()
+    a.bind(lab_unref)
+    snap("unref label " + str(lab_unref) + " at " + str(a.here()))
+
+    // ---------------------------------------------------------------- SSE
+    for d in 0..16 {
+        for s in 0..16 {
+            let xx = "x" + str(d) + ",x" + str(s)
+            let xr = "x" + str(d) + ",r" + str(s)
+            let rx = "r" + str(d) + ",x" + str(s)
+            a.movsd(XMM[d], XMM[s]); snap("movsd " + xx)
+            a.movaps(XMM[d], XMM[s]); snap("movaps " + xx)
+            for op in SSES {
+                a.sse(op, XMM[d], XMM[s]); snap(op + " " + xx)
+            }
+            a.ucomisd(XMM[d], XMM[s]); snap("ucomisd " + xx)
+            a.xorpd(XMM[d], XMM[s]); snap("xorpd " + xx)
+            a.andpd(XMM[d], XMM[s]); snap("andpd " + xx)
+            for mode in 0..4 {
+                a.roundsd(XMM[d], XMM[s], mode); snap("roundsd " + xx + "," + str(mode))
+            }
+            a.cvtsi2sd(XMM[d], REGS[s]); snap("cvtsi2sd " + xr)
+            a.cvttsd2si(REGS[d], XMM[s]); snap("cvttsd2si " + rx)
+            a.movq_to_x(XMM[d], REGS[s]); snap("movq_to_x " + xr)
+            a.movq_to_r(REGS[d], XMM[s]); snap("movq_to_r " + rx)
+        }
+        for mi in 0..MEMS.len() {
+            let t = MEMS[mi]
+            let xm = "x" + str(d) + ",m" + str(mi)
+            let mx = "m" + str(mi) + ",x" + str(d)
+            a.movsd(XMM[d], mk(t)); snap("movsd " + xm)
+            a.movsd(mk(t), XMM[d]); snap("movsd " + mx)
+            a.movaps(XMM[d], mk(t)); snap("movaps " + xm)
+            for op in SSES {
+                a.sse(op, XMM[d], mk(t)); snap(op + " " + xm)
+            }
+            a.ucomisd(XMM[d], mk(t)); snap("ucomisd " + xm)
+            a.xorpd(XMM[d], mk(t)); snap("xorpd " + xm)
+            a.andpd(XMM[d], mk(t)); snap("andpd " + xm)
+            for mode in 0..4 {
+                a.roundsd(XMM[d], mk(t), mode); snap("roundsd " + xm + "," + str(mode))
+            }
+            a.cvtsi2sd(XMM[d], mk(t)); snap("cvtsi2sd " + xm)
+            a.cvttsd2si(REGS[d], mk(t)); snap("cvttsd2si r" + str(d) + ",m" + str(mi))
+            a.movq_to_x(XMM[d], mk(t)); snap("movq_to_x " + xm)
+            a.movq_to_r(mk(t), XMM[d]); snap("movq_to_r " + mx)
+            a.movups_load(XMM[d], mk(t)); snap("movups_load " + xm)
+            a.movups_store(mk(t), XMM[d]); snap("movups_store " + mx)
+        }
+    }
+
+    // codegen's direct emit use
+    for mi in 0..MEMS.len() {
+        let t = MEMS[mi]
+        for v in [0, 1, 127, 128, 255, 300, -1] {
+            a.emit(0, 0xC6, 0, mk(t), 0, 1, v & 255, false); snap("store8_imm m" + str(mi) + "," + str(v))
+        }
+        a.emit(0, 0xFF, 2, mk(t), 0, 0, 0, false); snap("call_mem m" + str(mi))
+    }
+
+    let buf = a.finish()
+    line("size " + str(buf.len()))
+    var i = 0
+    while i < buf.len() {
+        let hi = min(i + 32, buf.len())
+        line(pad_zero(int_to_hex(i), 6) + " " + hex_range(buf, i, hi))
+        i += 32
+    }
+    for r in a.relocs {
+        line("reloc " + str(r.pos) + " " + r.sym + " " + str(r.after) + " " + str(r.addend))
+    }
+    line("nreloc " + str(a.relocs.len()))
+    print_str(out.finish())
+}

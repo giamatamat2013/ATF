@@ -1,0 +1,2736 @@
+// ATF runtime library ("prelude") — written in ATF itself.
+// Everything here is loaded automatically; only the functions a program uses end up in the executable.
+
+// ---------------------------------------------------------------- Windows API
+extern "kernel32" fn ExitProcess(code: int)
+extern "kernel32" fn GetStdHandle(n: int) -> int
+extern "kernel32" fn WriteFile(h: int, buf: ptr<byte>, n: int, written: ptr<int>, ov: int) -> i32
+extern "kernel32" fn ReadFile(h: int, buf: ptr<byte>, n: int, read: ptr<int>, ov: int) -> i32
+extern "kernel32" fn VirtualAlloc(addr: int, size: int, kind: int, prot: int) -> int
+extern "kernel32" fn GetCommandLineA() -> ptr<byte>
+extern "kernel32" fn SetConsoleOutputCP(cp: int) -> i32
+extern "kernel32" fn SetConsoleCP(cp: int) -> i32
+extern "kernel32" fn QueryPerformanceCounter(p: ptr<int>) -> i32
+extern "kernel32" fn QueryPerformanceFrequency(p: ptr<int>) -> i32
+extern "kernel32" fn GetTickCount64() -> int
+extern "kernel32" fn Sleep(ms: int)
+extern "kernel32" fn CreateFileA(name: ptr<byte>, access: int, share: int, sec: int, disp: int, flags: int, tmpl: int) -> int
+extern "kernel32" fn GetFileSizeEx(h: int, size: ptr<int>) -> i32
+extern "kernel32" fn CloseHandle(h: int) -> i32
+extern "kernel32" fn GetEnvironmentVariableA(name: ptr<byte>, buf: ptr<byte>, size: int) -> i32
+extern "kernel32" fn AddVectoredExceptionHandler(first: int, handler: int) -> int
+extern "kernel32" fn SetThreadStackGuarantee(size: ptr<int>) -> i32
+extern "kernel32" fn CreateProcessA(app: ptr<byte>, cmd: ptr<byte>, pa: int, ta: int, inherit: int, flags: int, env: int, cwd: int, si: ptr<int>, pi: ptr<int>) -> i32
+extern "kernel32" fn WaitForSingleObject(h: int, ms: int) -> i32
+extern "kernel32" fn GetExitCodeProcess(h: int, code: ptr<int>) -> i32
+extern "kernel32" fn GetModuleFileNameA(m: int, buf: ptr<byte>, size: int) -> i32
+extern "kernel32" fn GetTempPathA(size: int, buf: ptr<byte>) -> i32
+extern "kernel32" fn DeleteFileA(name: ptr<byte>) -> i32
+extern "kernel32" fn CreateDirectoryA(name: ptr<byte>, sec: int) -> i32
+extern "msvcrt" fn sin(x: float) -> float
+extern "msvcrt" fn cos(x: float) -> float
+extern "msvcrt" fn tan(x: float) -> float
+extern "msvcrt" fn asin(x: float) -> float
+extern "msvcrt" fn acos(x: float) -> float
+extern "msvcrt" fn atan(x: float) -> float
+extern "msvcrt" fn atan2(y: float, x: float) -> float
+extern "msvcrt" fn sinh(x: float) -> float
+extern "msvcrt" fn cosh(x: float) -> float
+extern "msvcrt" fn tanh(x: float) -> float
+extern "msvcrt" fn exp(x: float) -> float
+extern "msvcrt" fn log(x: float) -> float
+extern "msvcrt" fn log10(x: float) -> float
+extern "msvcrt" fn pow(x: float, y: float) -> float
+extern "msvcrt" fn fmod(x: float, y: float) -> float
+extern "msvcrt" fn _gcvt(v: float, digits: int, buf: ptr<byte>) -> ptr<byte>
+extern "msvcrt" fn _ecvt(v: float, digits: int, decpt: ptr<int>, sign: ptr<int>) -> ptr<byte>
+extern "msvcrt" fn _fcvt(v: float, digits: int, decpt: ptr<int>, sign: ptr<int>) -> ptr<byte>
+extern "msvcrt" fn strtod(s: ptr<byte>, end: ptr<int>) -> float
+
+// ---------------------------------------------------------------- memory & garbage collector
+// A conservative, non-moving mark & sweep collector.
+//  * The heap is one big reserved address range cut into 64 KB blocks.
+//  * Small objects (<= 2048 bytes) live in blocks of one size class; larger objects get their own run of blocks.
+//  * Roots: the machine stack, the callee-saved registers and the global variables.
+//  * Objects that cannot contain pointers (strings, number arrays) are allocated "atomic" and never scanned.
+const BLOCK = 65536
+const HDR = 1088
+const NCLS = 28
+
+var heap_base: int
+var heap_hi: int
+var heap_total: int
+var heap_hw: int
+var heap_committed: int
+var btab: ptr<byte>
+var bhead: ptr<int>
+var cur_blk: ptr<int>
+var avail: ptr<int>
+var size_cls: ptr<byte>
+var cls_size: ptr<int>
+var regbuf: ptr<int>
+var free_hint: int
+var alloc_since_gc: int
+var gc_threshold: int
+var gc_count: int
+var live_bytes: int
+var gc_running: bool
+var gc_disabled: bool
+var stack_top: int
+var mstack: ptr<int>
+var mstack_cap: int
+var mstack_top: int
+
+fn out_of_memory() -> never {
+    let msg = "fatal: out of memory\n"
+    WriteFile(GetStdHandle(-12), (msg as ptr<byte>) + 8, 21, regbuf, 0)
+    ExitProcess(3)
+    loop {}
+}
+
+fn heap_init() {
+    var size = 64 * 1024 * 1024 * 1024
+    var base = 0
+    while base == 0 and size >= 256 * 1024 * 1024 {
+        base = VirtualAlloc(0, size, 0x2000, 1)
+        if base == 0 { size = size / 2 }
+    }
+    let meta = VirtualAlloc(0, 8192, 0x3000, 4)
+    if base == 0 or meta == 0 { out_of_memory() }
+    heap_base = base
+    heap_total = size / BLOCK
+    heap_hi = base
+    btab = VirtualAlloc(0, heap_total, 0x3000, 4) as ptr<byte>
+    bhead = VirtualAlloc(0, heap_total * 8, 0x3000, 4) as ptr<int>
+    cur_blk = meta as ptr<int>
+    avail = (meta + 512) as ptr<int>
+    cls_size = (meta + 1024) as ptr<int>
+    regbuf = (meta + 1280) as ptr<int>
+    size_cls = (meta + 1536) as ptr<byte>
+    mstack_cap = 65536
+    mstack = VirtualAlloc(0, mstack_cap * 8, 0x3000, 4) as ptr<int>
+    // size classes
+    var n = 0
+    var s = 16
+    while s <= 256 {
+        cls_size[n] = s
+        n += 1
+        s += 16
+    }
+    s = 320
+    while s <= 512 {
+        cls_size[n] = s
+        n += 1
+        s += 64
+    }
+    s = 640
+    while s <= 1024 {
+        cls_size[n] = s
+        n += 1
+        s += 128
+    }
+    s = 1280
+    while s <= 2048 {
+        cls_size[n] = s
+        n += 1
+        s += 256
+    }
+    var c = 0
+    for i in 0..129 {
+        while cls_size[c] < i * 16 { c += 1 }
+        size_cls[i] = byte(c)
+    }
+    gc_threshold = 32 * 1024 * 1024
+    stack_top = __sp() + 256
+}
+
+// index of the first of n consecutive free blocks (committing memory as needed)
+fn take_blocks(n: int) -> int {
+    var start = 0
+    if n == 1 {
+        start = free_hint
+        while start < heap_hw and btab[start] != 0 { start += 1 }
+        free_hint = start + 1
+    } else {
+        var i = 0
+        var run = 0
+        start = -1
+        while i < heap_hw {
+            if btab[i] == 0 {
+                run += 1
+                if run == n {
+                    start = i - n + 1
+                    break
+                }
+            } else {
+                run = 0
+            }
+            i += 1
+        }
+        if start < 0 {
+            // reuse free blocks at the very end of the used area
+            start = heap_hw
+            while start > 0 and btab[start - 1] == 0 { start -= 1 }
+        }
+    }
+    let need = start + n
+    if need > heap_total { out_of_memory() }
+    if need > heap_committed {
+        var add = need - heap_committed
+        if add < 16 { add = 16 }
+        if heap_committed + add > heap_total { add = heap_total - heap_committed }
+        if VirtualAlloc(heap_base + heap_committed * BLOCK, add * BLOCK, 0x1000, 4) == 0 { out_of_memory() }
+        heap_committed += add
+    }
+    if need > heap_hw {
+        heap_hw = need
+        heap_hi = heap_base + need * BLOCK
+    }
+    return start
+}
+
+fn zero_words(p: int, size: int) {
+    let q = p as ptr<int>
+    let n = size >> 3
+    var i = 0
+    while i < n {
+        q[i] = 0
+        q[i + 1] = 0
+        i += 2
+    }
+}
+
+fn small_block(k: int) -> int {
+    loop {
+        var b = avail[k]
+        if b != 0 {
+            avail[k] = (b as ptr<int>)[5]
+            cur_blk[k] = b
+            return b
+        }
+        if alloc_since_gc >= gc_threshold and not gc_running and not gc_disabled {
+            gc_collect()
+            continue
+        }
+        let bi = take_blocks(1)
+        btab[bi] = 1
+        b = heap_base + bi * BLOCK
+        let h = b as ptr<int>
+        let size = cls_size[k >> 1]
+        let nobj = (BLOCK - HDR) / size
+        h[0] = size
+        h[1] = nobj
+        h[2] = k
+        h[3] = 0
+        h[5] = 0
+        let nw = (nobj + 63) >> 6
+        for w in 0..nw {
+            h[8 + w] = 0
+            h[72 + w] = 0
+        }
+        alloc_since_gc += BLOCK
+        cur_blk[k] = b
+        return b
+    }
+    return 0
+}
+
+fn small_alloc(n: int, atom: int) -> ptr<byte> {
+    let k = size_cls[(n + 15) >> 4] * 2 + atom
+    var blk = cur_blk[k]
+    loop {
+        if blk != 0 {
+            let h = blk as ptr<int>
+            let nobj = h[1]
+            let cursor = h[3]
+            var wi = cursor >> 6
+            var bits = ~h[8 + wi] & (-1 << (cursor & 63))
+            let nw = (nobj + 63) >> 6
+            loop {
+                if bits != 0 {
+                    let idx = (wi << 6) + __ctz(bits)
+                    if idx >= nobj { break }
+                    h[8 + wi] = h[8 + wi] | (1 << (idx & 63))
+                    h[3] = idx + 1
+                    let size = h[0]
+                    let p = blk + HDR + idx * size
+                    zero_words(p, size)
+                    return p as ptr<byte>
+                }
+                wi += 1
+                if wi >= nw { break }
+                bits = ~h[8 + wi]
+            }
+            h[3] = nobj
+        }
+        blk = small_block(k)
+    }
+    return nil
+}
+
+fn large_alloc(n: int, atom: int) -> ptr<byte> {
+    let nb = (n + 64 + BLOCK - 1) >> 16
+    if alloc_since_gc + nb * BLOCK >= gc_threshold and not gc_running and not gc_disabled {
+        gc_collect()
+    }
+    let old_hw = heap_hw
+    let s = take_blocks(nb)
+    btab[s] = 2
+    for j in 1..nb {
+        btab[s + j] = 3
+        bhead[s + j] = s
+    }
+    let base = heap_base + s * BLOCK
+    let h = base as ptr<int>
+    h[0] = n
+    h[1] = nb
+    h[2] = atom
+    if s < old_hw { zero_words(base + 64, (n + 15) & -16) }
+    alloc_since_gc += nb * BLOCK
+    return (base + 64) as ptr<byte>
+}
+
+// all heap memory comes from here (zero-initialised, may hold pointers)
+fn __alloc(n: int) -> ptr<byte> {
+    if n <= 2048 { return small_alloc(n, 0) }
+    return large_alloc(n, 0)
+}
+
+// memory that never contains pointers (strings, arrays of numbers)
+fn __alloc_atomic(n: int) -> ptr<byte> {
+    if n <= 2048 { return small_alloc(n, 1) }
+    return large_alloc(n, 1)
+}
+
+fn mark_push(q: int) {
+    if mstack_top == mstack_cap {
+        let nc = mstack_cap * 2
+        let nm = VirtualAlloc(0, nc * 8, 0x3000, 4)
+        if nm == 0 { out_of_memory() }
+        __memcpy(nm as ptr<byte>, mstack as ptr<byte>, mstack_top * 8)
+        mstack = nm as ptr<int>
+        mstack_cap = nc
+    }
+    mstack[mstack_top] = q
+    mstack_top += 1
+}
+
+fn mark_word(w: int) {
+    var bi = (w - heap_base) >> 16
+    var kind = btab[bi]
+    if kind == 0 { return }
+    if kind == 3 {
+        bi = bhead[bi]
+        kind = 2
+    }
+    let base = heap_base + (bi << 16)
+    let h = base as ptr<int>
+    if kind == 1 {
+        let off = w - base - HDR
+        if off < 0 { return }
+        let size = h[0]
+        let idx = off / size
+        if idx >= h[1] { return }
+        let wi = idx >> 6
+        let bit = 1 << (idx & 63)
+        if h[8 + wi] & bit == 0 { return }
+        if h[72 + wi] & bit != 0 { return }
+        h[72 + wi] = h[72 + wi] | bit
+        live_bytes += size
+        if h[2] & 1 == 0 { mark_push(base + HDR + idx * size) }
+    } else {
+        if w < base + 64 or w >= base + 64 + h[0] { return }
+        if h[2] & 2 != 0 { return }
+        h[2] = h[2] | 2
+        live_bytes += h[0]
+        if h[2] & 1 == 0 { mark_push(base + 64) }
+    }
+}
+
+fn mark_range(lo: int, hi: int) {
+    var p = lo & -8
+    let base = heap_base
+    let top = heap_hi
+    while p < hi {
+        let w = (p as ptr<int>)[0]
+        if w >= base and w < top { mark_word(w) }
+        p += 8
+    }
+}
+
+fn drain_marks() {
+    while mstack_top > 0 {
+        mstack_top -= 1
+        let q = mstack[mstack_top]
+        let bi = (q - heap_base) >> 16
+        let h = (heap_base + (bi << 16)) as ptr<int>
+        mark_range(q, q + h[0])
+    }
+}
+
+fn sweep() {
+    for k in 0..56 {
+        cur_blk[k] = 0
+        avail[k] = 0
+    }
+    free_hint = 0
+    var bi = 0
+    while bi < heap_hw {
+        let kind = btab[bi]
+        if kind == 1 {
+            let base = heap_base + (bi << 16)
+            let h = base as ptr<int>
+            let nobj = h[1]
+            let nw = (nobj + 63) >> 6
+            var live = 0
+            for w in 0..nw {
+                let m = h[72 + w]
+                h[8 + w] = m
+                h[72 + w] = 0
+                live += __popcnt(m)
+            }
+            h[3] = 0
+            if live == 0 {
+                btab[bi] = 0
+            } else if live < nobj {
+                let k = h[2]
+                h[5] = avail[k]
+                avail[k] = base
+            }
+            bi += 1
+        } else if kind == 2 {
+            let h = (heap_base + (bi << 16)) as ptr<int>
+            let nb = h[1]
+            if h[2] & 2 != 0 {
+                h[2] = h[2] & -3
+            } else {
+                for j in 0..nb { btab[bi + j] = 0 }
+            }
+            bi += nb
+        } else {
+            bi += 1
+        }
+    }
+}
+
+fn gc_collect() {
+    if gc_running { return }
+    gc_running = true
+    gc_count += 1
+    __save_regs(regbuf)
+    mstack_top = 0
+    live_bytes = 0
+    mark_range(__sp(), stack_top)
+    mark_range(regbuf as int, (regbuf as int) + 56)
+    mark_range(__data_start(), __data_end())
+    drain_marks()
+    sweep()
+    alloc_since_gc = 0
+    gc_threshold = live_bytes
+    if gc_threshold < 32 * 1024 * 1024 { gc_threshold = 32 * 1024 * 1024 }
+    gc_running = false
+}
+
+// force a garbage collection
+fn gc() { gc_collect() }
+// number of collections so far
+fn gc_runs() -> int { return gc_count }
+// bytes of heap in use (approximate, valid after a collection)
+fn gc_live_bytes() -> int { return live_bytes }
+
+fn mem_copy(dst: ptr<byte>, src: ptr<byte>, n: int) {
+    __memcpy(dst, src, n)
+}
+
+// ---------------------------------------------------------------- console I/O
+var out_buf: ptr<byte>
+var out_len: int
+var stdout_h: int
+var stderr_h: int
+var stdin_h: int
+var in_buf: ptr<byte>
+var in_pos: int
+var in_len: int
+var prog_started: int
+
+fn write_all(h: int, p: ptr<byte>, n: int) {
+    var done = 0
+    let wr = __alloc(8) as ptr<int>
+    while done < n {
+        wr[0] = 0
+        if WriteFile(h, p + done, n - done, wr, 0) == 0 { return }
+        if wr[0] <= 0 { return }
+        done += wr[0]
+    }
+}
+
+fn io_init() {
+    if out_buf != nil { return }
+    out_buf = __alloc(65536)
+    stdout_h = GetStdHandle(-11)
+    stderr_h = GetStdHandle(-12)
+    stdin_h = GetStdHandle(-10)
+}
+
+fn flush_out() {
+    if out_len > 0 {
+        write_all(stdout_h, out_buf, out_len)
+        out_len = 0
+    }
+}
+
+fn print_str(s: str) {
+    if out_buf == nil { io_init() }
+    let n = str_len(s)
+    if n > 65536 - out_len { flush_out() }
+    if n >= 65536 {
+        write_all(stdout_h, str_data(s), n)
+        return
+    }
+    __memcpy(out_buf + out_len, str_data(s), n)
+    out_len += n
+}
+
+fn eprint_str(s: str) {
+    if out_buf == nil { io_init() }
+    flush_out()
+    write_all(stderr_h, str_data(s), str_len(s))
+}
+
+// writes buffered standard output now (it is also flushed when the program ends, before input is read and before anything goes to stderr)
+fn flush() {
+    if out_buf != nil { flush_out() }
+}
+
+fn __rt_init() {
+    heap_init()
+    install_crash_handler()
+    SetConsoleOutputCP(65001)
+    SetConsoleCP(65001)
+    io_init()
+}
+
+fn __rt_exit(code: int) -> never {
+    flush()
+    ExitProcess(code)
+    loop {}
+}
+
+// ends the program at once with this exit code; buffered output is written first, but pending defers do not run
+fn exit(code: int) -> never {
+    __rt_exit(code)
+}
+
+// one line from standard input (without the newline); nil at end of input
+fn read_line() -> str? {
+    if out_buf == nil { io_init() }
+    flush_out()
+    var line = str_builder()
+    var got_any = false
+    let rd = __alloc(8) as ptr<int>
+    loop {
+        if in_pos >= in_len {
+            if in_buf == nil { in_buf = __alloc(65536) }
+            rd[0] = 0
+            let ok = ReadFile(stdin_h, in_buf, 65536, rd, 0)
+            if ok == 0 or rd[0] <= 0 {
+                if got_any { return line.finish() }
+                return nil
+            }
+            in_len = rd[0]
+            in_pos = 0
+        }
+        let c = in_buf[in_pos]
+        in_pos += 1
+        got_any = true
+        if c == '\n' {
+            var r = line.finish()
+            if str_len(r) > 0 and r.byte_at(str_len(r) - 1) == 13 { r = r[0..str_len(r) - 1] }
+            return r
+        }
+        line.add_byte(c)
+    }
+    return nil
+}
+
+// like Python's input(): optional prompt, returns "" at end of input
+fn input(prompt: str = "") -> str {
+    if str_len(prompt) > 0 {
+        print_str(prompt)
+    }
+    let l = read_line()
+    if l == nil { return "" }
+    return l!
+}
+
+// all remaining standard input as one str; every line ends with "\n" (also the last one; "\r\n" becomes "\n"); "" when nothing is left
+fn read_all_stdin() -> str {
+    var sb = str_builder()
+    loop {
+        let l = read_line()
+        if l == nil { break }
+        sb.add(l!)
+        sb.add("\n")
+    }
+    return sb.finish()
+}
+
+// ---------------------------------------------------------------- program arguments
+fn __rt_args() -> [str] {
+    let cmd = GetCommandLineA()
+    var args: [str] = []
+    var i = 0
+    var first = true
+    while cmd[i] != 0 {
+        while cmd[i] == ' ' or cmd[i] == 9 { i += 1 }
+        if cmd[i] == 0 { break }
+        var sb = str_builder()
+        var quoted = false
+        while cmd[i] != 0 and (quoted or (cmd[i] != ' ' and cmd[i] != 9)) {
+            if cmd[i] == '"' {
+                quoted = not quoted
+            } else {
+                sb.add_byte(cmd[i])
+            }
+            i += 1
+        }
+        if first { first = false } else { args.push(sb.finish()) }
+    }
+    return args
+}
+
+// ---------------------------------------------------------------- errors
+// writes msg to stderr as is (no newline is added) and ends the program with exit code 1, without a traceback; catch_panic does not stop it
+fn fatal_exit(msg: str) -> never {
+    eprint_str(msg)
+    ExitProcess(1)
+    loop {}
+}
+
+fn cstr_at(addr: int) -> str {
+    let p = addr as ptr<byte>
+    var n = 0
+    while p[n] != 0 { n += 1 }
+    return str_from_ptr(p, n)
+}
+
+// prints the chain of user-code calls that led here (innermost first)
+fn print_traceback() {
+    eprint_str(traceback_text(__fp(), 0))
+}
+
+// name of the function whose code contains the address ip ("" if none)
+fn function_at(ip: int) -> str {
+    let tb = __tb() as ptr<int>
+    let ncalls = tb[0]
+    let nfuncs = tb[1]
+    let funcs = tb + 4 + ncalls * 2
+    let names = (tb as int) + tb[2]
+    let off = ip - __text_start()
+    if off < 0 or off > tb[3] { return "" }
+    var best = -1
+    for i in 0..nfuncs {
+        if funcs[i * 3] <= off { best = i }
+    }
+    if best < 0 { return "" }
+    return cstr_at(names + funcs[best * 3 + 1]) + " (" + cstr_at(names + funcs[best * 3 + 2]) + ")"
+}
+
+fn print_traceback_from(start_fp: int, crash_ip: int) {
+    eprint_str(traceback_text(start_fp, crash_ip))
+}
+
+// the chain of calls starting at frame pointer fp, as text; crash_ip: address of a faulting instruction or 0
+fn traceback_text(start_fp: int, crash_ip: int) -> str {
+    var sb = str_builder()
+    if crash_ip != 0 {
+        let f = function_at(crash_ip)
+        if str_len(f) > 0 { sb.add("  in " + f + "\n") }
+    }
+    let tb = __tb() as ptr<int>
+    let text = __text_start()
+    let ncalls = tb[0]
+    let names_off = tb[2]
+    let text_size = tb[3]
+    let calls = tb + 4
+    let funcs = calls + ncalls * 2
+    let names = (tb as int) + names_off
+    var fp = start_fp
+    var depth = 0
+    var shown = 0
+    var last = -1
+    var repeats = 0
+    while fp != 0 and depth < 10000000 {
+        depth += 1
+        let ra = ((fp + 8) as ptr<int>)[0]
+        let nfp = (fp as ptr<int>)[0]
+        let off = ra - text
+        if off <= 0 or off > text_size { break }
+        var lo = 0
+        var hi = ncalls - 1
+        var found = -1
+        while lo <= hi {
+            let mid = (lo + hi) >> 1
+            let o = calls[mid * 2]
+            if o == off {
+                found = mid
+                break
+            }
+            if o < off { lo = mid + 1 } else { hi = mid - 1 }
+        }
+        if found >= 0 {
+            let v = calls[found * 2 + 1]
+            if (v >> 62) & 1 == 0 {
+                let line = v & 0xFFFFFFFF
+                let fi = (v >> 32) & 0x3FFFFFFF
+                if v == last {
+                    repeats += 1
+                } else {
+                    if repeats > 0 and shown <= 30 { sb.add("  ... the line above repeats " + int_to_str(repeats) + " more times\n") }
+                    repeats = 0
+                    if shown < 30 {
+                        sb.add("  at " + cstr_at(names + funcs[fi * 3 + 1]) + " (" + cstr_at(names + funcs[fi * 3 + 2]) + ":" + int_to_str(line) + ")\n")
+                    }
+                    last = v
+                    shown += 1
+                }
+            }
+        }
+        if nfp <= fp { break }
+        fp = nfp
+    }
+    if repeats > 0 and shown <= 30 { sb.add("  ... the line above repeats " + int_to_str(repeats) + " more times\n") }
+    if shown > 30 { sb.add("  ... and " + int_to_str(shown - 30) + " more calls\n") }
+    return sb.finish()
+}
+
+var catch_buf: ptr<int>
+var catch_msg: str
+var catch_prefix: str
+var catch_trace: str?         // traceback of a panic that is being passed up through deferred code
+
+// runs (newest first) the deferred closures added after the list had n entries
+fn __run_defers(d: [fn()], n: int) {
+    while d.len > n {
+        d.len -= 1
+        let f = d.data[d.len]
+        f()
+    }
+}
+
+// continue a panic after the deferred code of a function ran
+fn __rethrow() -> never {
+    die(catch_prefix, catch_msg)
+}
+
+// ends the program with an error message and a traceback - unless a catch_panic() is active
+fn die(prefix: str, msg: str) -> never {
+    if catch_buf != nil {
+        if catch_trace == nil { catch_trace = traceback_text(__fp(), 0) }
+        catch_msg = msg
+        catch_prefix = prefix
+        __longjmp(catch_buf)
+    }
+    eprint_str(prefix + msg + "\n")
+    if catch_trace != nil and str_len(catch_trace!) > 0 { eprint_str(catch_trace!) } else { print_traceback() }
+    ExitProcess(1)
+    loop {}
+}
+
+// Runs f. If it panics, the panic message is returned instead of ending the program.
+fn catch_panic(f: fn()) -> str? {
+    let saved = catch_buf
+    let buf = __alloc(256) as ptr<int>
+    catch_buf = buf
+    if __setjmp(buf) == 0 {
+        f()
+        catch_buf = saved
+        return nil
+    }
+    catch_buf = saved
+    catch_trace = nil
+    return catch_msg
+}
+
+// hardware exceptions (stack overflow, invalid memory access, ...) become readable errors
+fn crash_handler(info: ptr<int>) -> int {
+    let rec = info[0] as ptr<int>
+    let ctx = info[1] as ptr<int>
+    let code = rec[0] & 0xFFFFFFFF
+    var msg = ""
+    if code == 0xC00000FD {
+        msg = "stack overflow (a function called itself too many times; is a recursion missing its end condition?)"
+    } else if code == 0xC0000005 {
+        msg = "invalid memory access (a nil pointer or memory that was never allocated)"
+    } else if code == 0xC0000094 {
+        msg = "division by zero"
+    } else if code == 0xC0000095 {
+        msg = "integer overflow in division"
+    } else if code == 0xC000001D {
+        msg = "illegal instruction (internal error)"
+    } else {
+        return 0
+    }
+    let rip = ctx[31]
+    let rbp = ctx[20]
+    if code != 0xC00000FD and catch_buf != nil {
+        if catch_trace == nil { catch_trace = traceback_text(rbp, rip) }
+        catch_msg = msg
+        catch_prefix = "panic: "
+        __longjmp(catch_buf)
+    }
+    eprint_str("panic: " + msg + "\n")
+    print_traceback_from(rbp, rip)
+    ExitProcess(1)
+    return 0
+}
+
+fn install_crash_handler() {
+    let g = __alloc(8) as ptr<int>
+    g[0] = 65536
+    SetThreadStackGuarantee(g)
+    let h = crash_handler
+    AddVectoredExceptionHandler(1, (h as ptr<int>)[0])
+}
+
+fn panic_at(msg: str, loc: str) -> never {
+    die("panic: ", msg)
+}
+
+fn assert_fail(msg: str, loc: str) -> never {
+    die("assertion failed: ", msg)
+}
+
+fn match_fail() -> never {
+    die("panic: ", "no match arm matched")
+}
+
+fn unwrap_fail() -> never {
+    die("panic: ", "tried to unwrap a nil value (use  x ?? default  or  if let v = x )")
+}
+
+fn rt_bounds_fail(line: int, idx: int, len: int) -> never {
+    die("panic: ", "index " + int_to_str(idx) + " is out of range (length " + int_to_str(len) + ")")
+}
+
+fn slice_fail(lo: int, hi: int, len: int) -> never {
+    var h = int_to_str(hi)
+    if hi == INT_MAX { h = "" }
+    die("panic: ", "slice " + int_to_str(lo) + ".." + h + " is out of range (length " + int_to_str(len) + ")")
+}
+
+fn rt_div_fail(line: int) -> never {
+    die("panic: ", "division by zero")
+}
+
+// panics with "unreachable code was reached"; use it to mark places that should never run
+fn unreachable() -> never {
+    die("panic: ", "unreachable code was reached")
+}
+
+// ---------------------------------------------------------------- Result
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+impl<T, E> Result<T, E> {
+    // true for Ok(...)
+    fn is_ok(self) -> bool { return self.tag() == 0 }
+    // true for Err(...)
+    fn is_err(self) -> bool { return self.tag() == 1 }
+    // 0 for Ok, 1 for Err
+    fn tag(self) -> int {
+        match self {
+            Result.Ok(v) => return 0
+            Result.Err(e) => return 1
+        }
+    }
+    // the Ok value; for an Err it panics with "called unwrap() on an Err: " followed by the error (text is shown in quotes)
+    fn unwrap(self) -> T {
+        match self {
+            Result.Ok(v) => return v
+            Result.Err(e) => panic("called unwrap() on an Err: " + __debug(e))
+        }
+    }
+    // the Ok value, or d for an Err
+    fn unwrap_or(self, d: T) -> T {
+        match self {
+            Result.Ok(v) => return v
+            Result.Err(e) => return d
+        }
+    }
+    // the Ok value; for an Err it panics with msg, ": " and the error (text is shown in quotes)
+    fn expect(self, msg: str) -> T {
+        match self {
+            Result.Ok(v) => return v
+            Result.Err(e) => panic(msg + ": " + __debug(e))
+        }
+    }
+    // the error of an Err, nil for an Ok
+    fn err(self) -> E? {
+        match self {
+            Result.Ok(v) => return nil
+            Result.Err(e) => return e
+        }
+    }
+    // the value of an Ok, nil for an Err
+    fn ok(self) -> T? {
+        match self {
+            Result.Ok(v) => return v
+            Result.Err(e) => return nil
+        }
+    }
+}
+
+// ---------------------------------------------------------------- numbers
+// -1 if a < b, 0 if they are equal, 1 if a > b; a safe comparison for sort_by (a - b can overflow)
+fn cmp_int(a: int, b: int) -> int {
+    if a < b { return -1 }
+    if a > b { return 1 }
+    return 0
+}
+
+// -1 if a < b, 1 if a > b, otherwise 0 (also when one of them is nan)
+fn cmp_float(a: float, b: float) -> int {
+    if a < b { return -1 }
+    if a > b { return 1 }
+    return 0
+}
+
+// a well-mixed, non-negative hash of x (int map keys are hashed with it)
+fn hash_int(x: int) -> int {
+    var h = x * -7046029254386353131
+    h = h ^ (h >> 29)
+    h = h * -4658895280553007687
+    h = h ^ (h >> 32)
+    return h & 0x7FFFFFFFFFFFFFFF
+}
+
+// combines the hash h with the value v into a new non-negative hash; for your own hash methods: hash_mix(hash_mix(7, self.x), self.y)
+fn hash_mix(h: int, v: int) -> int {
+    return hash_int(h * 31 + v)
+}
+
+// base to the power exp with ints (what ** does for ints; wraps around on overflow); panics when exp is negative: int_pow(2, 10) == 1024
+fn int_pow(base: int, exp: int) -> int {
+    if exp < 0 { panic("negative exponent in integer power; use floats") }
+    var result = 1
+    var b = base
+    var e = exp
+    while e > 0 {
+        if e & 1 == 1 { result = result * b }
+        b = b * b
+        e = e >> 1
+    }
+    return result
+}
+
+// absolute value of an int or float: abs(-3) == 3 (abs(INT_MIN) overflows and stays INT_MIN)
+fn abs<T>(x: T) -> T {
+    if x < 0 { return -x }
+    return x
+}
+
+// the smaller of a and b (for any type that has <, also str)
+fn min<T>(a: T, b: T) -> T {
+    if b < a { return b }
+    return a
+}
+
+// the larger of a and b (for any type that has >, also str)
+fn max<T>(a: T, b: T) -> T {
+    if b > a { return b }
+    return a
+}
+
+// x limited to lo..hi: lo when x < lo, hi when x > hi, else x: clamp(15, 0, 10) == 10
+fn clamp<T>(x: T, lo: T, hi: T) -> T {
+    if x < lo { return lo }
+    if x > hi { return hi }
+    return x
+}
+
+// -1, 0 or 1 for a negative, zero or positive number (0 for nan)
+fn sign<T>(x: T) -> int {
+    if x < 0 { return -1 }
+    if x > 0 { return 1 }
+    return 0
+}
+
+// the length of anything with a len() method (str, array, map, set): len("abc") == 3
+fn len<T>(x: T) -> int {
+    return x.len()
+}
+
+// square root; nan for negative numbers
+fn sqrt(x: float) -> float { return __sqrt(x) }
+// the largest whole number <= x (as a float): floor(-2.5) == -3.0
+fn floor(x: float) -> float { return __floor(x) }
+// the smallest whole number >= x (as a float): ceil(2.1) == 3.0
+fn ceil(x: float) -> float { return __ceil(x) }
+// x without its fractional part, rounded toward zero: trunc(-2.7) == -2.0
+fn trunc(x: float) -> float { return __trunc(x) }
+// the nearest whole number, halves away from zero (not to even): round(2.5) == 3.0, round(-2.5) == -3.0
+fn round(x: float) -> float {
+    if x != x or __fabs(x) >= 4503599627370496.0 { return x }     // nan, inf and values >= 2^52 are already whole
+    let t = __trunc(x)
+    if __fabs(x - t) >= 0.5 {
+        if x < 0.0 { return t - 1.0 }
+        return t + 1.0
+    }
+    return t
+}
+// absolute value of a float
+fn fabs(x: float) -> float { return __fabs(x) }
+// base-2 logarithm: log2(8.0) == 3.0
+fn log2(x: float) -> float { return log(x) / 0.6931471805599453 }
+// true when x is nan (not a number), for example INF - INF
+fn is_nan(x: float) -> bool { return x != x }
+// true when x is INF or -INF
+fn is_inf(x: float) -> bool { return x - x != 0.0 and x == x }
+// degrees to radians: radians(180.0) == PI
+fn radians(deg: float) -> float { return deg * 0.017453292519943295 }
+// radians to degrees: degrees(PI) == 180.0
+fn degrees(rad: float) -> float { return rad * 57.29577951308232 }
+// length of the vector (a, b), computed as sqrt(a * a + b * b) (so it overflows to inf for huge values): hypot(3.0, 4.0) == 5.0
+fn hypot(a: float, b: float) -> float { return __sqrt(a * a + b * b) }
+// greatest common divisor, never negative; gcd(0, 0) == 0: gcd(12, -18) == 6
+fn gcd(a: int, b: int) -> int {
+    var x = abs(a)
+    var y = abs(b)
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+const PI = 3.141592653589793
+const E = 2.718281828459045
+const INT_MAX = 0x7FFFFFFFFFFFFFFF
+const INT_MIN = -0x7FFFFFFFFFFFFFFF - 1
+const INF = 1e308 * 10.0
+
+impl int {
+    // absolute value: (-5).abs() == 5
+    fn abs(self) -> int { if self < 0 { return -self } return self }
+    // self to the power e (same as **); panics when e is negative: 2.pow(10) == 1024
+    fn pow(self, e: int) -> int { return int_pow(self, e) }
+    // decimal text: 42.to_str() == "42"
+    fn to_str(self) -> str { return int_to_str(self) }
+    // true for even numbers (negative ones too)
+    fn is_even(self) -> bool { return self & 1 == 0 }
+    // true for odd numbers (negative ones too)
+    fn is_odd(self) -> bool { return self & 1 == 1 }
+    // the smaller of self and o
+    fn min(self, o: int) -> int { if o < self { return o } return self }
+    // the larger of self and o
+    fn max(self, o: int) -> int { if o > self { return o } return self }
+    // self limited to lo..hi: 15.clamp(0, 10) == 10
+    fn clamp(self, lo: int, hi: int) -> int { if self < lo { return lo } if self > hi { return hi } return self }
+    // -1, 0 or 1 for a negative, zero or positive number
+    fn sign(self) -> int { if self < 0 { return -1 } if self > 0 { return 1 } return 0 }
+    // the same value as a float: 3.to_float() == 3.0
+    fn to_float(self) -> float { return self as float }
+    // lowercase hexadecimal without a prefix, with a minus sign for negatives: 255.to_hex() == "ff"
+    fn to_hex(self) -> str { return int_to_hex(self) }
+    // binary digits without a prefix, with a minus sign for negatives: 5.to_bin() == "101"
+    fn to_bin(self) -> str { return int_to_bin(self) }
+    // number of 1 bits in the 64-bit value: 255.popcount() == 8, (-1).popcount() == 64
+    fn popcount(self) -> int { return __popcnt(self) }
+}
+
+impl float {
+    // absolute value
+    fn abs(self) -> float { return __fabs(self) }
+    // square root; nan for negative numbers
+    fn sqrt(self) -> float { return __sqrt(self) }
+    // the largest whole number <= self: 2.7.floor() == 2.0
+    fn floor(self) -> float { return __floor(self) }
+    // the smallest whole number >= self: 2.1.ceil() == 3.0
+    fn ceil(self) -> float { return __ceil(self) }
+    // the nearest whole number, halves away from zero: 2.5.round() == 3.0
+    fn round(self) -> float { return round(self) }
+    // drops the fractional part (rounds toward zero): (-2.7).trunc() == -2.0
+    fn trunc(self) -> float { return __trunc(self) }
+    // self to the power e: 2.0.pow(0.5) == sqrt(2.0)
+    fn pow(self, e: float) -> float { return pow(self, e) }
+    // the whole part as an int, rounded toward zero: 2.9.to_int() == 2; nan and values outside the int range give INT_MIN
+    fn to_int(self) -> int { return self as int }
+    // the shortest text that reads back as the same number: 0.1.to_str() == "0.1", 3.0.to_str() == "3.0", 1e20.to_str() == "1e+20"
+    fn to_str(self) -> str { return float_to_str(self) }
+    // true when the value is nan (not a number)
+    fn is_nan(self) -> bool { return self != self }
+    // the smaller of self and o
+    fn min(self, o: float) -> float { if o < self { return o } return self }
+    // the larger of self and o
+    fn max(self, o: float) -> float { if o > self { return o } return self }
+    // self limited to lo..hi: 1.5.clamp(0.0, 1.0) == 1.0
+    fn clamp(self, lo: float, hi: float) -> float { if self < lo { return lo } if self > hi { return hi } return self }
+}
+
+impl bool {
+    // "true" or "false"
+    fn to_str(self) -> str { if self { return "true" } return "false" }
+}
+
+impl byte {
+    // true for the ASCII digits 0 to 9
+    fn is_digit(self) -> bool { return self >= '0' and self <= '9' }
+    // true for the ASCII letters a-z and A-Z (false for all other bytes)
+    fn is_alpha(self) -> bool { return (self >= 'a' and self <= 'z') or (self >= 'A' and self <= 'Z') }
+    // true for space, tab, newline (10) and carriage return (13)
+    fn is_space(self) -> bool { return self == ' ' or self == 9 or self == 10 or self == 13 }
+}
+
+// ---------------------------------------------------------------- strings
+// A string is a pointer to  [length: 8 bytes][bytes...][0].  Strings are immutable.
+// length of s in bytes (same as s.len())
+fn str_len(s: str) -> int {
+    return (s as ptr<int>)[0]
+}
+
+fn str_data(s: str) -> ptr<byte> {
+    return (s as ptr<byte>) + 8
+}
+
+fn str_new(n: int) -> str {
+    let p = __alloc_atomic(n + 9)
+    (p as ptr<int>)[0] = n
+    return p as str
+}
+
+fn str_from_ptr(p: ptr<byte>, n: int) -> str {
+    let r = str_new(n)
+    __memcpy(str_data(r), p, n)
+    return r
+}
+
+fn str_concat(a: str, b: str) -> str {
+    let la = str_len(a)
+    let lb = str_len(b)
+    if la == 0 { return b }
+    if lb == 0 { return a }
+    let r = str_new(la + lb)
+    let d = str_data(r)
+    __memcpy(d, str_data(a), la)
+    __memcpy(d + la, str_data(b), lb)
+    return r
+}
+
+// s repeated n times, "" when n <= 0 (same as s * n): str_repeat("ab", 3) == "ababab"
+fn str_repeat(s: str, n: int) -> str {
+    if n <= 0 { return "" }
+    let l = str_len(s)
+    let r = str_new(l * n)
+    let d = str_data(r)
+    for i in 0..n {
+        __memcpy(d + i * l, str_data(s), l)
+    }
+    return r
+}
+
+fn str_eq(a: str, b: str) -> bool {
+    if (a as ptr<byte>) == (b as ptr<byte>) { return true }
+    let la = str_len(a)
+    if la != str_len(b) { return false }
+    let pa = str_data(a)
+    let pb = str_data(b)
+    var i = 0
+    while i < la {
+        if pa[i] != pb[i] { return false }
+        i += 1
+    }
+    return true
+}
+
+// compares two strings byte by byte: -1, 0 or 1 (handy in sort_by): str_cmp("apple", "banana") == -1
+fn str_cmp(a: str, b: str) -> int {
+    let la = str_len(a)
+    let lb = str_len(b)
+    let n = if la < lb { la } else { lb }
+    let pa = str_data(a)
+    let pb = str_data(b)
+    var i = 0
+    while i < n {
+        if pa[i] != pb[i] {
+            if pa[i] < pb[i] { return -1 }
+            return 1
+        }
+        i += 1
+    }
+    if la < lb { return -1 }
+    if la > lb { return 1 }
+    return 0
+}
+
+// a non-negative hash of the text (FNV-1a), the same as s.hash()
+fn str_hash(s: str) -> int {
+    var h = -3750763034362895579
+    let p = str_data(s)
+    let n = str_len(s)
+    var i = 0
+    while i < n {
+        h = (h ^ p[i]) * 1099511628211
+        i += 1
+    }
+    return h & 0x7FFFFFFFFFFFFFFF
+}
+
+var char_table: ptr<str>
+
+fn char_str(b: int) -> str {
+    if char_table == nil {
+        char_table = __alloc(256 * 8) as ptr<str>
+        for i in 0..256 {
+            let s = str_new(1)
+            str_data(s)[0] = byte(i)
+            char_table[i] = s
+        }
+    }
+    return char_table[b & 255]
+}
+
+// decimal text of n: int_to_str(-42) == "-42"
+fn int_to_str(n: int) -> str {
+    if n == 0 { return "0" }
+    let buf = __alloc(24)
+    var pos = 24
+    var m = n
+    let neg = n < 0
+    if not neg { m = -n }
+    while m != 0 {
+        let d = -(m % 10)
+        pos -= 1
+        buf[pos] = byte(48 + d)
+        m = m / 10
+    }
+    if neg {
+        pos -= 1
+        buf[pos] = '-'
+    }
+    return str_from_ptr(buf + pos, 24 - pos)
+}
+
+fn digit_char(d: int) -> byte {
+    if d < 10 { return byte(48 + d) }
+    return byte(87 + d)
+}
+
+// n written in the given base (2 to 36, not checked) without a prefix, with a minus sign for negatives; upper picks A-Z instead of a-z: int_to_base(255, 8, false) == "377"
+fn int_to_base(n: int, base: int, upper: bool) -> str {
+    if n == 0 { return "0" }
+    let buf = __alloc(72)
+    var pos = 72
+    var m = n
+    while m != 0 {
+        var d = m % base
+        if d < 0 { d = -d }
+        pos -= 1
+        var c = digit_char(d)
+        if upper and c >= 'a' { c = byte(c - 32) }
+        buf[pos] = c
+        m = m / base
+    }
+    if n < 0 {
+        pos -= 1
+        buf[pos] = '-'
+    }
+    return str_from_ptr(buf + pos, 72 - pos)
+}
+
+// lowercase hexadecimal without a prefix: int_to_hex(255) == "ff", int_to_hex(-255) == "-ff"
+fn int_to_hex(n: int) -> str { return int_to_base(n, 16, false) }
+// uppercase hexadecimal without a prefix: int_to_HEX(255) == "FF"
+fn int_to_HEX(n: int) -> str { return int_to_base(n, 16, true) }
+// binary without a prefix: int_to_bin(5) == "101"
+fn int_to_bin(n: int) -> str { return int_to_base(n, 2, false) }
+
+// read a 32-bit C int written through a pointer
+fn cint_at(p: ptr<int>) -> int {
+    var v = p[0] & 0xFFFFFFFF
+    if v >= 0x80000000 { v -= 0x100000000 }
+    return v
+}
+
+// the shortest text that reads back as the same float; whole numbers keep ".0", magnitudes below 1e-4 or from 1e16 on get an exponent: float_to_str(1e20) == "1e+20"
+fn float_to_str(x: float) -> str {
+    if x != x { return "nan" }
+    if x - x != 0.0 {
+        if x < 0.0 { return "-inf" }
+        return "inf"
+    }
+    let decpt = __alloc(8) as ptr<int>
+    let sign = __alloc(8) as ptr<int>
+    let end = __alloc(8) as ptr<int>
+    let tmp = __alloc(40)
+    if x == 0.0 {
+        if (__f2bits(x) >> 63) != 0 { return "-0.0" }
+        return "0.0"
+    }
+    // find the shortest digit string that reads back as the same number
+    var nd = 1
+    while nd <= 17 {
+        _gcvt(x, nd, tmp)
+        if strtod(tmp, end) == x { break }
+        nd += 1
+    }
+    let d = _ecvt(x, nd, decpt, sign)
+    var n = 0
+    while d[n] != 0 { n += 1 }
+    while n > 1 and d[n - 1] == '0' { n -= 1 }
+    let dp = cint_at(decpt)
+    let e10 = dp - 1
+    var sb = str_builder()
+    if sign[0] != 0 { sb.add_byte('-') }
+    if e10 >= -4 and e10 < 16 {
+        if dp <= 0 {
+            sb.add("0.")
+            for i in 0..(-dp) { sb.add_byte('0') }
+            for i in 0..n { sb.add_byte(d[i]) }
+        } else if dp >= n {
+            for i in 0..n { sb.add_byte(d[i]) }
+            for i in 0..(dp - n) { sb.add_byte('0') }
+            sb.add(".0")
+        } else {
+            for i in 0..dp { sb.add_byte(d[i]) }
+            sb.add_byte('.')
+            for i in dp..n { sb.add_byte(d[i]) }
+        }
+    } else {
+        sb.add_byte(d[0])
+        if n > 1 {
+            sb.add_byte('.')
+            for i in 1..n { sb.add_byte(d[i]) }
+        }
+        sb.add_byte('e')
+        var ex = e10
+        if ex < 0 {
+            sb.add_byte('-')
+            ex = -ex
+        } else {
+            sb.add_byte('+')
+        }
+        if ex < 10 { sb.add_byte('0') }
+        sb.add(int_to_str(ex))
+    }
+    return sb.finish()
+}
+
+// multiply a little-endian array of decimal digits by f (f < 2^31)
+fn decimal_mul(d: [int], f: int) {
+    var carry = 0
+    for i in 0..d.len {
+        let v = d.data[i] * f + carry
+        d.data[i] = v % 10
+        carry = v / 10
+    }
+    while carry > 0 {
+        d.push(carry % 10)
+        carry = carry / 10
+    }
+}
+
+// fixed number of decimals, rounded exactly (ties to even, like C and Python):  fmt_fixed(3.14159, 2) == "3.14"
+fn fmt_fixed(x: float, digits: int) -> str {
+    if x != x { return "nan" }
+    if x - x != 0.0 {
+        if x < 0.0 { return "-inf" }
+        return "inf"
+    }
+    var places = digits
+    if places < 0 { places = 0 }
+    let bits = __f2bits(x)
+    let negative = bits < 0
+    let be = (bits >>> 52) & 0x7FF
+    var m = bits & 0xFFFFFFFFFFFFF
+    var e2 = -1074
+    if be != 0 {
+        m = m | 0x10000000000000
+        e2 = be - 1075
+    }
+    // the exact value is D * 10^-k with D a decimal integer (little-endian digits)
+    var d: [int] = []
+    var t = m
+    while t > 0 {
+        d.push(t % 10)
+        t = t / 10
+    }
+    if d.len == 0 { d.push(0) }
+    var k = 0
+    if e2 >= 0 {
+        var e = e2
+        while e >= 30 {
+            decimal_mul(d, 1 << 30)
+            e -= 30
+        }
+        if e > 0 { decimal_mul(d, 1 << e) }
+    } else {
+        // m / 2^n == m * 5^n / 10^n
+        k = -e2
+        var n = k
+        while n >= 13 {
+            decimal_mul(d, 1220703125)
+            n -= 13
+        }
+        var f = 1
+        for i in 0..n { f = f * 5 }
+        if f > 1 { decimal_mul(d, f) }
+    }
+    // round away the decimals beyond `digits`
+    if k > places {
+        let cut = k - places             // number of low digits to drop
+        var up = false
+        if cut <= d.len {
+            let first = d.data[cut - 1]
+            var rest_zero = true
+            for i in 0..cut - 1 {
+                if d.data[i] != 0 { rest_zero = false }
+            }
+            if first > 5 or (first == 5 and not rest_zero) {
+                up = true
+            } else if first == 5 and rest_zero {
+                var last = 0
+                if cut < d.len { last = d.data[cut] }
+                up = last % 2 == 1
+            }
+        }
+        var nd: [int] = []
+        for i in cut..d.len { nd.push(d.data[i]) }
+        if nd.len == 0 { nd.push(0) }
+        if up {
+            var i = 0
+            loop {
+                if i == nd.len {
+                    nd.push(1)
+                    break
+                }
+                if nd.data[i] == 9 {
+                    nd.data[i] = 0
+                    i += 1
+                } else {
+                    nd.data[i] += 1
+                    break
+                }
+            }
+        }
+        d = nd
+        k = places
+    }
+    // now value = d * 10^-k with k <= digits
+    while d.len <= k { d.push(0) }
+    var sb = str_builder()
+    if negative { sb.add_byte('-') }
+    var i = d.len - 1
+    while i >= k {
+        sb.add_byte(byte(48 + d.data[i]))
+        i -= 1
+    }
+    if places > 0 {
+        sb.add_byte('.')
+        var j = k - 1
+        while j >= 0 {
+            sb.add_byte(byte(48 + d.data[j]))
+            j -= 1
+        }
+        for z in 0..places - k { sb.add_byte('0') }
+    }
+    return sb.finish()
+}
+
+// s in double quotes, with quote, backslash, newline, tab and carriage return escaped (how text is shown inside arrays): quote_str("hi") == "\"hi\""
+fn quote_str(s: str) -> str {
+    var sb = str_builder()
+    sb.add_byte('"')
+    let p = str_data(s)
+    for i in 0..str_len(s) {
+        let c = p[i]
+        if c == '"' { sb.add("\\\"") }
+        else if c == '\\' { sb.add("\\\\") }
+        else if c == 10 { sb.add("\\n") }
+        else if c == 9 { sb.add("\\t") }
+        else if c == 13 { sb.add("\\r") }
+        else { sb.add_byte(c) }
+    }
+    sb.add_byte('"')
+    return sb.finish()
+}
+
+// s with spaces added on the left up to w bytes (s itself when it is already that long): pad_left("7", 3) == "  7"
+fn pad_left(s: str, w: int) -> str {
+    let n = str_len(s)
+    if n >= w { return s }
+    return str_repeat(" ", w - n) + s
+}
+
+// s with spaces added on the right up to w bytes (s itself when it is already that long): pad_right("7", 3) == "7  "
+fn pad_right(s: str, w: int) -> str {
+    let n = str_len(s)
+    if n >= w { return s }
+    return s + str_repeat(" ", w - n)
+}
+
+// s centered in w bytes of spaces, an odd extra space goes to the right: pad_center("ab", 5) == " ab  "
+fn pad_center(s: str, w: int) -> str {
+    let n = str_len(s)
+    if n >= w { return s }
+    let left = (w - n) / 2
+    return str_repeat(" ", left) + s + str_repeat(" ", w - n - left)
+}
+
+// s with zeros added on the left up to w bytes, after a leading sign: pad_zero("-7", 4) == "-007"
+fn pad_zero(s: str, w: int) -> str {
+    let n = str_len(s)
+    if n >= w { return s }
+    if n > 0 and (s.byte_at(0) == '-' or s.byte_at(0) == '+') {
+        return s[0..1] + str_repeat("0", w - n) + s[1..]
+    }
+    return str_repeat("0", w - n) + s
+}
+
+// s as an int, nil if it is not one; allows spaces or tabs around it, a + or - sign, 0x 0b 0o prefixes and _ between digits; nil on overflow: parse_int_str("-0x1F") == -31
+fn parse_int_str(s: str) -> int? {
+    let n = str_len(s)
+    let p = str_data(s)
+    var i = 0
+    while i < n and (p[i] == ' ' or p[i] == 9) { i += 1 }
+    var end = n
+    while end > i and (p[end - 1] == ' ' or p[end - 1] == 9 or p[end - 1] == 10 or p[end - 1] == 13) { end -= 1 }
+    if i >= end { return nil }
+    var neg = false
+    if p[i] == '-' {
+        neg = true
+        i += 1
+    } else if p[i] == '+' {
+        i += 1
+    }
+    if i >= end { return nil }
+    var v = 0
+    var base = 10
+    if end - i > 2 and p[i] == '0' and (p[i + 1] == 'x' or p[i + 1] == 'X') {
+        base = 16
+        i += 2
+    } else if end - i > 2 and p[i] == '0' and (p[i + 1] == 'b' or p[i + 1] == 'B') {
+        base = 2
+        i += 2
+    } else if end - i > 2 and p[i] == '0' and (p[i + 1] == 'o' or p[i + 1] == 'O') {
+        base = 8
+        i += 2
+    }
+    if p[i] == '_' { return nil }
+    var digits = 0
+    while i < end {
+        let c = p[i]
+        var d = 99
+        if c >= '0' and c <= '9' { d = c - 48 }
+        else if c >= 'a' and c <= 'f' { d = c - 87 }
+        else if c >= 'A' and c <= 'F' { d = c - 55 }
+        else if c == '_' { i += 1; continue }
+        if d >= base { return nil }
+        // the value is built as a negative number so that INT_MIN fits
+        if v < (INT_MIN + d) / base { return nil }
+        v = v * base - d
+        digits += 1
+        i += 1
+    }
+    if digits == 0 { return nil }
+    if neg { return v }
+    if v == INT_MIN { return nil }
+    return -v
+}
+
+// like parse_int_str, but panics with  cannot convert "..." to an int  when s is not a whole number
+fn str_to_int(s: str) -> int {
+    let r = parse_int_str(s)
+    if r == nil { panic("cannot convert " + quote_str(s) + " to an int") }
+    return r!
+}
+
+// s as a float, nil if it is not a number; whitespace around it is ignored and inf, infinity and nan (any case, optional sign) are accepted: parse_float_str(" 2.5 ") == 2.5
+fn parse_float_str(s: str) -> float? {
+    let t = s.trim()
+    let n = str_len(t)
+    if n == 0 { return nil }
+    let low = t.lower()
+    if str_eq(low, "inf") or str_eq(low, "+inf") or str_eq(low, "infinity") or str_eq(low, "+infinity") { return INF }
+    if str_eq(low, "-inf") or str_eq(low, "-infinity") { return -INF }
+    if str_eq(low, "nan") or str_eq(low, "+nan") or str_eq(low, "-nan") { return INF - INF }
+    let d = str_data(low)
+    for i in 0..n {
+        if d[i] == 'd' { return nil }               // the C library would read 1d2 as 1e2
+    }
+    let end = __alloc(8) as ptr<int>
+    let v = strtod(str_data(t), end)
+    if end[0] - (str_data(t) as int) != n { return nil }
+    return v
+}
+
+// like parse_float_str, but panics with  cannot convert "..." to a float  when s is not a number
+fn str_to_float(s: str) -> float {
+    let r = parse_float_str(s)
+    if r == nil { panic("cannot convert " + quote_str(s) + " to a float") }
+    return r!
+}
+
+struct StrBuilder {
+    data: ptr<byte>,
+    len: int,
+    cap: int
+}
+
+// a new, empty StrBuilder: add pieces with add / add_byte, then finish() gives the str (much faster than + in a loop)
+fn str_builder() -> StrBuilder {
+    return StrBuilder{ data: __alloc_atomic(32), len: 0, cap: 32 }
+}
+
+impl StrBuilder {
+    // makes room for extra more bytes, so the next adds do not have to grow the buffer
+    fn reserve(self, extra: int) {
+        if self.len + extra <= self.cap { return }
+        var nc = self.cap * 2
+        while nc < self.len + extra { nc = nc * 2 }
+        let nd = __alloc_atomic(nc)
+        __memcpy(nd, self.data, self.len)
+        self.data = nd
+        self.cap = nc
+    }
+    // appends one byte
+    fn add_byte(self, b: byte) {
+        if self.len == self.cap { self.reserve(1) }
+        self.data[self.len] = b
+        self.len += 1
+    }
+    // appends the text s
+    fn add(self, s: str) {
+        let n = str_len(s)
+        self.reserve(n)
+        __memcpy(self.data + self.len, str_data(s), n)
+        self.len += n
+    }
+    // the text built so far, as a new str (the builder keeps its content and can still be used)
+    fn finish(self) -> str {
+        return str_from_ptr(self.data, self.len)
+    }
+    // empties the builder (its memory is kept)
+    fn clear(self) {
+        self.len = 0
+    }
+    // number of bytes added so far
+    fn len(self) -> int {
+        return self.len
+    }
+}
+
+impl str {
+    // length in bytes (a non-ASCII letter takes 2 to 4 bytes)
+    fn len(self) -> int { return str_len(self) }
+    // true when the string is ""
+    fn is_empty(self) -> bool { return str_len(self) == 0 }
+    // the string itself
+    fn to_str(self) -> str { return self }
+    // the byte at index i, as a number; panics when i is out of range: "A".byte_at(0) == 65
+    fn byte_at(self, i: int) -> byte {
+        if i < 0 or i >= str_len(self) { rt_bounds_fail(0, i, str_len(self)) }
+        return str_data(self)[i]
+    }
+    fn op_index(self, i: int) -> str {
+        let n = str_len(self)
+        if i < 0 or i >= n { rt_bounds_fail(0, i, n) }
+        return char_str(str_data(self)[i])
+    }
+    fn op_slice(self, lo: int, hi: int) -> str {
+        let n = str_len(self)
+        var h = hi
+        if h == INT_MAX { h = n }
+        if lo < 0 or h > n or lo > h { slice_fail(lo, hi, n) }
+        if lo == 0 and h == n { return self }
+        return str_from_ptr(str_data(self) + lo, h - lo)
+    }
+    // count bytes starting at index start, like s[start..start + count]; panics when that is out of range: "hello".substr(1, 3) == "ell"
+    fn substr(self, start: int, count: int) -> str {
+        return self.op_slice(start, start + count)
+    }
+    // index of the first occurrence of sub at or after index start, -1 if none; a negative start counts as 0
+    // (an empty sub is found at start, or not at all when start is past the end)
+    fn find_from(self, sub: str, start: int) -> int {
+        let n = str_len(self)
+        let m = str_len(sub)
+        var i = start
+        if i < 0 { i = 0 }
+        if m == 0 {
+            if i > n { return -1 }
+            return i
+        }
+        let p = str_data(self)
+        let q = str_data(sub)
+        while i + m <= n {
+            if p[i] == q[0] {
+                var j = 1
+                while j < m and p[i + j] == q[j] { j += 1 }
+                if j == m { return i }
+            }
+            i += 1
+        }
+        return -1
+    }
+    // index of the first occurrence of sub, -1 if none (an empty sub gives 0): "hello".find("l") == 2
+    fn find(self, sub: str) -> int { return self.find_from(sub, 0) }
+    // index of the last occurrence of sub, -1 if none (an empty sub gives len()): "hello".rfind("l") == 3
+    fn rfind(self, sub: str) -> int {
+        let n = str_len(self)
+        let m = str_len(sub)
+        var i = n - m
+        while i >= 0 {
+            var j = 0
+            while j < m and str_data(self)[i + j] == str_data(sub)[j] { j += 1 }
+            if j == m { return i }
+            i -= 1
+        }
+        return -1
+    }
+    // true when sub occurs in the string (always true for "")
+    fn contains(self, sub: str) -> bool { return self.find_from(sub, 0) >= 0 }
+    fn op_contains(self, sub: str) -> bool { return self.find_from(sub, 0) >= 0 }
+    // true when the string begins with pre (always true for "")
+    fn starts_with(self, pre: str) -> bool {
+        let m = str_len(pre)
+        if m > str_len(self) { return false }
+        let p = str_data(self)
+        let q = str_data(pre)
+        for i in 0..m {
+            if p[i] != q[i] { return false }
+        }
+        return true
+    }
+    // true when the string ends with suf (always true for "")
+    fn ends_with(self, suf: str) -> bool {
+        let m = str_len(suf)
+        let n = str_len(self)
+        if m > n { return false }
+        let p = str_data(self) + (n - m)
+        let q = str_data(suf)
+        for i in 0..m {
+            if p[i] != q[i] { return false }
+        }
+        return true
+    }
+    // a copy with the ASCII letters a-z made uppercase (other bytes unchanged)
+    fn upper(self) -> str {
+        let n = str_len(self)
+        let r = str_new(n)
+        let p = str_data(self)
+        let d = str_data(r)
+        for i in 0..n {
+            let c = p[i]
+            if c >= 'a' and c <= 'z' { d[i] = byte(c - 32) } else { d[i] = c }
+        }
+        return r
+    }
+    // a copy with the ASCII letters A-Z made lowercase (other bytes unchanged)
+    fn lower(self) -> str {
+        let n = str_len(self)
+        let r = str_new(n)
+        let p = str_data(self)
+        let d = str_data(r)
+        for i in 0..n {
+            let c = p[i]
+            if c >= 'A' and c <= 'Z' { d[i] = byte(c + 32) } else { d[i] = c }
+        }
+        return r
+    }
+    // the first byte made uppercase, the rest unchanged: "hello world".capitalize() == "Hello world"
+    fn capitalize(self) -> str {
+        if str_len(self) == 0 { return self }
+        return self[0].upper() + self[1..]
+    }
+    // a copy without the spaces, tabs, newlines and carriage returns at the start
+    fn trim_start(self) -> str {
+        let n = str_len(self)
+        var i = 0
+        while i < n and str_data(self)[i].is_space() { i += 1 }
+        return self.op_slice(i, n)
+    }
+    // a copy without the spaces, tabs, newlines and carriage returns at the end
+    fn trim_end(self) -> str {
+        var n = str_len(self)
+        while n > 0 and str_data(self)[n - 1].is_space() { n -= 1 }
+        return self.op_slice(0, n)
+    }
+    // a copy without spaces, tabs, newlines and carriage returns at both ends: " a b ".trim() == "a b"
+    fn trim(self) -> str { return self.trim_start().trim_end() }
+    // every occurrence of old replaced by new, left to right without overlaps; unchanged when old is "": "aaa".replace("a", "bb") == "bbbbbb"
+    fn replace(self, old: str, new: str) -> str {
+        let m = str_len(old)
+        if m == 0 { return self }
+        var sb = str_builder()
+        var i = 0
+        loop {
+            let j = self.find_from(old, i)
+            if j < 0 { break }
+            sb.add(self.op_slice(i, j))
+            sb.add(new)
+            i = j + m
+        }
+        sb.add(self.op_slice(i, str_len(self)))
+        return sb.finish()
+    }
+    // the pieces between the occurrences of sep: "a,b,,c".split(",") == ["a", "b", "", "c"]; an empty sep splits into single bytes; "".split(",") == [""]
+    fn split(self, sep: str) -> [str] {
+        var parts: [str] = []
+        let m = str_len(sep)
+        if m == 0 {
+            for i in 0..str_len(self) { parts.push(self[i]) }
+            return parts
+        }
+        var i = 0
+        loop {
+            let j = self.find_from(sep, i)
+            if j < 0 { break }
+            parts.push(self.op_slice(i, j))
+            i = j + m
+        }
+        parts.push(self.op_slice(i, str_len(self)))
+        return parts
+    }
+    // the words between runs of spaces, tabs, newlines and carriage returns (never empty strings): " a  b ".split_whitespace() == ["a", "b"]
+    fn split_whitespace(self) -> [str] {
+        var parts: [str] = []
+        let n = str_len(self)
+        let p = str_data(self)
+        var i = 0
+        while i < n {
+            while i < n and p[i].is_space() { i += 1 }
+            if i >= n { break }
+            let start = i
+            while i < n and not p[i].is_space() { i += 1 }
+            parts.push(self.op_slice(start, i))
+        }
+        return parts
+    }
+    // the lines without their "\n" or "\r\n"; a newline at the very end adds no empty line: "a\nb\n".lines() == ["a", "b"]
+    fn lines(self) -> [str] {
+        var parts = self.split("\n")
+        if parts.len() > 0 and parts[parts.len() - 1].len() == 0 { parts.pop() }
+        var out: [str] = []
+        for l in parts {
+            if l.len() > 0 and l.byte_at(l.len() - 1) == 13 { out.push(l[0..l.len() - 1]) } else { out.push(l) }
+        }
+        return out
+    }
+    // the parts with this string between them: ", ".join(["a", "b"]) == "a, b"
+    fn join(self, parts: [str]) -> str {
+        var sb = str_builder()
+        for i in 0..parts.len() {
+            if i > 0 { sb.add(self) }
+            sb.add(parts[i])
+        }
+        return sb.finish()
+    }
+    // the string repeated n times, "" when n <= 0 (same as s * n): "ab".repeat(3) == "ababab"
+    fn repeat(self, n: int) -> str { return str_repeat(self, n) }
+    // the bytes in reverse order (this garbles non-ASCII letters): "abc".reverse() == "cba"
+    fn reverse(self) -> str {
+        let n = str_len(self)
+        let r = str_new(n)
+        for i in 0..n { str_data(r)[i] = str_data(self)[n - 1 - i] }
+        return r
+    }
+    // the string as one-byte strings (bytes, not Unicode letters): "abc".chars() == ["a", "b", "c"]
+    fn chars(self) -> [str] {
+        var out: [str] = []
+        for c in self { out.push(c) }
+        return out
+    }
+    // the bytes as numbers: "AB".bytes() == [65, 66]
+    fn bytes(self) -> [byte] {
+        var out: [byte] = []
+        for i in 0..str_len(self) { out.push(str_data(self)[i]) }
+        return out
+    }
+    // number of non-overlapping occurrences of sub (0 for ""): "aaaa".count("aa") == 2
+    fn count(self, sub: str) -> int {
+        let m = str_len(sub)
+        if m == 0 { return 0 }
+        var c = 0
+        var i = 0
+        loop {
+            let j = self.find_from(sub, i)
+            if j < 0 { break }
+            c += 1
+            i = j + m
+        }
+        return c
+    }
+    // the text as an int, nil if it is not one; allows spaces or tabs around it, a sign, 0x 0b 0o prefixes and _ between digits: "42".parse_int() == 42
+    fn parse_int(self) -> int? { return parse_int_str(self) }
+    // the text as a float, nil if it is not a number; whitespace around it is ignored, inf and nan are accepted: "2.5".parse_float() == 2.5
+    fn parse_float(self) -> float? { return parse_float_str(self) }
+    // the text as digits of the given base (2 to 36, letters in any case), no sign or spaces, "" gives 0; panics on any other character; overflow is not checked: "ff".parse_int_base(16) == 255
+    fn parse_int_base(self, base: int) -> int {
+        var v = 0
+        for i in 0..str_len(self) {
+            let c = str_data(self)[i]
+            var d = 99
+            if c >= '0' and c <= '9' { d = c - 48 }
+            else if c >= 'a' and c <= 'z' { d = c - 87 }
+            else if c >= 'A' and c <= 'Z' { d = c - 55 }
+            if d >= base { panic("invalid digit in " + quote_str(self)) }
+            v = v * base + d
+        }
+        return v
+    }
+    // the text as an int (same forms as parse_int); panics when it is not a whole number: "42".to_int() == 42
+    fn to_int(self) -> int { return str_to_int(self) }
+    // the text as a float (same forms as parse_float); panics when it is not a number: "2.5".to_float() == 2.5
+    fn to_float(self) -> float { return str_to_float(self) }
+    // padded with spaces on the left to w bytes: "7".pad_left(3) == "  7"
+    fn pad_left(self, w: int) -> str { return pad_left(self, w) }
+    // padded with spaces on the right to w bytes: "7".pad_right(3) == "7  "
+    fn pad_right(self, w: int) -> str { return pad_right(self, w) }
+    // true when the string is not empty and every byte is 0 to 9 (no sign, no spaces)
+    fn is_digits(self) -> bool {
+        let n = str_len(self)
+        if n == 0 { return false }
+        for i in 0..n {
+            if not str_data(self)[i].is_digit() { return false }
+        }
+        return true
+    }
+    // a non-negative hash of the text (FNV-1a)
+    fn hash(self) -> int { return str_hash(self) }
+}
+
+// the first byte of s as a number (only the first UTF-8 byte of a non-ASCII letter); panics on "": ord("A") == 65
+fn ord(s: str) -> int {
+    if str_len(s) == 0 { panic("ord() needs a non-empty string") }
+    return str_data(s)[0]
+}
+
+// the UTF-8 text of the Unicode code point n (not checked, use 0 to 0x10FFFF): chr(65) == "A", chr(955) is the 2-byte Greek letter lambda
+fn chr(n: int) -> str {
+    if n < 128 { return char_str(n) }
+    var sb = str_builder()
+    if n < 0x800 {
+        sb.add_byte(byte(0xC0 | (n >> 6)))
+        sb.add_byte(byte(0x80 | (n & 63)))
+    } else if n < 0x10000 {
+        sb.add_byte(byte(0xE0 | (n >> 12)))
+        sb.add_byte(byte(0x80 | ((n >> 6) & 63)))
+        sb.add_byte(byte(0x80 | (n & 63)))
+    } else {
+        sb.add_byte(byte(0xF0 | (n >> 18)))
+        sb.add_byte(byte(0x80 | ((n >> 12) & 63)))
+        sb.add_byte(byte(0x80 | ((n >> 6) & 63)))
+        sb.add_byte(byte(0x80 | (n & 63)))
+    }
+    return sb.finish()
+}
+
+// ---------------------------------------------------------------- arrays
+// [T] is Array<T>:  header { data, len, cap }
+struct Array<T> {
+    data: ptr<T>,
+    len: int,
+    cap: int
+}
+
+fn alloc_elems<T>(n: int) -> ptr<T> {
+    if __pointer_free::<T>() { return __alloc_atomic(n * __sizeof::<T>()) as ptr<T> }
+    return __alloc(n * __sizeof::<T>()) as ptr<T>
+}
+
+// an array of n default elements: 0, 0.0, false, "", empty arrays and maps, nil
+fn array_make<T>(n: int) -> [T] {
+    if n < 0 { panic("array_make: the length cannot be negative (got " + int_to_str(n) + ")") }
+    let a = Array{ data: alloc_elems::<T>(n), len: n, cap: n }
+    if __has_default::<T>() {
+        for i in 0..n { a.data[i] = __default::<T>() }
+    }
+    return a
+}
+
+// an array of n raw (zeroed) elements that the caller overwrites
+fn array_raw<T>(n: int) -> [T] {
+    return Array{ data: alloc_elems::<T>(n), len: n, cap: n }
+}
+
+// an empty array with room for cap elements, so that the next cap pushes do not have to grow it
+fn array_with_cap<T>(cap: int) -> [T] {
+    return Array{ data: alloc_elems::<T>(cap), len: 0, cap: cap }
+}
+
+fn array_to_str<T>(a: [T]) -> str {
+    var sb = str_builder()
+    sb.add_byte('[')
+    for i in 0..a.len {
+        if i > 0 { sb.add(", ") }
+        sb.add(__debug(a.data[i]))
+    }
+    sb.add_byte(']')
+    return sb.finish()
+}
+
+fn array_eq<T>(a: [T], b: [T]) -> bool {
+    if a.len != b.len { return false }
+    for i in 0..a.len {
+        if not __eq(a.data[i], b.data[i]) { return false }
+    }
+    return true
+}
+
+fn array_hash<T>(a: [T]) -> int {
+    var h = 7
+    for i in 0..a.len { h = hash_mix(h, __hash(a.data[i])) }
+    return h
+}
+
+impl<T> Array<T> {
+    // number of elements
+    fn len(self) -> int { return self.len }
+    // true when the array has no elements
+    fn is_empty(self) -> bool { return self.len == 0 }
+    // makes room for at least need elements (push does this by itself)
+    fn grow(self, need: int) {
+        var nc = self.cap * 2
+        if nc < 4 { nc = 4 }
+        while nc < need { nc = nc * 2 }
+        let nd = alloc_elems::<T>(nc)
+        __memcpy(nd as ptr<byte>, self.data as ptr<byte>, self.len * __sizeof::<T>())
+        self.data = nd
+        self.cap = nc
+    }
+    // appends x at the end
+    fn push(self, x: T) {
+        if self.len == self.cap { self.grow(self.len + 1) }
+        self.data[self.len] = x
+        self.len += 1
+    }
+    // removes and returns the last element; panics when the array is empty
+    fn pop(self) -> T {
+        if self.len == 0 { panic("pop from an empty array") }
+        self.len -= 1
+        return self.data[self.len]
+    }
+    // the last element; panics when the array is empty
+    fn last(self) -> T {
+        if self.len == 0 { panic("last() of an empty array") }
+        return self.data[self.len - 1]
+    }
+    // the first element; panics when the array is empty
+    fn first(self) -> T {
+        if self.len == 0 { panic("first() of an empty array") }
+        return self.data[0]
+    }
+    // element i, or default when i is out of range: [1, 2].get(5, 0) == 0
+    fn get(self, i: int, default: T) -> T {
+        if i < 0 or i >= self.len { return default }
+        return self.data[i]
+    }
+    // removes all elements (the memory is kept)
+    fn clear(self) { self.len = 0 }
+    // inserts x before index i, moving the rest to the right (i == len() appends); panics when i is out of range
+    fn insert(self, i: int, x: T) {
+        if i < 0 or i > self.len { panic("insert index " + int_to_str(i) + " is out of range") }
+        if self.len == self.cap { self.grow(self.len + 1) }
+        var k = self.len
+        while k > i {
+            self.data[k] = self.data[k - 1]
+            k -= 1
+        }
+        self.data[i] = x
+        self.len += 1
+    }
+    // removes and returns element i, moving the rest to the left; panics when i is out of range
+    fn remove(self, i: int) -> T {
+        if i < 0 or i >= self.len { panic("remove index " + int_to_str(i) + " is out of range") }
+        let x = self.data[i]
+        var k = i
+        while k < self.len - 1 {
+            self.data[k] = self.data[k + 1]
+            k += 1
+        }
+        self.len -= 1
+        return x
+    }
+    // exchanges elements i and j; panics when one of them is out of range
+    fn swap(self, i: int, j: int) {
+        let t = self[i]
+        self[i] = self[j]
+        self[j] = t
+    }
+    // a new array with the same elements (a shallow copy)
+    fn copy(self) -> [T] {
+        let r = array_raw::<T>(self.len)
+        __memcpy(r.data as ptr<byte>, self.data as ptr<byte>, self.len * __sizeof::<T>())
+        return r
+    }
+    fn op_slice(self, lo: int, hi: int) -> [T] {
+        var h = hi
+        if h == INT_MAX { h = self.len }
+        if lo < 0 or h > self.len or lo > h { slice_fail(lo, hi, self.len) }
+        let r = array_raw::<T>(h - lo)
+        __memcpy(r.data as ptr<byte>, (self.data + lo) as ptr<byte>, (h - lo) * __sizeof::<T>())
+        return r
+    }
+    fn op_add(self, o: [T]) -> [T] {
+        let r = array_raw::<T>(self.len + o.len)
+        __memcpy(r.data as ptr<byte>, self.data as ptr<byte>, self.len * __sizeof::<T>())
+        __memcpy((r.data + self.len) as ptr<byte>, o.data as ptr<byte>, o.len * __sizeof::<T>())
+        return r
+    }
+    // appends all elements of o
+    fn extend(self, o: [T]) {
+        for i in 0..o.len { self.push(o.data[i]) }
+    }
+    // index of the first element equal to x, -1 if there is none
+    fn index_of(self, x: T) -> int {
+        for i in 0..self.len {
+            if __eq(self.data[i], x) { return i }
+        }
+        return -1
+    }
+    // true when an element equals x (same as  x in a)
+    fn contains(self, x: T) -> bool { return self.index_of(x) >= 0 }
+    fn op_contains(self, x: T) -> bool { return self.index_of(x) >= 0 }
+    // number of elements equal to x
+    fn count(self, x: T) -> int {
+        var c = 0
+        for i in 0..self.len {
+            if __eq(self.data[i], x) { c += 1 }
+        }
+        return c
+    }
+    // reverses the order of the elements in place (reversed() makes a new array instead)
+    fn reverse(self) {
+        var i = 0
+        var j = self.len - 1
+        while i < j {
+            let t = self.data[i]
+            self.data[i] = self.data[j]
+            self.data[j] = t
+            i += 1
+            j -= 1
+        }
+    }
+    // a new array with the elements in reverse order
+    fn reversed(self) -> [T] {
+        let r = self.copy()
+        r.reverse()
+        return r
+    }
+    // a new array with f applied to every element: [1, 2].map(|x| x * 10) == [10, 20]
+    fn map<U>(self, f: fn(T) -> U) -> [U] {
+        let r = array_with_cap::<U>(self.len)
+        for i in 0..self.len { r.push(f(self.data[i])) }
+        return r
+    }
+    // a new array with only the elements for which f returns true: [1, 2, 3, 4].filter(|x| x % 2 == 0) == [2, 4]
+    fn filter(self, f: fn(T) -> bool) -> [T] {
+        var r: [T] = []
+        for i in 0..self.len {
+            let x = self.data[i]
+            if f(x) { r.push(x) }
+        }
+        return r
+    }
+    // combines the elements from left to right, starting with init: [1, 2, 3].reduce(0, |acc, x| acc + x) == 6
+    fn reduce<U>(self, init: U, f: fn(U, T) -> U) -> U {
+        var acc = init
+        for i in 0..self.len { acc = f(acc, self.data[i]) }
+        return acc
+    }
+    // calls f with every element, in order
+    fn for_each(self, f: fn(T)) {
+        for i in 0..self.len { f(self.data[i]) }
+    }
+    // true when f returns true for at least one element (false for an empty array)
+    fn any(self, f: fn(T) -> bool) -> bool {
+        for i in 0..self.len {
+            if f(self.data[i]) { return true }
+        }
+        return false
+    }
+    // true when f returns true for every element (true for an empty array)
+    fn all(self, f: fn(T) -> bool) -> bool {
+        for i in 0..self.len {
+            if not f(self.data[i]) { return false }
+        }
+        return true
+    }
+    // the first element for which f returns true, nil if there is none
+    fn find(self, f: fn(T) -> bool) -> T? {
+        for i in 0..self.len {
+            if f(self.data[i]) { return self.data[i] }
+        }
+        return nil
+    }
+    // the sum of the elements: [1, 2, 3].sum() == 6; an empty array of numbers gives 0 (of other types: panics)
+    fn sum(self) -> T {
+        if self.len == 0 {
+            if __pointer_free::<T>() or __has_default::<T>() { return __default::<T>() }
+            panic("sum() of an empty array")
+        }
+        var acc = self.data[0]
+        for i in 1..self.len { acc = acc + self.data[i] }
+        return acc
+    }
+    // the smallest element; panics when the array is empty
+    fn min(self) -> T {
+        if self.len == 0 { panic("min() of an empty array") }
+        var m = self.data[0]
+        for i in 1..self.len {
+            if self.data[i] < m { m = self.data[i] }
+        }
+        return m
+    }
+    // the largest element; panics when the array is empty
+    fn max(self) -> T {
+        if self.len == 0 { panic("max() of an empty array") }
+        var m = self.data[0]
+        for i in 1..self.len {
+            if self.data[i] > m { m = self.data[i] }
+        }
+        return m
+    }
+    // sorts in place, smallest first (stable); works for numbers, str, tuples and types with a cmp method
+    fn sort(self) {
+        if self.len < 2 { return }
+        let tmp = array_raw::<T>(self.len)
+        merge_sort_by(self.data, tmp.data, 0, self.len, fn(a: T, b: T) -> int { return __cmp(a, b) })
+    }
+    // sorts in place by cmp(a, b): negative when a comes first, positive when b comes first, 0 keeps their order (stable)
+    fn sort_by(self, cmp: fn(T, T) -> int) {
+        if self.len < 2 { return }
+        let tmp = array_raw::<T>(self.len)
+        merge_sort_by(self.data, tmp.data, 0, self.len, cmp)
+    }
+    // a sorted copy; the array itself is unchanged
+    fn sorted(self) -> [T] {
+        let r = self.copy()
+        r.sort()
+        return r
+    }
+    // sorts in place by a key, smallest key first (stable):  people.sort_by_key(|p| p.age)
+    fn sort_by_key<K>(self, key: fn(T) -> K) {
+        if self.len < 2 { return }
+        let tmp = array_raw::<T>(self.len)
+        merge_sort_by(self.data, tmp.data, 0, self.len, fn(a: T, b: T) -> int { return __cmp(key(a), key(b)) })
+    }
+    // the element with the smallest key (the first one on ties); panics when the array is empty
+    fn min_by_key<K>(self, key: fn(T) -> K) -> T {
+        if self.len == 0 { panic("min_by_key() of an empty array") }
+        var best = self.data[0]
+        var bk = key(best)
+        for i in 1..self.len {
+            let k = key(self.data[i])
+            if __cmp(k, bk) < 0 {
+                best = self.data[i]
+                bk = k
+            }
+        }
+        return best
+    }
+    // the element with the largest key (the first one on ties); panics when the array is empty
+    fn max_by_key<K>(self, key: fn(T) -> K) -> T {
+        if self.len == 0 { panic("max_by_key() of an empty array") }
+        var best = self.data[0]
+        var bk = key(best)
+        for i in 1..self.len {
+            let k = key(self.data[i])
+            if __cmp(k, bk) > 0 {
+                best = self.data[i]
+                bk = k
+            }
+        }
+        return best
+    }
+    // (index, element) pairs:  for (i, x) in a.enumerate() { ... }
+    fn enumerate(self) -> [(int, T)] {
+        var r: [(int, T)] = []
+        for i in 0..self.len { r.push((i, self.data[i])) }
+        return r
+    }
+    // the elements repeated n times:  [0] * 3 == [0, 0, 0]   (n <= 0 gives an empty array)
+    fn op_mul(self, n: int) -> [T] {
+        var r: [T] = []
+        for k in 0..n {
+            for i in 0..self.len { r.push(self.data[i]) }
+        }
+        return r
+    }
+    // the elements as text with sep between them (str elements without quotes): [1, 2, 3].join("-") == "1-2-3"
+    fn join(self, sep: str) -> str {
+        var sb = str_builder()
+        for i in 0..self.len {
+            if i > 0 { sb.add(sep) }
+            sb.add(__str(self.data[i]))
+        }
+        return sb.finish()
+    }
+    // sets every element to x
+    fn fill(self, x: T) {
+        for i in 0..self.len { self.data[i] = x }
+    }
+}
+
+fn merge_sort_by<T>(a: ptr<T>, tmp: ptr<T>, lo: int, hi: int, cmp: fn(T, T) -> int) {
+    if hi - lo < 2 { return }
+    if hi - lo <= 12 {
+        var i = lo + 1
+        while i < hi {
+            let x = a[i]
+            var j = i - 1
+            while j >= lo and cmp(a[j], x) > 0 {
+                a[j + 1] = a[j]
+                j -= 1
+            }
+            a[j + 1] = x
+            i += 1
+        }
+        return
+    }
+    let mid = (lo + hi) / 2
+    merge_sort_by(a, tmp, lo, mid, cmp)
+    merge_sort_by(a, tmp, mid, hi, cmp)
+    var i = lo
+    var j = mid
+    var k = lo
+    while i < mid and j < hi {
+        if cmp(a[j], a[i]) < 0 {
+            tmp[k] = a[j]
+            j += 1
+        } else {
+            tmp[k] = a[i]
+            i += 1
+        }
+        k += 1
+    }
+    while i < mid {
+        tmp[k] = a[i]
+        i += 1
+        k += 1
+    }
+    while j < hi {
+        tmp[k] = a[j]
+        j += 1
+        k += 1
+    }
+    for x in lo..hi { a[x] = tmp[x] }
+}
+
+// [0, 1, ..., n - 1] as an array, [] when n <= 0: range(4) == [0, 1, 2, 3]
+fn range(n: int) -> [int] {
+    if n <= 0 { return array_make::<int>(0) }
+    let r = array_make::<int>(n)
+    for i in 0..n { r.data[i] = i }
+    return r
+}
+
+// [lo, lo + 1, ..., hi - 1] as an array, [] when hi <= lo: range_from(3, 7) == [3, 4, 5, 6]
+fn range_from(lo: int, hi: int) -> [int] {
+    if hi <= lo { return array_make::<int>(0) }
+    let r = array_make::<int>(hi - lo)
+    for i in lo..hi { r.data[i - lo] = i }
+    return r
+}
+
+// a sorted copy of a (same as a.sorted())
+fn sorted<T>(a: [T]) -> [T] { return a.sorted() }
+// a reversed copy of a (same as a.reversed())
+fn reversed<T>(a: [T]) -> [T] { return a.reversed() }
+// the sum of the elements of a (same as a.sum())
+fn sum<T>(a: [T]) -> T { return a.sum() }
+
+// pairs of the elements with the same index, as many as the shorter array has: zip([1, 2], ["a", "b", "c"]) == [(1, "a"), (2, "b")]
+fn zip<A, B>(a: [A], b: [B]) -> [(A, B)] {
+    let n = min(a.len, b.len)
+    var r: [(A, B)] = []
+    for i in 0..n { r.push((a.data[i], b.data[i])) }
+    return r
+}
+
+// ---------------------------------------------------------------- maps
+// Map<K, V>: hash map that remembers insertion order.
+struct Map<K, V> {
+    keys: ptr<K>,
+    vals: ptr<V>,
+    hashes: ptr<int>,
+    index: ptr<int>,
+    count: int,
+    used: int,
+    cap: int,
+    tcap: int
+}
+
+// a new, empty map: map_new::<str, int>()
+fn map_new<K, V>() -> {K: V} {
+    return Map{ keys: nil, vals: nil, hashes: nil, index: nil, count: 0, used: 0, cap: 0, tcap: 0 }
+}
+
+fn map_to_str<K, V>(m: {K: V}) -> str {
+    var sb = str_builder()
+    sb.add_byte('{')
+    var first = true
+    for i in 0..m.used {
+        if m.hashes[i] >= 0 {
+            if not first { sb.add(", ") }
+            first = false
+            sb.add(__debug(m.keys[i]))
+            sb.add(": ")
+            sb.add(__debug(m.vals[i]))
+        }
+    }
+    sb.add_byte('}')
+    return sb.finish()
+}
+
+fn map_eq<K, V>(a: {K: V}, b: {K: V}) -> bool {
+    if a.count != b.count { return false }
+    for i in 0..a.used {
+        if a.hashes[i] >= 0 {
+            let j = b.find_entry(a.keys[i], a.hashes[i])
+            if j < 0 { return false }
+            if not __eq(a.vals[i], b.vals[j]) { return false }
+        }
+    }
+    return true
+}
+
+impl<K, V> Map<K, V> {
+    // number of keys
+    fn len(self) -> int { return self.count }
+    // true when the map has no keys
+    fn is_empty(self) -> bool { return self.count == 0 }
+    // low level: position of key (whose hash is h) in the entry arrays, -1 when it is missing
+    fn find_entry(self, key: K, h: int) -> int {
+        if self.tcap == 0 { return -1 }
+        let mask = self.tcap - 1
+        var i = h & mask
+        loop {
+            let e = self.index[i]
+            if e == 0 { return -1 }
+            if self.hashes[e - 1] == h and __eq(self.keys[e - 1], key) { return e - 1 }
+            i = (i + 1) & mask
+        }
+        return -1
+    }
+    // low level: moves the live entries into new storage with room for newcap entries
+    fn rebuild(self, newcap: int) {
+        let nk = alloc_elems::<K>(newcap)
+        let nv = alloc_elems::<V>(newcap)
+        let nh = __alloc_atomic(newcap * 8) as ptr<int>
+        let tcap = newcap * 2
+        let ni = __alloc_atomic(tcap * 8) as ptr<int>
+        var n = 0
+        for i in 0..self.used {
+            let h = self.hashes[i]
+            if h >= 0 {
+                nk[n] = self.keys[i]
+                nv[n] = self.vals[i]
+                nh[n] = h
+                var s = h & (tcap - 1)
+                while ni[s] != 0 { s = (s + 1) & (tcap - 1) }
+                ni[s] = n + 1
+                n += 1
+            }
+        }
+        self.keys = nk
+        self.vals = nv
+        self.hashes = nh
+        self.index = ni
+        self.used = n
+        self.cap = newcap
+        self.tcap = tcap
+    }
+    // stores val under key, replacing the old value of an existing key (m[key] = val does the same); a new key goes last in the order
+    fn set(self, key: K, val: V) {
+        let h = (__hash(key) & INT_MAX)
+        let e = self.find_entry(key, h)
+        if e >= 0 {
+            self.vals[e] = val
+            return
+        }
+        if self.used == self.cap {
+            var nc = 8
+            if self.count * 2 > self.cap { nc = self.cap * 2 } else if self.cap > 8 { nc = self.cap }
+            self.rebuild(nc)
+        }
+        let n = self.used
+        self.keys[n] = key
+        self.vals[n] = val
+        self.hashes[n] = h
+        var s = h & (self.tcap - 1)
+        while self.index[s] != 0 { s = (s + 1) & (self.tcap - 1) }
+        self.index[s] = n + 1
+        self.used = n + 1
+        self.count += 1
+    }
+    fn op_set_index(self, key: K, val: V) { self.set(key, val) }
+    // true when key is in the map (same as  key in m)
+    fn has(self, key: K) -> bool { return self.find_entry(key, (__hash(key) & INT_MAX)) >= 0 }
+    // same as has(key)
+    fn contains(self, key: K) -> bool { return self.has(key) }
+    fn op_contains(self, key: K) -> bool { return self.has(key) }
+    fn op_index(self, key: K) -> V {
+        let e = self.find_entry(key, (__hash(key) & INT_MAX))
+        if e < 0 { panic("key not found: " + __debug(key)) }
+        return self.vals[e]
+    }
+    // the value for key, or default when the key is missing (m[key] panics instead)
+    fn get(self, key: K, default: V) -> V {
+        let e = self.find_entry(key, (__hash(key) & INT_MAX))
+        if e < 0 { return default }
+        return self.vals[e]
+    }
+    // the value for key, or nil when the key is missing
+    fn try_get(self, key: K) -> V? {
+        let e = self.find_entry(key, (__hash(key) & INT_MAX))
+        if e < 0 { return nil }
+        return self.vals[e]
+    }
+    // removes key and its value; false when the key was not there
+    fn remove(self, key: K) -> bool {
+        let e = self.find_entry(key, (__hash(key) & INT_MAX))
+        if e < 0 { return false }
+        self.hashes[e] = -1
+        self.count -= 1
+        return true
+    }
+    // removes all keys
+    fn clear(self) {
+        self.keys = nil
+        self.vals = nil
+        self.hashes = nil
+        self.index = nil
+        self.count = 0
+        self.used = 0
+        self.cap = 0
+        self.tcap = 0
+    }
+    // the keys, in insertion order
+    fn keys(self) -> [K] {
+        let r = array_with_cap::<K>(self.count)
+        for i in 0..self.used {
+            if self.hashes[i] >= 0 { r.push(self.keys[i]) }
+        }
+        return r
+    }
+    // the values, in the insertion order of their keys
+    fn values(self) -> [V] {
+        let r = array_with_cap::<V>(self.count)
+        for i in 0..self.used {
+            if self.hashes[i] >= 0 { r.push(self.vals[i]) }
+        }
+        return r
+    }
+    // the (key, value) pairs, in insertion order
+    fn items(self) -> [(K, V)] {
+        var r: [(K, V)] = []
+        for i in 0..self.used {
+            if self.hashes[i] >= 0 { r.push((self.keys[i], self.vals[i])) }
+        }
+        return r
+    }
+    // a new map with the same keys and values (a shallow copy)
+    fn copy(self) -> {K: V} {
+        let r = map_new::<K, V>()
+        for i in 0..self.used {
+            if self.hashes[i] >= 0 { r.set(self.keys[i], self.vals[i]) }
+        }
+        return r
+    }
+}
+
+// ---------------------------------------------------------------- sets
+struct Set<T> {
+    m: {T: bool}
+}
+
+// a new, empty set: set_new::<int>()
+fn set_new<T>() -> Set<T> {
+    return Set{ m: map_new::<T, bool>() }
+}
+
+impl<T> Set<T> {
+    // adds x (nothing happens when it is already there)
+    fn add(self, x: T) { self.m.set(x, true) }
+    // true when x is in the set (same as  x in s)
+    fn has(self, x: T) -> bool { return self.m.has(x) }
+    // same as has(x)
+    fn contains(self, x: T) -> bool { return self.m.has(x) }
+    fn op_contains(self, x: T) -> bool { return self.m.has(x) }
+    // removes x; false when it was not there
+    fn remove(self, x: T) -> bool { return self.m.remove(x) }
+    // number of elements
+    fn len(self) -> int { return self.m.len() }
+    // the elements, in insertion order
+    fn items(self) -> [T] { return self.m.keys() }
+    // the elements written like an array, for example [3, 1]
+    fn to_str(self) -> str { return array_to_str(self.m.keys()) }
+}
+
+// ---------------------------------------------------------------- files, time, random
+// the whole file as a str (the bytes as they are), nil when it cannot be opened (missing, a folder, no permission)
+fn read_file(path: str) -> str? {
+    let h = CreateFileA(str_data(path), 0x80000000, 1, 0, 3, 0x80, 0)
+    if h == -1 { return nil }
+    let sz = __alloc(8) as ptr<int>
+    if GetFileSizeEx(h, sz) == 0 {
+        CloseHandle(h)
+        return nil
+    }
+    let n = sz[0]
+    let r = str_new(n)
+    let rd = __alloc(8) as ptr<int>
+    var got = 0
+    while got < n {
+        rd[0] = 0
+        if ReadFile(h, str_data(r) + got, n - got, rd, 0) == 0 or rd[0] <= 0 { break }
+        got += rd[0]
+    }
+    CloseHandle(h)
+    if got != n { return str_from_ptr(str_data(r), got) }
+    return r
+}
+
+// creates or overwrites the file with content; false when the file cannot be opened for writing
+fn write_file(path: str, content: str) -> bool {
+    let h = CreateFileA(str_data(path), 0x40000000, 0, 0, 2, 0x80, 0)
+    if h == -1 { return false }
+    write_all(h, str_data(content), str_len(content))
+    CloseHandle(h)
+    return true
+}
+
+// true when path is a file that can be opened for reading (false for folders)
+fn file_exists(path: str) -> bool {
+    let h = CreateFileA(str_data(path), 0x80000000, 1, 0, 3, 0x80, 0)
+    if h == -1 { return false }
+    CloseHandle(h)
+    return true
+}
+
+// the value of an environment variable, nil when it is not set (or set to an empty value)
+fn getenv(name: str) -> str? {
+    let buf = __alloc(32768)
+    let n = GetEnvironmentVariableA(str_data(name), buf, 32768)
+    if n <= 0 { return nil }
+    return str_from_ptr(buf, n)
+}
+
+// milliseconds since the system started
+fn time_ms() -> int { return GetTickCount64() }
+
+// high-resolution clock in seconds (use differences between two calls)
+fn clock() -> float {
+    let p = __alloc(16) as ptr<int>
+    QueryPerformanceCounter(p)
+    QueryPerformanceFrequency(p + 1)
+    return (p[0] as float) / (p[1] as float)
+}
+
+// pauses the program for ms milliseconds (buffered output is not flushed first)
+fn sleep(ms: int) { Sleep(ms) }
+
+// full path of the running program
+fn exe_path() -> str {
+    let buf = __alloc_atomic(1024)
+    let n = GetModuleFileNameA(0, buf, 1024)
+    return str_from_ptr(buf, n)
+}
+
+// the folder for temporary files, ending with a backslash
+fn temp_dir() -> str {
+    let buf = __alloc_atomic(1024)
+    let n = GetTempPathA(1024, buf)
+    return str_from_ptr(buf, n)
+}
+
+// deletes a file; false when that fails (missing, a folder, in use)
+fn delete_file(path: str) -> bool { return DeleteFileA(str_data(path)) != 0 }
+// creates one folder (its parent must exist); false when that fails, also when it already exists
+fn make_dir(path: str) -> bool { return CreateDirectoryA(str_data(path), 0) != 0 }
+
+// runs a command line and waits for it; returns its exit code (-1 if it could not be started)
+fn run_command(cmdline: str) -> int {
+    flush()
+    let si = __alloc(104) as ptr<int>
+    si[0] = 104
+    let pi = __alloc(24) as ptr<int>
+    if CreateProcessA(nil, str_data(cmdline), 0, 0, 1, 0, 0, 0, si, pi) == 0 { return -1 }
+    WaitForSingleObject(pi[0], -1)
+    let code = __alloc(8) as ptr<int>
+    GetExitCodeProcess(pi[0], code)
+    CloseHandle(pi[0])
+    CloseHandle(pi[1])
+    var c = code[0] & 0xFFFFFFFF
+    if c >= 0x80000000 { c -= 0x100000000 }
+    return c
+}
+
+// a as one command-line argument: unchanged when it has no space, tab or quote, otherwise in double quotes with \" for each quote: quote_arg("a b") == "\"a b\""
+fn quote_arg(a: str) -> str {
+    if a.len() > 0 and not a.contains(" ") and not a.contains("\t") and not a.contains("\"") { return a }
+    return "\"" + a.replace("\"", "\\\"") + "\""
+}
+
+// runs a program with arguments; returns its exit code
+fn run_process(path: str, args: [str]) -> int {
+    var cmd = quote_arg(path)
+    for a in args { cmd = cmd + " " + quote_arg(a) }
+    return run_command(cmd)
+}
+
+var rng_state: int
+
+// restarts the random numbers from seed, so the same sequence follows on every run
+fn rand_seed(seed: int) {
+    rng_state = seed * 2685821657736338717 + 88172645463325252
+    if rng_state == 0 { rng_state = 88172645463325252 }
+}
+
+// a random 64-bit int (any value, negative ones too); seeded from the clock unless rand_seed was called
+fn rand_u64() -> int {
+    if rng_state == 0 {
+        let p = __alloc(8) as ptr<int>
+        QueryPerformanceCounter(p)
+        rand_seed(p[0] ^ GetTickCount64())
+    }
+    var x = rng_state
+    x = x ^ (x << 13)
+    x = x ^ ((x >> 7) & 0x01FFFFFFFFFFFFFF)
+    x = x ^ (x << 17)
+    rng_state = x
+    return x * 2685821657736338717
+}
+
+// random integer in lo..hi (both included)
+fn rand_int(lo: int, hi: int) -> int {
+    if hi < lo { panic("rand_int: empty range") }
+    let span = hi - lo + 1
+    if span <= 0 { return rand_u64() }
+    return lo + (rand_u64() & 0x7FFFFFFFFFFFFFFF) % span
+}
+
+// random float in [0, 1)
+fn rand_float() -> float {
+    return ((rand_u64() >> 11) & 0x1FFFFFFFFFFFFF) as float / 9007199254740992.0
+}
+
+// a random element of a; panics when a is empty
+fn rand_choice<T>(a: [T]) -> T {
+    if a.len() == 0 { panic("rand_choice of an empty array") }
+    return a[rand_int(0, a.len() - 1)]
+}
+
+// puts the elements of a in random order, in place
+fn shuffle<T>(a: [T]) {
+    var i = a.len() - 1
+    while i > 0 {
+        let j = rand_int(0, i)
+        a.swap(i, j)
+        i -= 1
+    }
+}

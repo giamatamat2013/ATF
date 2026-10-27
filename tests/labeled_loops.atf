@@ -1,0 +1,45 @@
+fn find_pair(xs: [int], target: int) -> (int, int)? {
+    var result: (int, int)? = nil
+    outer: for i in 0..xs.len() {
+        for j in i + 1..xs.len() {
+            if xs[i] + xs[j] == target {
+                result = (i, j)
+                break outer
+            }
+        }
+    }
+    return result
+}
+
+fn first_negative_row(grid: [[int]]) -> int {
+    rows: for r, row in grid {
+        for v in row {
+            if v < 0 { return r }
+            if v == 0 { continue rows }
+        }
+    }
+    return -1
+}
+
+fn main() {
+    println(find_pair([1, 5, 9, 3], 12), find_pair([1, 2], 10))
+    println(first_negative_row([[1, 0, -5], [2, 3], [4, -1]]))
+    var count = 0
+    lp: loop {
+        while true {
+            count += 1
+            if count > 5 { break lp }
+            if count % 2 == 0 { continue lp }
+        }
+    }
+    println(count)
+    var log: [str] = []
+    a: for i in 0..3 {
+        defer log.push("end {i}")
+        b: for j in 0..3 {
+            if j == 1 { continue a }
+            log.push("{i},{j}")
+        }
+    }
+    println(log)
+}

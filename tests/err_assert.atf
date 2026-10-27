@@ -1,0 +1,4 @@
+fn main() {
+    let x = 3
+    assert(x == 4, "x should be 4")
+}

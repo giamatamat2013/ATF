@@ -1,0 +1,27 @@
+// modules.atf - splitting a program into several files with import.
+// Shows: import "lib/geometry" (a path relative to this file, without the .atf extension),
+//        using a struct, functions and a constant from the imported module,
+//        operator overloading (+, -, *, unary -) defined in the module.
+// Run:   python run_atf.py run examples/modules.atf
+
+import "lib/geometry"
+
+fn main() {
+    println("module constant:", GEO_ORIGIN_NAME)
+    let a = Vec(1.0, 2.0)
+    let b = Vec(4.0, 6.0)
+    println("a = {a}, b = {b}")
+    println("a + b = {a + b}, b - a = {b - a}, a * 3 = {a * 3.0}, -a = {-a}")
+    println("distance(a, b) = {geo_distance(a, b)}")
+    println("|b| = {b.length()}, a . b = {a.dot(b)}")
+
+    let square = [Vec(0.0, 0.0), Vec(4.0, 0.0), Vec(4.0, 4.0), Vec(0.0, 4.0)]
+    println("area of the square: {geo_polygon_area(square)}")
+    let triangle = [Vec(0.0, 0.0), Vec(6.0, 0.0), Vec(0.0, 8.0)]
+    println("area of the triangle: {geo_polygon_area(triangle)}")
+    var perimeter = 0.0
+    for i in 0..triangle.len() {
+        perimeter += geo_distance(triangle[i], triangle[(i + 1) % triangle.len()])
+    }
+    println("perimeter of the triangle: {perimeter}")
+}

@@ -1,0 +1,6 @@
+circle 3.14159
+rect 2.0x3.0 6.0
+int 7 7.0
+16.14159
+Circle{r: 2.0}
+true <Shape>

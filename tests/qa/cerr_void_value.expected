@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: this expression does not produce a value
+  --> cerr_void_value.atf:3:18
+ 3 |     let x = hello()
+   |                  ^
+  hint: the function called here returns nothing

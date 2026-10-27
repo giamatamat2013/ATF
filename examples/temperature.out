@@ -1,0 +1,15 @@
+ Celsius  Fahrenheit   Kelvin  note
+-------- ----------- --------  --------
+   -20.0        -4.0   253.15  freezing
+   -10.0        14.0   263.15  freezing
+     0.0        32.0   273.15  cold
+    10.0        50.0   283.15  cold
+    20.0        68.0   293.15  pleasant
+    30.0        86.0   303.15  hot
+    40.0       104.0   313.15  hot
+average of 5 readings: 20.50 C = 68.90 F
+min 18.5, max 23.75, sum 102.5
+water boils at 212.0 F
+absolute zero is -459.67 F
+body temperature 37 C is 98.6 F
+round(36.6) = 37.0, floor = 36.0, ceil = 37.0

@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: P has no field 'nmae'
+  --> cerr_unknown_field.atf:4:15
+ 4 |     println(p.nmae)
+   |               ^
+  hint: did you mean 'name'?

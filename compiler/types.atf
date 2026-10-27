@@ -1,0 +1,391 @@
+// Semantic types (port of atf/semtypes.py)
+import "util"
+import "ast"
+
+var uid_counter: int = 0
+
+fn next_uid() -> int {
+    uid_counter += 1
+    return uid_counter
+}
+
+struct Field {
+    name: str,
+    ty: Type
+}
+
+struct StructInfo {
+    id: int,
+    name: str,
+    decl: StructDecl,
+    pos: Pos,
+    prelude: bool,
+    tparams: [Type],                 // Type.Param placeholders
+    builtin: bool,                   // Array / Map from the prelude
+    cache: {str: [Field]}            // concrete fields keyed by the type-argument key
+}
+
+struct EnumInfo {
+    id: int,
+    name: str,
+    decl: EnumDecl,
+    pos: Pos,
+    prelude: bool,
+    tparams: [Type],
+    simple: bool,                    // no variant carries a payload: values are plain ints
+    vindex: {str: int},
+    cache: {str: [[Type]]},          // payload types per variant keyed by the type-argument key
+    tags: [int]
+}
+
+struct IfaceMethod {
+    name: str,
+    params: [Type],          // without self
+    ret: Type
+}
+
+struct IfaceInfo {
+    id: int,
+    name: str,
+    decl: IfaceDecl,
+    pos: Pos,
+    prelude: bool,
+    methods: [IfaceMethod]?  // resolved on first use
+}
+
+enum Type {
+    Int,
+    Float,
+    Bool,
+    Byte,
+    Str,
+    Void,
+    Never,
+    Nil,
+    Ptr(Type),
+    Tuple([Type]),
+    Func([Type], Type),
+    Opt(Type),
+    Param(str, int),                 // generic parameter: name, unique id
+    Struct(StructInfo, [Type]),
+    Enum(EnumInfo, [Type]),
+    Iface(IfaceInfo)
+}
+
+fn types_key(ts: [Type]) -> str {
+    var parts: [str] = []
+    for t in ts { parts.push(t.key()) }
+    return ",".join(parts)
+}
+
+fn types_eq(a: [Type], b: [Type]) -> bool {
+    if a.len() != b.len() { return false }
+    for i in 0..a.len() {
+        if not a[i].eq(b[i]) { return false }
+    }
+    return true
+}
+
+fn types_str(ts: [Type]) -> str {
+    var parts: [str] = []
+    for t in ts { parts.push(t.to_str()) }
+    return ", ".join(parts)
+}
+
+impl Type {
+    // canonical string: equal types have equal keys
+    fn key(self) -> str {
+        return match self {
+            Type.Int => "int"
+            Type.Float => "float"
+            Type.Bool => "bool"
+            Type.Byte => "byte"
+            Type.Str => "str"
+            Type.Void => "void"
+            Type.Never => "never"
+            Type.Nil => "nil"
+            Type.Ptr(e) => "ptr<" + e.key() + ">"
+            Type.Tuple(es) => "(" + types_key(es) + ")"
+            Type.Func(ps, r) => "fn(" + types_key(ps) + ")->" + r.key()
+            Type.Opt(i) => i.key() + "?"
+            Type.Param(n, u) => "$" + n + "#" + str(u)
+            Type.Struct(info, args) => "S" + str(info.id) + "<" + types_key(args) + ">"
+            Type.Enum(info, args) => "E" + str(info.id) + "<" + types_key(args) + ">"
+            Type.Iface(info) => "I" + str(info.id)
+        }
+    }
+
+    fn eq(self, o: Type) -> bool {
+        match self {
+            Type.Ptr(a) => {
+                match o {
+                    Type.Ptr(b) => return a.eq(b)
+                    _ => return false
+                }
+            }
+            Type.Tuple(a) => {
+                match o {
+                    Type.Tuple(b) => return types_eq(a, b)
+                    _ => return false
+                }
+            }
+            Type.Func(pa, ra) => {
+                match o {
+                    Type.Func(pb, rb) => return types_eq(pa, pb) and ra.eq(rb)
+                    _ => return false
+                }
+            }
+            Type.Opt(a) => {
+                match o {
+                    Type.Opt(b) => return a.eq(b)
+                    _ => return false
+                }
+            }
+            Type.Param(na, ua) => {
+                match o {
+                    Type.Param(nb, ub) => return ua == ub and na == nb
+                    _ => return false
+                }
+            }
+            Type.Struct(ia, aa) => {
+                match o {
+                    Type.Struct(ib, ab) => return ia.id == ib.id and types_eq(aa, ab)
+                    _ => return false
+                }
+            }
+            Type.Enum(ia, aa) => {
+                match o {
+                    Type.Enum(ib, ab) => return ia.id == ib.id and types_eq(aa, ab)
+                    _ => return false
+                }
+            }
+            Type.Iface(ia) => {
+                match o {
+                    Type.Iface(ib) => return ia.id == ib.id
+                    _ => return false
+                }
+            }
+            _ => return self.tag_index() == o.tag_index()
+        }
+    }
+
+    fn tag_index(self) -> int {
+        return match self {
+            Type.Int => 0
+            Type.Float => 1
+            Type.Bool => 2
+            Type.Byte => 3
+            Type.Str => 4
+            Type.Void => 5
+            Type.Never => 6
+            Type.Nil => 7
+            Type.Ptr(e) => 8
+            Type.Tuple(e) => 9
+            Type.Func(p, r) => 10
+            Type.Opt(i) => 11
+            Type.Param(n, u) => 12
+            Type.Struct(i, a) => 13
+            Type.Enum(i, a) => 14
+            Type.Iface(i) => 15
+        }
+    }
+
+    fn hash(self) -> int { return str_hash(self.key()) }
+
+    // human readable form used in error messages
+    fn to_str(self) -> str {
+        return match self {
+            Type.Int => "int"
+            Type.Float => "float"
+            Type.Bool => "bool"
+            Type.Byte => "byte"
+            Type.Str => "str"
+            Type.Void => "void"
+            Type.Never => "never"
+            Type.Nil => "nil"
+            Type.Ptr(e) => "ptr<" + e.to_str() + ">"
+            Type.Tuple(es) => "(" + types_str(es) + ")"
+            Type.Func(ps, r) => {
+                var s = "fn(" + types_str(ps) + ")"
+                if not r.eq(Type.Void) { s = s + " -> " + r.to_str() }
+                s
+            }
+            Type.Opt(i) => i.to_str() + "?"
+            Type.Param(n, u) => n
+            Type.Struct(info, args) => struct_type_str(info, args)
+            Type.Enum(info, args) => {
+                if args.len() > 0 { info.name + "<" + types_str(args) + ">" } else { info.name }
+            }
+            Type.Iface(info) => info.name
+        }
+    }
+
+    fn is_prim_num(self) -> bool {
+        return match self {
+            Type.Int => true
+            Type.Float => true
+            Type.Byte => true
+            _ => false
+        }
+    }
+}
+
+fn struct_type_str(info: StructInfo, args: [Type]) -> str {
+    if info.name == "Array" and info.builtin and args.len() == 1 { return "[" + args[0].to_str() + "]" }
+    if info.name == "Map" and info.builtin and args.len() == 2 { return "{" + args[0].to_str() + ": " + args[1].to_str() + "}" }
+    if args.len() > 0 { return info.name + "<" + types_str(args) + ">" }
+    return info.name
+}
+
+fn is_numeric(t: Type) -> bool { return t.is_prim_num() }
+
+fn is_intlike(t: Type) -> bool {
+    return t.eq(Type.Int) or t.eq(Type.Byte)
+}
+
+fn is_opt(t: Type) -> bool {
+    return match t {
+        Type.Opt(i) => true
+        _ => false
+    }
+}
+
+fn is_ptr(t: Type) -> bool {
+    return match t {
+        Type.Ptr(e) => true
+        _ => false
+    }
+}
+
+// replace Param placeholders using the mapping (keyed by Param key)
+fn subst(t: Type, m: {str: Type}) -> Type {
+    if m.len() == 0 { return t }
+    return match t {
+        Type.Param(n, u) => m.get(t.key(), t)
+        Type.Ptr(e) => Type.Ptr(subst(e, m))
+        Type.Opt(i) => {
+            let r = subst(i, m)
+            if is_opt(r) { r } else { Type.Opt(r) }
+        }
+        Type.Tuple(es) => Type.Tuple(subst_all(es, m))
+        Type.Func(ps, r) => Type.Func(subst_all(ps, m), subst(r, m))
+        Type.Struct(info, args) => {
+            if args.len() > 0 { Type.Struct(info, subst_all(args, m)) } else { t }
+        }
+        Type.Enum(info, args) => {
+            if args.len() > 0 { Type.Enum(info, subst_all(args, m)) } else { t }
+        }
+        _ => t
+    }
+}
+
+fn subst_all(ts: [Type], m: {str: Type}) -> [Type] {
+    var out: [Type] = []
+    for t in ts { out.push(subst(t, m)) }
+    return out
+}
+
+fn has_params(t: Type) -> bool {
+    return match t {
+        Type.Param(n, u) => true
+        Type.Ptr(e) => has_params(e)
+        Type.Opt(i) => has_params(i)
+        Type.Tuple(es) => any_params(es)
+        Type.Func(ps, r) => any_params(ps) or has_params(r)
+        Type.Struct(info, args) => any_params(args)
+        Type.Enum(info, args) => any_params(args)
+        _ => false
+    }
+}
+
+fn any_params(ts: [Type]) -> bool {
+    for t in ts {
+        if has_params(t) { return true }
+    }
+    return false
+}
+
+// Match `pattern` (which may contain Param placeholders) against `actual`, filling binds.
+fn unify(pattern: Type, actual: Type, binds: {str: Type}) -> bool {
+    match pattern {
+        Type.Param(n, u) => {
+            let k = pattern.key()
+            let cur = binds.try_get(k)
+            if cur != nil { return cur!.eq(actual) }
+            binds[k] = actual
+            return true
+        }
+        _ => {}
+    }
+    if not has_params(pattern) { return pattern.eq(actual) }
+    match pattern {
+        Type.Ptr(pe) => {
+            match actual {
+                Type.Ptr(ae) => return unify(pe, ae, binds)
+                _ => return false
+            }
+        }
+        Type.Opt(pi) => {
+            match actual {
+                Type.Opt(ai) => return unify(pi, ai, binds)
+                _ => return unify(pi, actual, binds)
+            }
+        }
+        Type.Tuple(pes) => {
+            match actual {
+                Type.Tuple(aes) => return unify_all(pes, aes, binds)
+                _ => return false
+            }
+        }
+        Type.Func(pps, pr) => {
+            match actual {
+                Type.Func(aps, ar) => return unify_all(pps, aps, binds) and unify(pr, ar, binds)
+                _ => return false
+            }
+        }
+        Type.Struct(pi, pargs) => {
+            match actual {
+                Type.Struct(ai, aargs) => return pi.id == ai.id and unify_all(pargs, aargs, binds)
+                _ => return false
+            }
+        }
+        Type.Enum(pi, pargs) => {
+            match actual {
+                Type.Enum(ai, aargs) => return pi.id == ai.id and unify_all(pargs, aargs, binds)
+                _ => return false
+            }
+        }
+        _ => return false
+    }
+}
+
+fn unify_all(ps: [Type], as_: [Type], binds: {str: Type}) -> bool {
+    if ps.len() != as_.len() { return false }
+    for i in 0..ps.len() {
+        if not unify(ps[i], as_[i], binds) { return false }
+    }
+    return true
+}
+
+// shared instances of the primitive types
+let TInt = Type.Int
+let TFloat = Type.Float
+let TBool = Type.Bool
+let TByte = Type.Byte
+let TStr = Type.Str
+let TVoid = Type.Void
+let TNever = Type.Never
+let TNil = Type.Nil
+
+fn prim_type(name: str) -> Type? {
+    return match name {
+        "int" => TInt
+        "float" => TFloat
+        "bool" => TBool
+        "byte" => TByte
+        "str" => TStr
+        "void" => TVoid
+        "never" => TNever
+        _ => nil
+    }
+}

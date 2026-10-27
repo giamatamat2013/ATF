@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: unterminated string (use """ for multi-line strings)
+  --> cerr_unterminated_str.atf:2:13
+ 2 |     println("hello)
+   |             ^

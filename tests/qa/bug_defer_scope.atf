@@ -1,0 +1,16 @@
+// a deferred statement is re-checked at every exit point instead of where it was written:
+// it sees variables declared after it (should be a compile error) and later shadowing declarations
+var trace: [str] = []
+fn log(s: str) { trace.push(s) }
+
+fn shadow() {
+    let x = "outer"
+    defer log(x)
+    let x = "inner"
+    log("body " + x)
+}
+
+fn main() {
+    shadow()
+    println(trace)
+}

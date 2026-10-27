@@ -1,0 +1,7 @@
+name? Hello, World!
+skip: abc
+total = 60
+true true
+true true
+["line one", "line two"] true false
+true

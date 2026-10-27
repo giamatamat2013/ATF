@@ -1,0 +1,11 @@
+shape                      area  perimeter
+circle                    7.069      9.425
+rectangle                12.000     14.000
+square                    4.000      8.000
+triangle                  6.000     12.000
+equilateral triangle      1.732      6.000
+total area: 30.801
+Shape.Rect(3.0, 4.0)
+Shape.Circle(3.0)
+triangle area 600.0 (was 6.0)
+largest: rectangle with area 12.00

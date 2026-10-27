@@ -1,0 +1,3 @@
+[exit 1]
+[stderr] panic: tried to unwrap a nil value (use  x ?? default  or  if let v = x )
+  at main (err_unwrap.atf:3)

@@ -1,0 +1,26 @@
+// the value of 'return x' must be computed before the defers run (like 'return f()' already is);
+// actual: for a plain variable (or field) the defers run first and change the returned value
+struct C { n: int }
+
+fn plain() -> int {
+    var x = 1
+    defer x = 5
+    return x
+}
+
+fn expr() -> int {
+    var x = 1
+    defer x = 5
+    return x + 0
+}
+
+fn field(c: C) -> int {
+    defer c.n += 100
+    return c.n
+}
+
+fn main() {
+    println(plain(), expr())
+    let c = C(7)
+    println(field(c), c.n)
+}

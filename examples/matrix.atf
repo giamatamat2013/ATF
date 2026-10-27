@@ -1,0 +1,114 @@
+// matrix.atf - matrices as arrays of arrays: multiplication, transpose, powers.
+// Shows: [[float]] / [[int]], nested loops, operator overloading (op_mul, op_add), to_str.
+// Run:   python run_atf.py run examples/matrix.atf
+
+struct Matrix {
+    rows: int,
+    cols: int,
+    data: [[int]]
+}
+
+impl Matrix {
+    fn zero(rows: int, cols: int) -> Matrix {
+        var data: [[int]] = []
+        for r in 0..rows {
+            data.push(array_make::<int>(cols))
+        }
+        return Matrix(rows, cols, data)
+    }
+
+    fn identity(n: int) -> Matrix {
+        let m = Matrix.zero(n, n)
+        for i in 0..n { m.data[i][i] = 1 }
+        return m
+    }
+
+    fn from_rows(rows: [[int]]) -> Matrix {
+        return Matrix(rows.len(), rows[0].len(), rows)
+    }
+
+    fn transpose(self) -> Matrix {
+        let t = Matrix.zero(self.cols, self.rows)
+        for r in 0..self.rows {
+            for c in 0..self.cols {
+                t.data[c][r] = self.data[r][c]
+            }
+        }
+        return t
+    }
+
+    fn op_add(self, o: Matrix) -> Matrix {
+        let m = Matrix.zero(self.rows, self.cols)
+        for r in 0..self.rows {
+            for c in 0..self.cols {
+                m.data[r][c] = self.data[r][c] + o.data[r][c]
+            }
+        }
+        return m
+    }
+
+    // the * operator: matrix product
+    fn op_mul(self, o: Matrix) -> Matrix {
+        if self.cols != o.rows { panic("cannot multiply {self.rows}x{self.cols} by {o.rows}x{o.cols}") }
+        let m = Matrix.zero(self.rows, o.cols)
+        for i in 0..self.rows {
+            for j in 0..o.cols {
+                var sum = 0
+                for k in 0..self.cols {
+                    sum += self.data[i][k] * o.data[k][j]
+                }
+                m.data[i][j] = sum
+            }
+        }
+        return m
+    }
+
+    fn pow(self, n: int) -> Matrix {
+        var result = Matrix.identity(self.rows)
+        var base = self
+        var e = n
+        while e > 0 {
+            if e % 2 == 1 { result = result * base }
+            base = base * base
+            e = e / 2
+        }
+        return result
+    }
+
+    // used when a Matrix is printed or interpolated
+    fn to_str(self) -> str {
+        var lines: [str] = []
+        for row in self.data {
+            var cells: [str] = []
+            for x in row { cells.push(pad_left(str(x), 4)) }
+            lines.push("[" + "".join(cells) + " ]")
+        }
+        return "\n".join(lines)
+    }
+}
+
+fn main() {
+    let a = Matrix.from_rows([[1, 2, 3], [4, 5, 6]])
+    let b = Matrix.from_rows([[7, 8], [9, 10], [11, 12]])
+    println("A =")
+    println(a)
+    println("B =")
+    println(b)
+    println("A * B =")
+    println(a * b)
+    println("B * A =")
+    println(b * a)
+    println("transpose of A =")
+    println(a.transpose())
+    println("A + A =")
+    println(a + a)
+
+    // Fibonacci numbers from matrix powers: [[1,1],[1,0]]^n holds F(n)
+    let fibm = Matrix.from_rows([[1, 1], [1, 0]])
+    println("fibonacci matrix ^ 10 =")
+    println(fibm.pow(10))
+    println("F(50) =", fibm.pow(50).data[0][1])
+
+    // the identity matrix changes nothing
+    println("A * I == A ?", (a * Matrix.identity(3)).data == a.data)
+}

@@ -1,0 +1,14 @@
+struct P { x: int }
+fn f(a: int, b: int) -> int { return a + b }
+fn g() -> int { }
+fn main() {
+    let p = P{ x: 1, y: 2 }
+    f(1)
+    f(1, 2, 3)
+    p.z = 5
+    let q = 5
+    q = 6
+    if q { }
+    for i in 3.5 { }
+    break
+}

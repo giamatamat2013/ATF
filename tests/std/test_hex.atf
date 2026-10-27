@@ -1,0 +1,70 @@
+// tests for std/hex
+import "std/hex"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {quote_str(got)}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {quote_str(got)}, want {quote_str(want)}")
+    }
+}
+
+fn show(r: Result<str, str>) -> str {
+    return match r {
+        Result.Ok(v) => "Ok(" + hex_encode(v) + ")"
+        Result.Err(e) => "Err(" + e + ")"
+    }
+}
+
+fn main() -> int {
+    // RFC 4648 base16 vectors
+    let plain = ["", "f", "fo", "foo", "foob", "fooba", "foobar"]
+    let enc = ["", "66", "666F", "666F6F", "666F6F62", "666F6F6261", "666F6F626172"]
+    for i in 0..plain.len() {
+        check("encode upper " + quote_str(plain[i]), hex_encode(plain[i], upper: true), enc[i])
+        check("encode lower " + quote_str(plain[i]), hex_encode(plain[i]), enc[i].lower())
+        check("decode " + quote_str(enc[i]), hex_decode(enc[i]).unwrap(), plain[i])
+        check("decode lower " + quote_str(enc[i].lower()), hex_decode(enc[i].lower()).unwrap(), plain[i])
+    }
+    check("encode binary", hex_encode("\x00\x01\x7f\x80\xfe\xff"), "00017f80feff")
+    check("encode binary upper", hex_encode("\x00\x01\x7f\x80\xfe\xff", true), "00017F80FEFF")
+    check("decode mixed case", hex_encode(hex_decode("DeAdBeEf").unwrap()), "deadbeef")
+    check("decode 0x prefix", hex_encode(hex_decode("0xCAFE").unwrap()), "cafe")
+    check("decode spaces", hex_encode(hex_decode("de ad\tbe\nef").unwrap()), "deadbeef")
+    check("encode utf8", hex_encode("é☺"), "c3a9e298ba")
+
+    // all 256 bytes round trip
+    var sb = str_builder()
+    for i in 0..256 { sb.add_byte(byte(i)) }
+    let all = sb.finish()
+    let all_hex = hex_encode(all)
+    println("all bytes:", all_hex.len(), all_hex[0..20], all_hex[all_hex.len() - 20..], hex_decode(all_hex).unwrap() == all)
+
+    // bytes variants
+    let arr: [byte] = [byte(1), byte(171), byte(205), byte(239)]
+    check("encode bytes", hex_encode_bytes(arr), "01abcdef")
+    check("encode bytes upper", hex_encode_bytes(arr, upper: true), "01ABCDEF")
+    println("decode bytes:", hex_decode_bytes("01abcdef").unwrap())
+    println("decode bytes error:", hex_decode_bytes("0g").err())
+
+    // errors
+    println("odd length:", show(hex_decode("abc")))
+    println("bad digit:", show(hex_decode("12zz")))
+    println("bad byte:", show(hex_decode("12\x01")))
+    println("space inside byte:", show(hex_decode("1 2")))
+    println("only prefix:", show(hex_decode("0x")))
+    println("empty:", show(hex_decode("")))
+
+    // hex dump
+    print(hex_dump("Hello, hex dump!\n\x00\x01\x02\xff ATF"))
+    print(hex_dump("exactly sixteen!"))
+    print(hex_dump("short"))
+    print(hex_dump(""))
+    println("(end of dumps)")
+
+    println("failures:", failures)
+    return failures
+}

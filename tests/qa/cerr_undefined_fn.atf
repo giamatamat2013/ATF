@@ -1,0 +1,4 @@
+fn compute_sum(a: int) -> int { return a }
+fn main() {
+    println(compute_summ(1))
+}

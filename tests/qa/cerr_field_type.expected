@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected int but found str
+  --> cerr_field_type.atf:3:27
+ 3 |     let p = P{ name: "x", age: "old" }
+   |                           ^
+  hint: use int(s) or float(s) to convert text to a number

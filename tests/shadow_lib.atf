@@ -1,0 +1,31 @@
+// a program may reuse the names of library functions, constants and globals;
+// the library keeps using its own definitions
+fn sum(a: [int]) -> int {
+    var t = 0
+    for x in a { t += x * 10 }
+    return t
+}
+
+fn abs(x: int) -> str { return "mine" }
+
+fn min(a: str, b: str) -> str { return a + b }
+
+const PI = 3
+var E = "e"
+
+enum Mode { A, B }
+
+fn main() {
+    println(sum([1, 2]))
+    println(abs(-5))
+    println(gcd(-12, 18))
+    println(min("x", "y"))
+    println(zip([1, 2, 3], ["a", "b"]).len())
+    println(PI * 2, E)
+    E = "changed"
+    println(E)
+    println([1, 2, 3].sum(), 7.abs(), 4.min(2))
+    let f = sum
+    println(f([5]))
+    println(Mode.B == Mode.B)
+}

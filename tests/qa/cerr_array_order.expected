@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: values of type [int] cannot be ordered with < > <= >=
+  --> cerr_array_order.atf:2:20
+ 2 |     println([1, 2] < [1, 3])
+   |                    ^
+  hint: define  fn cmp(self, other: [int]) -> int  in an impl block (negative, zero, or positive)

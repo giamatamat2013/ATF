@@ -1,0 +1,4 @@
+struct P { name: str, age: int }
+fn main() {
+    let p = P{ name: "x", age: "old" }
+}

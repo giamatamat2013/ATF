@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: expected a variable name but found keyword 'step'
+  --> cerr_keyword_name.atf:2:9
+ 2 |     let step = 2
+   |         ^
+  hint: 'step' is a reserved word

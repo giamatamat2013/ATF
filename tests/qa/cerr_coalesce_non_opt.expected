@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: '??' needs an optional value on the left (like  int? ), found int
+  --> cerr_coalesce_non_opt.atf:3:15
+ 3 |     println(x ?? 3)
+   |               ^

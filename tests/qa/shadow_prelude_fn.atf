@@ -1,0 +1,2 @@
+fn sum(a: [int]) -> int { return 0 }
+fn main() { println(sum([1])) }

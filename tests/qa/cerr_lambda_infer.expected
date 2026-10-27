@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: cannot infer the type of parameter 'x'
+  --> cerr_lambda_infer.atf:2:13
+ 2 |     let f = |x| x + 1
+   |             ^
+  hint: annotate it:  |x: int| ...

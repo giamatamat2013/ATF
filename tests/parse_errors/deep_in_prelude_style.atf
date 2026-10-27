@@ -1,0 +1,8 @@
+struct A { x: int }
+
+impl A {
+    fn ok(self) -> int { return 1 }
+    fn bad(self) -> int {
+        return self.x +
+    }
+}

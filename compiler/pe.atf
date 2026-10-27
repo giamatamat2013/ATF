@@ -1,0 +1,252 @@
+// Writes a Windows x64 PE console executable from raw machine code + data (port of atf/pe.py).
+import "util"
+import "x64"
+
+const PE_IMAGE_BASE = 0x140000000
+const PE_SECTION_ALIGN = 0x1000
+const PE_FILE_ALIGN = 0x200
+
+fn pe_align(v: int, a: int) -> int {
+    return (v + a - 1) / a * a
+}
+
+// symbol location: section ("text" | "rdata" | "data") and offset inside it
+struct Symbol {
+    section: str,
+    offset: int
+}
+
+struct DllImports {
+    dll: str,
+    fns: [str]
+}
+
+struct Image {
+    text: Bytes,
+    text_relocs: [Reloc],          // (pos, symbol, after, addend)
+    rdata: Bytes,
+    data_size: int,
+    symbols: {str: Symbol},        // name -> (section, offset)
+    imports: {str: [str]},         // dll -> [function names]   (insertion ordered)
+    entry: int,                    // text offset of the entry point
+    stack_reserve: int,
+    stack_commit: int
+}
+
+fn new_image() -> Image {
+    return Image(bytes_new(), [], bytes_new(), 0, {}, {}, 0, 256 * 1024 * 1024, 1024 * 1024)
+}
+
+// overwrite bytes of buf at pos with the characters of s
+fn put_str(buf: Bytes, pos: int, s: str) {
+    for i in 0..s.len() { buf.data[pos + i] = byte(s.byte_at(i)) }
+}
+
+fn put_u16(buf: Bytes, pos: int, v: int) {
+    buf.data[pos] = byte(v & 255)
+    buf.data[pos + 1] = byte((v >> 8) & 255)
+}
+
+impl Image {
+    fn import_sym(self, dll: str, name: str) -> str {
+        var lst: [str] = []
+        let cur = self.imports.try_get(dll)
+        if cur == nil {
+            self.imports[dll] = lst
+        } else {
+            lst = cur!
+        }
+        if not (name in lst) { lst.push(name) }
+        return "imp:" + dll + "!" + name
+    }
+
+    fn build(self) -> Bytes {
+        // ---- import table inside .rdata -----------------------------------
+        var dlls: [DllImports] = []
+        for dll in self.imports.keys() { dlls.push(DllImports(dll, self.imports[dll])) }
+        var idata = bytes_new()
+        var iat_start = 0
+        var iat_end = 0
+        var ilt: {str: int} = {}
+        var iat: {str: int} = {}
+        var hn: {str: int} = {}              // key: dll + "!" + function
+        var dn: {str: int} = {}
+        var iat_pos: {str: int} = {}         // (dll,name) -> offset in rdata
+        if dlls.len() > 0 {
+            var off = (dlls.len() + 1) * 20
+            for d in dlls {
+                ilt[d.dll] = off
+                off += (d.fns.len() + 1) * 8
+            }
+            iat_start = off
+            for d in dlls {
+                iat[d.dll] = off
+                off += (d.fns.len() + 1) * 8
+            }
+            iat_end = off
+            for d in dlls {
+                for f in d.fns {
+                    hn[d.dll + "!" + f] = off
+                    off += pe_align(2 + f.len() + 1, 2)
+                }
+            }
+            for d in dlls {
+                dn[d.dll] = off
+                off += d.dll.len() + 1
+            }
+            idata.zeros(off)
+        }
+        let idata_size = idata.len()
+        let user_rdata_off = pe_align(idata_size, 16)
+
+        // ---- layout --------------------------------------------------------
+        let headers_size = 0x400
+        let text_rva = PE_SECTION_ALIGN
+        let text_vsize = max(self.text.len(), 1)
+        let rdata_rva = text_rva + pe_align(text_vsize, PE_SECTION_ALIGN)
+        let rdata_total = user_rdata_off + self.rdata.len()
+        let rdata_vsize = max(rdata_total, 1)
+        let data_rva = rdata_rva + pe_align(rdata_vsize, PE_SECTION_ALIGN)
+        let data_vsize = max(self.data_size, 16)
+        let image_size = data_rva + pe_align(data_vsize, PE_SECTION_ALIGN)
+
+        // fill the import structures now that rdata_rva is known
+        for i in 0..dlls.len() {
+            let d = dlls[i]
+            let dll = d.dll
+            idata.set_u32(i * 20, rdata_rva + ilt[dll])
+            idata.set_u32(i * 20 + 4, 0)
+            idata.set_u32(i * 20 + 8, 0)
+            idata.set_u32(i * 20 + 12, rdata_rva + dn[dll])
+            idata.set_u32(i * 20 + 16, rdata_rva + iat[dll])
+            for j in 0..d.fns.len() {
+                let f = d.fns[j]
+                let p = rdata_rva + hn[dll + "!" + f]
+                idata.set_u64(ilt[dll] + j * 8, p)
+                idata.set_u64(iat[dll] + j * 8, p)
+                iat_pos[dll + "!" + f] = iat[dll] + j * 8
+                put_str(idata, hn[dll + "!" + f] + 2, f)
+            }
+            put_str(idata, dn[dll], dll)
+        }
+
+        let rdata = bytes_new()
+        rdata.append(idata)
+        rdata.zeros(user_rdata_off - rdata.len())
+        rdata.append(self.rdata)
+
+        // ---- symbol resolution --------------------------------------------
+        var sym_rva: {str: int} = {}
+        for name in self.symbols.keys() {
+            let s = self.symbols[name]
+            var base = 0
+            if s.section == "text" { base = text_rva }
+            else if s.section == "rdata" { base = rdata_rva + user_rdata_off }
+            else if s.section == "data" { base = data_rva }
+            else { panic("pe: unknown section " + s.section) }
+            sym_rva[name] = base + s.offset
+        }
+        for key in iat_pos.keys() {
+            sym_rva["imp:" + key] = rdata_rva + iat_pos[key]
+        }
+        let text = bytes_new()
+        text.append(self.text)
+        for r in self.text_relocs {
+            let target = sym_rva[r.sym] + r.addend
+            let nxt = text_rva + r.pos + 4 + r.after
+            text.set_u32(r.pos, target - nxt)
+        }
+
+        // ---- write file ----------------------------------------------------
+        let text_raw = pe_align(text.len(), PE_FILE_ALIGN)
+        let rdata_raw = pe_align(rdata.len(), PE_FILE_ALIGN)
+        let text_fo = headers_size
+        let rdata_fo = text_fo + text_raw
+        let out = bytes_new()
+
+        // DOS header
+        out.zeros(0x80)
+        out.data[0] = 'M'
+        out.data[1] = 'Z'
+        out.set_u32(0x3C, 0x80)
+        out.raw("PE")
+        out.u16(0)
+        let nsec = 3
+        out.u16(0x8664)
+        out.u16(nsec)
+        out.u32(0)
+        out.u32(0)
+        out.u32(0)
+        out.u16(0xF0)
+        out.u16(0x0022)
+        // optional header (PE32+)
+        let opt_start = out.len()
+        out.u16(0x20B)
+        out.u8(14)
+        out.u8(0)
+        out.u32(text_raw)
+        out.u32(rdata_raw)
+        out.u32(0)
+        out.u32(text_rva + self.entry)
+        out.u32(text_rva)
+        out.u64(PE_IMAGE_BASE)
+        out.u32(PE_SECTION_ALIGN)
+        out.u32(PE_FILE_ALIGN)
+        out.u16(6)
+        out.u16(0)
+        out.u16(0)
+        out.u16(0)
+        out.u16(6)
+        out.u16(0)
+        out.u32(0)
+        out.u32(image_size)
+        out.u32(headers_size)
+        out.u32(0)
+        out.u16(3)
+        out.u16(0x8100 | 0x0000)                  // console; NX_COMPAT | TERMINAL_SERVER_AWARE
+        out.u64(self.stack_reserve)
+        out.u64(self.stack_commit)
+        out.u64(1 << 20)
+        out.u64(1 << 12)
+        out.u32(0)
+        out.u32(16)
+        var dd_rva: [int] = array_make::<int>(16)
+        var dd_size: [int] = array_make::<int>(16)
+        if dlls.len() > 0 {
+            dd_rva[1] = rdata_rva
+            dd_size[1] = (dlls.len() + 1) * 20
+            dd_rva[12] = rdata_rva + iat_start
+            dd_size[12] = iat_end - iat_start
+        }
+        for i in 0..16 {
+            out.u32(dd_rva[i])
+            out.u32(dd_size[i])
+        }
+        if out.len() - opt_start != 0xF0 { panic("pe: bad optional header size " + str(out.len() - opt_start)) }
+        // section headers
+        pe_section_header(out, ".text", text.len(), text_rva, text_raw, text_fo, 0x60000020)
+        pe_section_header(out, ".rdata", rdata.len(), rdata_rva, rdata_raw, rdata_fo, 0x40000040)
+        pe_section_header(out, ".data", data_vsize, data_rva, 0, 0, 0xC0000080)
+        out.zeros(headers_size - out.len())
+        out.append(text)
+        out.zeros(text_raw - text.len())
+        out.append(rdata)
+        out.zeros(rdata_raw - rdata.len())
+        return out
+    }
+}
+
+fn pe_section_header(out: Bytes, name: str, vsize: int, rva: int, rsize: int, fo: int, flags: int) {
+    let start = out.len()
+    out.zeros(8)
+    put_str(out, start, name)
+    out.u32(vsize)
+    out.u32(rva)
+    out.u32(rsize)
+    out.u32(fo)
+    out.u32(0)
+    out.u32(0)
+    out.u16(0)
+    out.u16(0)
+    out.u32(flags)
+}

@@ -1,0 +1,33 @@
+X X X
+O O .
+. . .
+=> X wins
+
+X O X
+O X O
+O X O
+=> draw
+
+X O X
+X O O
+O X X
+=> draw
+
+X . O
+. X .
+O . .
+=> game continues
+
+. . .
+. . .
+. . .
+=> game continues
+
+empty board with perfect play: score 0 (0 means a draw)
+X to move, best move: 2
+O to move, best move: 2
+self-play moves: [0, 4, 1, 2, 6, 3, 5, 7, 8]
+X X O
+O O X
+X O X
+=> draw

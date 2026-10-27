@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: array elements must all have the same type: found int and str
+  --> cerr_array_mixed.atf:2:17
+ 2 |     let a = [1, "two", 3]
+   |                 ^

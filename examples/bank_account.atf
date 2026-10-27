@@ -1,0 +1,87 @@
+// bank_account.atf - a bank account with deposits, withdrawals and error handling.
+// Shows: structs, methods in impl blocks, Result<T, E> and the ? operator, arrays of structs.
+// Run:   python run_atf.py run examples/bank_account.atf
+
+struct Account {
+    owner: str,
+    balance: int,      // in cents, to avoid float rounding problems
+    history: [str]
+}
+
+fn money(cents: int) -> str {
+    let sign = if cents < 0 { "-" } else { "" }
+    let c = abs(cents)
+    return "{sign}${c / 100}.{pad_zero(str(c % 100), 2)}"
+}
+
+impl Account {
+    fn open(owner: str, initial: int) -> Account {
+        let a = Account{ owner: owner, balance: 0, history: [] }
+        a.history.push("opened by {owner}")
+        if initial > 0 { a.deposit(initial) }
+        return a
+    }
+
+    fn deposit(self, amount: int) -> Result<int, str> {
+        if amount <= 0 { return Result.Err("deposit must be positive") }
+        self.balance += amount
+        self.history.push("deposit  {money(amount)}")
+        return Result.Ok(self.balance)
+    }
+
+    fn withdraw(self, amount: int) -> Result<int, str> {
+        if amount <= 0 { return Result.Err("withdrawal must be positive") }
+        if amount > self.balance {
+            return Result.Err("insufficient funds: balance {money(self.balance)}, requested {money(amount)}")
+        }
+        self.balance -= amount
+        self.history.push("withdraw {money(amount)}")
+        return Result.Ok(self.balance)
+    }
+}
+
+// moves money between two accounts; stops at the first error thanks to `?`
+fn transfer(from: Account, to: Account, amount: int) -> Result<int, str> {
+    from.withdraw(amount)?
+    to.deposit(amount)?
+    return Result.Ok(amount)
+}
+
+fn report(r: Result<int, str>) {
+    match r {
+        Result.Ok(v) => println("  ok, balance is now {money(v)}")
+        Result.Err(e) => println("  error: {e}")
+    }
+}
+
+fn main() {
+    let alice = Account.open("Alice", 10000)
+    let bob = Account.open("Bob", 2550)
+
+    println("deposit 25.50 to Alice")
+    report(alice.deposit(2550))
+    println("withdraw 500.00 from Alice")
+    report(alice.withdraw(50000))
+    println("withdraw 0.99 from Bob")
+    report(bob.withdraw(99))
+    println("deposit -5 to Bob")
+    report(bob.deposit(-5))
+
+    println("transfer 40.00 from Alice to Bob")
+    match transfer(alice, bob, 4000) {
+        Result.Ok(n) => println("  moved {money(n)}")
+        Result.Err(e) => println("  failed: {e}")
+    }
+    println("transfer 1000.00 from Bob to Alice")
+    match transfer(bob, alice, 100000) {
+        Result.Ok(n) => println("  moved {money(n)}")
+        Result.Err(e) => println("  failed: {e}")
+    }
+
+    for acc in [alice, bob] {
+        println("{acc.owner}: {money(acc.balance)}")
+        for line in acc.history {
+            println("    - {line}")
+        }
+    }
+}

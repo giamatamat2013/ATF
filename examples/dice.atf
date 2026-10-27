@@ -1,0 +1,68 @@
+// dice.atf - random dice statistics with a fixed seed (so the output is reproducible).
+// Shows: rand_seed, rand_int, rand_float, rand_choice, shuffle, maps of counts, histograms.
+// Run:   python run_atf.py run examples/dice.atf
+
+fn roll() -> int { return rand_int(1, 6) }
+
+fn main() {
+    rand_seed(2024)
+
+    // 6000 rolls of one die
+    let rolls = 6000
+    let counts = array_make::<int>(7)
+    for i in 0..rolls { counts[roll()] += 1 }
+    println("one die, {rolls} rolls:")
+    for face in 1..=6 {
+        let c = counts[face]
+        let bar = "#".repeat(c / 50)
+        println("  {face}: {c:>4} {bar}")
+    }
+
+    // sum of two dice
+    let sums: {int: int} = {}
+    for i in 0..36000 {
+        let s = roll() + roll()
+        sums[s] = sums.get(s, 0) + 1
+    }
+    var keys = sums.keys()
+    keys.sort()
+    println("two dice, 36000 rolls (expected counts are 1000 * ways):")
+    for s in keys {
+        let c = sums[s]
+        let bar = "#".repeat(c / 250)
+        println("  {s:>2}: {c:>5} {bar}")
+    }
+
+    // how many rolls until the first six? average over many games
+    var total_rolls = 0
+    let games = 10000
+    for g in 0..games {
+        var n = 1
+        while roll() != 6 { n += 1 }
+        total_rolls += n
+    }
+    println("average rolls until a six: {float(total_rolls) / float(games):.3f} (theory: 6)")
+
+    // rand_float is uniform in [0, 1): estimate pi by throwing darts at a square
+    var inside = 0
+    let darts = 200000
+    for i in 0..darts {
+        let x = rand_float()
+        let y = rand_float()
+        if x * x + y * y < 1.0 { inside += 1 }
+    }
+    println("pi is about {4.0 * float(inside) / float(darts):.3f}")
+
+    // picking and shuffling
+    let names = ["Ann", "Bob", "Cy", "Di", "Ed"]
+    println("lucky one: {rand_choice(names)}")
+    let deck = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    shuffle(deck)
+    println("shuffled: {deck}")
+    println("same seed, same numbers:")
+    rand_seed(5)
+    let first = [roll(), roll(), roll(), roll()]
+    rand_seed(5)
+    let second = [roll(), roll(), roll(), roll()]
+    println("  {first} == {second} ? {first == second}")
+}

@@ -1,0 +1,25 @@
+[  Hello,   World!  ]
+[Hello,   World!] trim
+[Hello, World!] squeeze
+HELLO,   WORLD! hello,   world! 15
+The Quick Brown Fox
+vowels in 'the quick brown fox': 5
+words: ["the", "quick", "brown", "fox"] count: 4
+find 'quick': 4  find 'cat': -1  rfind 'o': 17
+slices: quick the fox QUICK
+starts with 'the'? true  ends with 'dog'? false
+replace: the_slow_brown_fox
+count of 'o': 2  reversed: xof nworb kciuq eht
+repeat: abababab -=-=-=-=-=
+pad: [  7] [7  ] [007]
+palindrome? A man, a plan, a ... -> true
+palindrome? Hello                -> false
+palindrome? Was it a car or a... -> true
+Dwwdfn dw Gdzq! -> Attack at Dawn!
+anagrams: true true false
+ord('A') = 65  chr(97) = a  chr(955) = λ
+codes of 'Hi!': [72, 105, 33]
+1234 46 7.0
+nil -17 42 255
+6
+ff 11111111 255

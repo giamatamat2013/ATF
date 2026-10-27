@@ -1,0 +1,59 @@
+// collatz.atf - the Collatz (3n + 1) problem: step counts and the longest chain below a limit.
+// Shows: while loops, integer arithmetic, an array used as a cache, tuples as return values.
+// Run:   python run_atf.py run examples/collatz.atf
+
+fn collatz_steps(n: int) -> int {
+    var steps = 0
+    var x = n
+    while x != 1 {
+        if x % 2 == 0 { x = x / 2 } else { x = 3 * x + 1 }
+        steps += 1
+    }
+    return steps
+}
+
+fn chain(n: int) -> [int] {
+    var out = [n]
+    var x = n
+    while x != 1 {
+        x = if x % 2 == 0 { x / 2 } else { 3 * x + 1 }
+        out.push(x)
+    }
+    return out
+}
+
+// the starting number below `limit` with the most steps, and its step count.
+// `cache[i]` remembers the steps of i, which makes the search much faster.
+fn longest_below(limit: int) -> (int, int) {
+    let cache = array_make::<int>(limit)
+    var best_n = 1
+    var best_steps = 0
+    for n in 2..limit {
+        var x = n
+        var steps = 0
+        // walk until we reach a number whose answer is already known
+        while x >= n {
+            x = if x % 2 == 0 { x / 2 } else { 3 * x + 1 }
+            steps += 1
+        }
+        steps += cache[x]
+        cache[n] = steps
+        if steps > best_steps {
+            best_steps = steps
+            best_n = n
+        }
+    }
+    return (best_n, best_steps)
+}
+
+fn main() {
+    println("chain of 6:", chain(6))
+    println("chain of 27 has {chain(27).len()} numbers, the highest is {chain(27).max()}")
+    for n in [1, 2, 3, 7, 27, 97, 871] {
+        println("steps({n}) = {collatz_steps(n)}")
+    }
+
+    let (n, steps) = longest_below(1000000)
+    println("below one million the longest chain starts at {n} and takes {steps} steps")
+    println("(checked directly: {collatz_steps(n)})")
+}

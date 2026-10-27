@@ -1,0 +1,106 @@
+// tests for std/base64
+import "std/base64"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {quote_str(got)}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {quote_str(got)}, want {quote_str(want)}")
+    }
+}
+
+fn show(r: Result<str, str>) -> str {
+    return match r {
+        Result.Ok(v) => "Ok(" + quote_str(v) + ")"
+        Result.Err(e) => "Err(" + e + ")"
+    }
+}
+
+fn all_bytes() -> str {
+    var sb = str_builder()
+    for i in 0..256 { sb.add_byte(byte(i)) }
+    return sb.finish()
+}
+
+fn main() -> int {
+    // RFC 4648 section 10 test vectors
+    let plain = ["", "f", "fo", "foo", "foob", "fooba", "foobar"]
+    let enc = ["", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy"]
+    for i in 0..plain.len() {
+        check("encode " + quote_str(plain[i]), b64_encode(plain[i]), enc[i])
+        check("decode " + quote_str(enc[i]), b64_decode(enc[i]).unwrap(), plain[i])
+    }
+    // unpadded input decodes too
+    check("decode unpadded Zm9vYg", b64_decode("Zm9vYg").unwrap(), "foob")
+    check("decode unpadded Zm8", b64_decode("Zm8").unwrap(), "fo")
+    // whitespace is ignored
+    check("decode with newlines", b64_decode("Zm9v\r\nYmFy\n").unwrap(), "foobar")
+    check("decode with spaces", b64_decode(" Zm 9v Ym Fy ").unwrap(), "foobar")
+    // longer text
+    let lorem = "Man is distinguished, not only by his reason, but by this singular passion from other animals."
+    let lorem_b64 = "TWFuIGlzIGRpc3Rpbmd1aXNoZWQsIG5vdCBvbmx5IGJ5IGhpcyByZWFzb24sIGJ1dCBieSB0aGlzIHNpbmd1bGFyIHBhc3Npb24gZnJvbSBvdGhlciBhbmltYWxzLg=="
+    check("encode lorem", b64_encode(lorem), lorem_b64)
+    check("decode lorem", b64_decode(lorem_b64).unwrap(), lorem)
+    // UTF-8 text
+    check("encode utf8", b64_encode("שלום ☺"), "16nXnNeV150g4pi6")
+    check("decode utf8", b64_decode("16nXnNeV150g4pi6").unwrap(), "שלום ☺")
+
+    // binary data: all 256 byte values round-trip
+    let bin = all_bytes()
+    let bin_enc = b64_encode(bin)
+    println("all bytes encoded length:", bin_enc.len())
+    println("all bytes encoded prefix:", bin_enc[0..40])
+    println("all bytes encoded suffix:", bin_enc[bin_enc.len() - 40..])
+    println("all bytes round trip:", b64_decode(bin_enc).unwrap() == bin)
+    // round trip of every length 0..40 of a binary pattern
+    var rt_ok = true
+    for n in 0..40 {
+        let s = bin[200..200 + n]
+        if b64_decode(b64_encode(s)).unwrap() != s { rt_ok = false }
+        if b64_decode_url(b64_encode_url(s)).unwrap() != s { rt_ok = false }
+        if b64_decode_url(b64_encode_url(s, pad: true)).unwrap() != s { rt_ok = false }
+    }
+    println("round trip lengths 0..39:", rt_ok)
+
+    // URL-safe alphabet
+    let tricky = "\xfb\xff\xbf"
+    check("std encode of fb ff bf", b64_encode(tricky), "+/+/")
+    check("url encode of fb ff bf", b64_encode_url(tricky), "-_-_")
+    check("url encode no pad", b64_encode_url("\xfb\xff"), "-_8")
+    check("url encode pad", b64_encode_url("\xfb\xff", pad: true), "-_8=")
+    println("url decode matches:", b64_decode_url("-_-_").unwrap() == tricky)
+    println("url chars rejected by std decoder:", show(b64_decode("-_-_")))
+    println("std chars rejected by url decoder:", show(b64_decode_url("+/+/")))
+
+    // bytes variants
+    let arr: [byte] = [byte(0), byte(1), byte(254), byte(255)]
+    check("encode bytes", b64_encode_bytes(arr), "AAH+/w==")
+    println("decode bytes:", b64_decode_bytes("AAH+/w==").unwrap())
+    println("decode bytes error:", b64_decode_bytes("A").err())
+    let empty: [byte] = []
+    check("encode empty bytes", b64_encode_bytes(empty), "")
+    println("decode empty bytes:", b64_decode_bytes("").unwrap())
+
+    // errors
+    println("bad char:", show(b64_decode("Zm9v!mFy")))
+    println("bad byte:", show(b64_decode("Zm9v\x01")))
+    println("one char:", show(b64_decode("Z")))
+    println("five chars:", show(b64_decode("Zm9vY")))
+    println("padding in middle:", show(b64_decode("Zg==Zg==")))
+    println("too much padding:", show(b64_decode("Zg===")))
+    println("wrong padding:", show(b64_decode("Zm8==")))
+    println("non-canonical bits:", show(b64_decode("Zh==")))
+    println("only padding:", show(b64_decode("====")))
+    println("valid:", b64_is_valid("Zm9vYmFy"), b64_is_valid("Zm9vYmF"), b64_is_valid("Zm9vYmE"), b64_is_valid("@@@@"))
+
+    // a big input (exercises the string builder growth)
+    let big = "abc" * 100000
+    let big_enc = b64_encode(big)
+    println("big:", big_enc.len(), big_enc[0..8], b64_decode(big_enc).unwrap() == big)
+
+    println("failures:", failures)
+    return failures
+}

@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: cannot find module 'std/nope'
+  --> cerr_import_std_missing.atf:1:1
+ 1 | import "std/nope"
+   | ^
+  hint: imports are relative to this file, or  import "std/name"  for the standard library

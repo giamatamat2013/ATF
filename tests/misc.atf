@@ -1,0 +1,125 @@
+import "lib/mathx"
+
+var counter = 0
+let names = ["ann", "bob"]
+const LIMIT = 3 * 4
+
+enum Dir { Up, Down, Left, Right }
+impl Dir {
+    fn opposite(self) -> Dir {
+        return match self {
+            Dir.Up => Dir.Down
+            Dir.Down => Dir.Up
+            Dir.Left => Dir.Right
+            Dir.Right => Dir.Left
+        }
+    }
+    fn is_vertical(self) -> bool { return self == Dir.Up or self == Dir.Down }
+}
+
+struct Grid {
+    w: int,
+    h: int,
+    cells: [[int]]
+}
+
+impl Grid {
+    fn new(w: int, h: int) -> Grid {
+        var cells: [[int]] = []
+        for y in 0..h {
+            var row: [int] = []
+            for x in 0..w { row.push(x * y) }
+            cells.push(row)
+        }
+        return Grid(w, h, cells)
+    }
+    fn total(self) -> int {
+        var t = 0
+        for row in self.cells { for c in row { t += c } }
+        return t
+    }
+}
+
+fn tick() { counter += 1 }
+
+fn with_defer() {
+    defer println("deferred 1")
+    defer println("deferred 2")
+    println("body")
+}
+
+fn early(n: int) -> int {
+    defer println("leaving early({n})")
+    if n > 5 { return 100 }
+    return n
+}
+
+fn main() {
+    println(square(5), cube(3), TAU)
+    tick()
+    tick()
+    println(counter, names, LIMIT)
+    println(Dir.Up.opposite(), Dir.Left.is_vertical(), Dir.Down.is_vertical())
+    let g = Grid.new(4, 3)
+    println(g.total(), g.cells)
+    with_defer()
+    println(early(3), early(9))
+    // shadowing and scopes
+    let x = 1
+    {
+        let x = 2
+        println(x)
+    }
+    println(x)
+    // nested loops with break/continue
+    var found = 0
+    for i in 1..10 {
+        if i % 2 == 0 { continue }
+        for j in 1..10 {
+            if j > i { break }
+            if i * j == 21 { found = i * 100 + j }
+        }
+    }
+    println(found)
+    // while with complex condition
+    var a = 0
+    var b = 10
+    while a < 5 and b > 5 { a += 1; b -= 1 }
+    println(a, b)
+    // loop/break value pattern
+    var n = 0
+    loop {
+        n += 3
+        if n > 20 { break }
+    }
+    println(n)
+    // sets
+    let s = set_new::<int>()
+    for v in [3, 1, 3, 2, 1] { s.add(v) }
+    println(s.len(), s.has(2), s.has(9), s.items())
+    // string iteration
+    var cnt = 0
+    for ch in "hello world" { if ch == "o" { cnt += 1 } }
+    println(cnt)
+    for i, ch in "abc" { print("{i}={ch} ") }
+    println()
+    // array of arrays, map of arrays
+    var groups: {str: [int]} = {}
+    for i in 0..10 {
+        let key = if i % 2 == 0 { "even" } else { "odd" }
+        if not (key in groups) { groups[key] = [] }
+        groups[key].push(i)
+    }
+    println(groups)
+    for k, v in groups { println(k, v.sum()) }
+    // swap & array methods
+    var arr = [1, 2, 3, 4, 5]
+    arr.swap(0, 4)
+    arr.insert(2, 99)
+    let removed = arr.remove(0)
+    println(arr, removed, arr.len(), arr[1..3], arr[..2], arr[3..])
+    arr.reverse()
+    println(arr, arr.first(), arr.last(), arr + [7, 8])
+    // integer parse & conversions
+    println(int("-42") + 1, "12" + "34", str(12) + "34", float("1.5") + 1.0)
+}

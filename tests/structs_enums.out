@@ -1,0 +1,17 @@
+4 3 2 1 total 10
+2 "b" "a" nil
+(2.0, 3.0) (-2.0, -3.0)
+v is (2.0, 3.0)
+-10
+Expr.Add(Expr.Num(2), Expr.Mul(Expr.Num(3), Expr.Neg(Expr.Num(4))))
+Level.Mid 10 true
+0 zero
+2 small
+7 medium
+-5 negative
+100 large
+(1, "two", 3.0) 1 two 3.0
+30
+min 1 max 9
+true false
+true false

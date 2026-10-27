@@ -1,0 +1,11 @@
+stack size: 5  top: 25
+popped in reverse order: [25, 16, 9, 4, 1]
+pop from empty: nil
+queue size: 4
+first out: "ann" then "bob"
+rest: ["cy", "di", "ed"]
+(a + b) * [c - {d}]  balanced: true
+(]                   balanced: false
+((())                balanced: false
+{[()()]}             balanced: true
+                     balanced: true

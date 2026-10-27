@@ -1,0 +1,5 @@
+before
+caught: "invalid memory access (a nil pointer or memory that was never allocated)"
+[exit 1]
+[stderr] panic: invalid memory access (a nil pointer or memory that was never allocated)
+  in main (err_nilptr.atf)

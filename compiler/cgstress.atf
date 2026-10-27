@@ -1,0 +1,326 @@
+// Exercises as many code generator paths as possible (arithmetic with constants / variables / globals / memory
+// operands, division by powers of two, shifts, float math and comparisons, boxed variables, closures, stack
+// arguments, intrinsics, register pressure ...).  Used to compare the Python and the stage 1 code generators
+// byte for byte (build/irdump.py + compiler/cgcheck.atf) and the output of both executables.
+struct P { x: int, y: float, name: str, ok: bool, next: P? }
+
+struct F3 { a: float, b: float, c: float }
+
+enum Shape { Circle(float), Rect(float, float), Dot }
+
+var g_int: int = 7
+var g_int2: int = 100
+var g_flt: float = 2.5
+var g_flt2: float = -0.5
+var g_str: str = "global"
+var g_arr: [int] = [5, 4, 3, 2, 1]
+var g_barr: [byte] = [1, 2, 3, 250]
+var g_farr: [float] = [1.5, 2.5, 3.5]
+
+fn many_args(a: int, b: int, c: int, d: int, e: int, f: int, g: int) -> int {
+    return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7
+}
+
+fn mixed_args(a: int, x: float, b: int, y: float, c: int, z: float, d: int, w: float) -> float {
+    return float(a) + x * 2.0 + float(b) * 3.0 + y * 4.0 + float(c) * 5.0 + z * 6.0 + float(d) * 7.0 + w * 8.0
+}
+
+fn float_args5(a: float, b: float, c: float, d: float, e: float, f: float) -> float {
+    return a - b + c * d - e / f
+}
+
+fn divs(a: int) -> str {
+    return "{a / 2} {a / 4} {a / 8} {a / 1024} {a / 1073741824} {a % 2} {a % 8} {a % 1024} {a / 3} {a % 3} {a / -1} {a / 7} {a % 7} {a / 1}"
+}
+
+fn divv(a: int, b: int) -> str {
+    return "{a / b} {a % b}"
+}
+
+fn shifts(a: int, n: int) -> str {
+    return "{a << 1} {a << 5} {a >> 1} {a >> 7} {a >>> 1} {a >>> 9} {a << n} {a >> n} {a >>> n} {1 << n} {a << 0} {a >> 63} {a >>> 63}"
+}
+
+fn bits(a: int, b: int) -> str {
+    return "{a & b} {a | b} {a ^ b} {~a} {-a} {a & 255} {a | 4096} {a ^ 65535} {a & -16} {a & g_int} {g_int | a} {a ^ g_int2} {a + g_int} {g_int2 - a} {a * g_int} {g_int * a} {a * 8} {a * 100000} {3 * a}"
+}
+
+fn cmps(a: int, b: int) -> str {
+    var s = ""
+    if a == b { s += "eq " }
+    if a != b { s += "ne " }
+    if a < b { s += "lt " }
+    if a <= b { s += "le " }
+    if a > b { s += "gt " }
+    if a >= b { s += "ge " }
+    if a == 0 { s += "z0 " }
+    if a != 0 { s += "nz0 " }
+    if a < 10 { s += "lt10 " }
+    if 10 < a { s += "10lt " }
+    if g_int == a { s += "geq " }
+    if g_int < a { s += "glt " }
+    if a > g_int2 { s += "gtg2 " }
+    if g_int == g_int2 { s += "gg " }
+    if g_int < g_int2 { s += "gglt " }
+    if a < b and b < 100 { s += "and1 " }
+    if a < b or b < 100 { s += "or1 " }
+    if not (a < b) { s += "not1 " }
+    if (a < b and a > 0) or (b < 0 and a < 0) { s += "mix " }
+    let t = a < b
+    let u = a == b or b > 3
+    let v = a < b and (b > 3 or a == 0)
+    s += "{t} {u} {v}"
+    return s
+}
+
+fn fcmps(a: float, b: float) -> str {
+    var s = ""
+    if a == b { s += "feq " }
+    if a != b { s += "fne " }
+    if a < b { s += "flt " }
+    if a <= b { s += "fle " }
+    if a > b { s += "fgt " }
+    if a >= b { s += "fge " }
+    if a < 1.0 { s += "flt1 " }
+    if 2.0 >= a { s += "2ge " }
+    if g_flt < a { s += "gflt " }
+    if a == a { s += "self " }
+    if a != a { s += "nan " }
+    let t = a < b
+    let u = a == b
+    let v = a != b
+    let w = a >= b
+    s += "{t} {u} {v} {w}"
+    return s
+}
+
+fn floats(a: float, b: float) -> str {
+    let n = 3
+    return "{a + b} {a - b} {a * b} {a / b} {a + 1.5} {a * 2.0} {1.5 - a} {10.0 / b} {-a} {g_flt + a} {a * g_flt} {a / g_flt2} {sqrt(a * a)} {floor(a)} {ceil(a)} {trunc(b)} {fabs(-a)} {float(n) * a} {int(a * 3.0)} {a + float(n)} {0.0 - a}"
+}
+
+fn byte_ops(a: byte, b: byte) -> str {
+    let c = a + b
+    let d = a * b
+    return "{a} {b} {c} {d} {byte(300 + int(a))} {int(a) + int(b)} {a == b} {a < b}"
+}
+
+fn counter() -> fn() -> int {
+    var n = 0
+    return || {
+        n += 1
+        return n
+    }
+}
+
+fn fcounter(inc: float) -> fn() -> float {
+    var total = 0.0
+    return || {
+        total += inc
+        return total
+    }
+}
+
+fn adder5(a: int, b: int, c: int, d: int, e: int) -> fn(int, int, int, int, int) -> int {
+    return |p, q, r, s, t| a * p + b * q + c * r + d * s + e * t
+}
+
+fn pressure(n: int) -> int {
+    var a = 1
+    var b = 2
+    var c = 3
+    var d = 4
+    var e = 5
+    var f = 6
+    var g = 7
+    var h = 8
+    var i = 9
+    var j = 10
+    var x = 0.5
+    var y = 1.5
+    var z = 2.5
+    var u = 3.5
+    var v = 4.5
+    var w = 5.5
+    var xs = 6.5
+    var ys = 7.5
+    var zs = 8.5
+    var us = 9.5
+    var vs = 10.5
+    var k = 0
+    while k < n {
+        a += b
+        b += c
+        c += d
+        d += e
+        e += f
+        f += g
+        g += h
+        h += i
+        i += j
+        j += k
+        x = x + y * z - u / v
+        y = y + w
+        z = z * 1.0001
+        u = u + xs
+        v = v + ys + zs
+        w = w - us * vs
+        xs = xs + 0.25
+        ys = ys - 0.125
+        zs = zs + x
+        us = us + 1.0
+        vs = vs * 1.00001
+        k += 1
+    }
+    return (a ^ b ^ c ^ d ^ e ^ f ^ g ^ h ^ i ^ j) + int(x + y + z + u + v + w + xs + ys + zs + us + vs) % 1000
+}
+
+fn modify(arr: [int], bs: [byte], fs: [float], n: int) {
+    for i in 0..arr.len() {
+        arr[i] = arr[i] * 2 + n
+        arr[i] += 1
+        arr[i] -= n
+    }
+    arr[0] = n
+    arr[arr.len() - 1] = g_int
+    arr[1] = arr[0] + arr[2]
+    for i in 0..bs.len() {
+        bs[i] = byte(int(bs[i]) + n)
+        bs[i] = byte(7)
+    }
+    bs[0] = byte(n)
+    bs[1] = 200
+    for i in 0..fs.len() {
+        fs[i] = fs[i] * 2.0
+        fs[i] += 0.5
+    }
+    fs[0] = 9.25
+    fs[2] = fs[1] + g_flt
+    g_arr[2] = n
+    g_farr[1] = 3.0
+    g_barr[3] = byte(n)
+}
+
+fn structs(n: int) -> str {
+    let p = P{ x: n, y: 1.25, name: "pp", ok: true, next: nil }
+    let q = P{ x: n + 1, y: p.y * 2.0, name: g_str, ok: p.x > 3, next: p }
+    q.x += 5
+    q.y = q.y + p.y
+    p.next = q
+    let f = F3{ a: 1.0, b: 2.0, c: p.y }
+    f.b += f.c
+    let sh = [Shape.Circle(2.0), Shape.Rect(2.0, 3.0), Shape.Dot]
+    var area = 0.0
+    for s in sh {
+        match s {
+            Shape.Circle(r) => area += 3.0 * r * r
+            Shape.Rect(w, h) => area += w * h
+            Shape.Dot => area += 0.5
+        }
+    }
+    return "{p.x} {q.x} {q.y} {q.ok} {q.name} {f.b} {area} {p.next!.x} {q.next!.name}"
+}
+
+fn tuples(a: int, b: float) -> (int, float, str) {
+    let t = (a * 2, b + 1.0, "t")
+    return t
+}
+
+fn opts(n: int) -> int {
+    var o: int? = nil
+    if n > 3 { o = n }
+    let p = o ?? -1
+    var s = 0
+    if let v = o { s = v * 2 }
+    return p + s
+}
+
+fn closures() -> str {
+    let c1 = counter()
+    let c2 = counter()
+    c1()
+    c1()
+    let fc = fcounter(0.5)
+    fc()
+    fc()
+    var local = 10
+    let add = |x: int| {
+        local += x
+        return local
+    }
+    add(1)
+    add(2)
+    let a5 = adder5(1, 2, 3, 4, 5)
+    var fl = 1.5
+    let ff = |x: float| {
+        fl = fl + x
+        return fl * 2.0
+    }
+    ff(1.0)
+    return "{c1()} {c2()} {fc()} {local} {a5(1, 1, 1, 1, 1)} {fl} {ff(0.5)}"
+}
+
+fn strings(n: int) -> str {
+    var s = "a"
+    for i in 0..n { s += str(i) + "," }
+    let t = s + "|" + g_str
+    return "{t} {t.len()} {t == s} {t != s} {s < t}"
+}
+
+fn intrinsics(n: int) -> str {
+    let buf = __alloc(32) as ptr<byte>
+    __memset(buf, 65, 8)
+    buf[3] = 66
+    __memcpy(buf + 8, buf, 8)
+    var s = ""
+    for i in 0..16 { s += chr(buf[i]) }
+    return "{s} {__popcnt(n)} {__clz(n)} {__ctz(n)} {__fabs(-1.5)} {__trunc(-2.7)} {__f2bits(1.0)} {__bits2f(4611686018427387904)}"
+}
+
+fn deep(a: int, b: int, c: int) -> int {
+    return ((a + b) * (c - a) + (b * c) / (a + 1)) % 1000 + (a * b + c * a) * (b - c) + many_args(a, b, c, a + b, b + c, a * c, a - b)
+}
+
+fn main() {
+    println(many_args(1, 2, 3, 4, 5, 6, 7), many_args(g_int, g_int2, 3, 4, 5, 6, 7), many_args(deep(1, 2, 3), 2, 3, 4, 5, 6, deep(3, 2, 1)))
+    println(mixed_args(1, 2.0, 3, 4.0, 5, 6.0, 7, 8.0), float_args5(1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
+    for a in [0, 1, -1, 7, -7, 100, -100, 1000000007, -1000000007, 9223372036854775807] {
+        println(divs(a))
+        println(shifts(a, 3), shifts(a, 61))
+        println(bits(a, 12345), bits(a, -3))
+    }
+    for p in [(5, 3), (-5, 3), (5, -3), (-5, -3), (100, 7), (0, 5), (7, 7)] {
+        println(divv(p.0, p.1), cmps(p.0, p.1))
+    }
+    let nan = 0.0 / 0.0
+    for p in [(1.0, 2.0), (2.0, 1.0), (1.5, 1.5), (-0.0, 0.0), (nan, 1.0), (1.0, nan), (nan, nan), (0.5, 3.0)] {
+        println(fcmps(p.0, p.1), floats(p.0, p.1))
+    }
+    println(byte_ops(200, 100), byte_ops(3, 4))
+    println(pressure(10), pressure(1000))
+    let arr = [1, 2, 3, 4, 5]
+    let bs: [byte] = [10, 20, 30]
+    let fs = [1.0, 2.0, 3.0]
+    modify(arr, bs, fs, 9)
+    println(arr, bs, fs, g_arr, g_barr, g_farr)
+    println(structs(5), structs(1))
+    println(tuples(3, 1.5))
+    println(opts(1), opts(5))
+    println(closures())
+    println(strings(5))
+    println(intrinsics(40), intrinsics(1 << 40))
+    println(deep(5, 6, 7), deep(1, 2, 3))
+    var m: {str: int} = {}
+    m["a"] = 1
+    m["b"] = m["a"] + 1
+    var total = 0
+    for k, v in m { total += v * 10 }
+    println(total, m)
+    var big = 0
+    for i in 0..1000 {
+        if i % 3 == 0 { continue }
+        if i > 900 { break }
+        big += i * i % 7
+    }
+    println(big)
+}

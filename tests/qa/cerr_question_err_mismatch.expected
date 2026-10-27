@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: the error types differ: str vs int
+  --> cerr_question_err_mismatch.atf:3:16
+ 3 |     let x = a()?
+   |                ^

@@ -1,0 +1,42 @@
+// struct patterns: positional P(a, b), by name P{ x: 0, y }, nested, with guards and in if let
+struct P { x: int, y: int }
+struct Line { a: P, b: P }
+enum E { A(int), B(str, int), C }
+fn kind(p: P) -> str {
+    return match p {
+        P(0, 0) => "origin"
+        P{ x: 0, y } => "on the y axis at {y}"
+        P{ y: 0, .. } => "on the x axis"
+        P(x, y) if x == y => "diagonal"
+        _ => "somewhere"
+    }
+}
+fn main() {
+    let t = (1, "a")
+    match t {
+        (0, s) => println("zero", s)
+        (n, "a") => println("a with", n)
+        _ => println("other")
+    }
+    for p in [P(0, 0), P(0, 5), P(3, 0), P(2, 2), P(1, 9)] { println(kind(p)) }
+    let l = Line(P(1, 2), P(1, 7))
+    match l {
+        Line{ a: P{ x: ax, .. }, b: P(bx, by) } if ax == bx => println("vertical, ends at", bx, by)
+        _ => println("not vertical")
+    }
+    if let P{ x: 1, y } = P(1, 42) { println("if let got", y) }
+    let es = [E.A(1), E.B("q", 2), E.C]
+    for e in es {
+        match e {
+            E.A(n) if n > 0 => println("positive A", n)
+            E.A(_) => println("A")
+            E.B(s, n) => println("B", s, n)
+            E.C => println("C")
+        }
+    }
+    let o: int? = 3
+    match o {
+        nil => println("none")
+        v => println("some", v)
+    }
+}

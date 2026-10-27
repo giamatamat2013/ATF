@@ -1,0 +1,200 @@
+// tests for std/json
+import "std/json"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+// parse and print compactly (or the error)
+fn pj(text: str) -> str {
+    return match json_parse(text) {
+        Result.Ok(v) => json_stringify(v)
+        Result.Err(e) => "ERR " + e
+    }
+}
+
+fn round_trip(label: str, text: str, want: str) {
+    check(label, pj(text), want)
+}
+
+fn main() -> int {
+    // ---- scalars
+    round_trip("null", "null", "null")
+    round_trip("true", "true", "true")
+    round_trip("false", " false ", "false")
+    round_trip("zero", "0", "0")
+    round_trip("negative zero int", "-0", "0")
+    round_trip("int", "12345", "12345")
+    round_trip("negative int", "-987", "-987")
+    round_trip("int max", "9223372036854775807", "9223372036854775807")
+    round_trip("int min", "-9223372036854775808", "-9223372036854775808")
+    round_trip("int max + 1 becomes float", "9223372036854775808", "9.223372036854776e+18")
+    round_trip("huge int becomes float", "123456789012345678901234567890", "1.2345678901234568e+29")
+    round_trip("float", "3.25", "3.25")
+    round_trip("float neg", "-0.5", "-0.5")
+    round_trip("float exp", "1e3", "1000.0")
+    round_trip("float exp+", "2.5E+2", "250.0")
+    round_trip("float exp-", "25e-1", "2.5")
+    round_trip("float small", "1.5e-10", "1.5e-10")
+    round_trip("float big", "1e300", "1e+300")
+    round_trip("float zero", "0.0", "0.0")
+    round_trip("negative zero float", "-0.0", "-0.0")
+    round_trip("string", "\"hello\"", "\"hello\"")
+    round_trip("empty string", "\"\"", "\"\"")
+    round_trip("escapes", "\"a\\\"b\\\\c\\/d\\n\\t\\r\\b\\f\"", "\"a\\\"b\\\\c/d\\n\\t\\r\\b\\f\"")
+    round_trip("unicode escape", "\"\\u00e9\\u263A\"", "\"é☺\"")
+    round_trip("surrogate pair", "\"\\ud83d\\ude00\"", "\"😀\"")
+    round_trip("escaped nul", "\"a\\u0000b\"", "\"a\\u0000b\"")
+    round_trip("raw utf8", "\"שלום\"", "\"שלום\"")
+
+    // ---- containers
+    round_trip("empty array", "[]", "[]")
+    round_trip("empty object", "\{}", "\{}")
+    round_trip("spaces in empty", "[ \n ]", "[]")
+    round_trip("array", "[1, 2.5, \"x\", true, false, null]", "[1,2.5,\"x\",true,false,null]")
+    round_trip("nested", " \{ \"a\" : [ 1 , \{ \"b\" : \{ } } ] , \"c\":\"d\" } ", "\{\"a\":[1,\{\"b\":\{}}],\"c\":\"d\"}")
+    round_trip("key order kept", "\{\"z\":1,\"a\":2,\"m\":3}", "\{\"z\":1,\"a\":2,\"m\":3}")
+    round_trip("duplicate key keeps last", "\{\"a\":1,\"b\":2,\"a\":3}", "\{\"a\":3,\"b\":2}")
+    round_trip("whitespace everywhere", "\r\n\t[\r\n\t1\r\n\t,\r\n\t2\r\n\t]\r\n\t", "[1,2]")
+    round_trip("byte order mark", "\xef\xbb\xbf[1]", "[1]")
+    check("deep nesting ok", str(pj("[" * 500 + "]" * 500) == "[" * 500 + "]" * 500), "true")
+
+    // ---- errors (message with line and column)
+    let bad = [
+        "", "   ", "nul", "nulll", "True", "[1,]", "[1 2]", "\{\"a\":1,}", "\{\"a\" 1}", "\{a:1}", "\{'a':1}",
+        "'x'", "[1", "\{\"a\":1", "\"abc", "\"a\nb\"", "\"a\tb\"", "\"\\x\"", "\"\\u12\"", "\"\\u12G4\"",
+        "\"\\ud800\"", "\"\\ud800\\u0041\"", "\"\\udc00\"", "01", "-", "-a", "1.", ".5", "1e", "1e+", "+1",
+        "[1] x", "1 2", "\{}}", "]", "[1,\n2,\n  @]", "\{\"key\": \"value\"\n  \"next\": 1}", "\x01",
+        "[" * 1001 + "]" * 1001, "NaN", "Infinity", "[\"é\" , é]"
+    ]
+    for b in bad {
+        let shown = if b.len() > 30 { b[0..20] + "...({b.len()} bytes)" } else { b }
+        println("error for {quote_str(shown)}: {pj(b)}")
+    }
+
+    // ---- stringify
+    let doc = json_object()
+    doc.set("name", json_str("Ada \"the first\" Lovelace"))
+    doc.set("born", json_int(1815))
+    doc.set("height", json_float(1.65))
+    doc.set("tags", json_str_array(["math", "poet\nry"]))
+    doc.set("empty_list", json_array())
+    doc.set("empty_obj", json_object())
+    doc.set("nothing", json_null())
+    doc.set("ok", json_bool(true))
+    let inner = json_object()
+    inner.set("x", json_int_array([1, 2, 3]))
+    inner.set("y", json_float_array([0.5, -2.0]))
+    doc.set("inner", inner)
+    println(json_stringify(doc))
+    println(json_stringify(doc, 2))
+    println(json_stringify(doc, indent: 4, sort_keys: true))
+    println(json_stringify(json_str("é ☺ 😀 \x7f \x01"), ascii_only: true))
+    println(json_stringify(json_str("bad utf8 \xff\xfe"), ascii_only: true))
+    println(json_quote("tab\there"), json_quote("\u{1F600}", true))
+    println(json_stringify(json_float_array([0.1, 1e21, 1e-7, 100.0, -0.0])))
+    let zero = 0.0
+    println(json_stringify(json_float_array([zero / zero, 1.0 / zero, -1.0 / zero])))
+    println("to_str via println:", doc.get("tags"), doc)
+    println("interpolation: {inner}")
+
+    // round trip of the pretty form
+    let again = json_parse(json_stringify(doc, 2)).unwrap()
+    println("pretty round trip equal:", again == doc, json_stringify(again) == json_stringify(doc))
+    let again2 = json_parse(json_stringify(json_str("é ☺ 😀 \x7f \x01"), ascii_only: true)).unwrap()
+    println("ascii round trip:", again2.as_str()! == "é ☺ 😀 \x7f \x01")
+
+    // ---- accessors
+    let v = json_parse("""{"users": [{"name": "Ann", "age": 31, "admin": true, "score": 9.5},
+                                   {"name": "Bob", "age": 25.0, "tags": ["x", "y"]}],
+                         "count": 2, "meta": {"ver": "1.2", "list": [[1, 2], [3, 4]]}, "nil": null}""").unwrap()
+    println("kind:", v.kind(), v.get("users")!.kind(), v.get("count")!.kind(), v.get("nil")!.kind(), v.query("users[0].score")!.kind(), v.query("users[0].name")!.kind(), v.query("users[0].admin")!.kind())
+    println("is:", v.is_object(), v.is_array(), v.get("users")!.is_array(), v.get("count")!.is_number(), v.get("count")!.is_int(),
+            v.query("users[0].score")!.is_number(), v.query("users[0].score")!.is_int(), v.get("nil")!.is_null(), v.query("users[0].name")!.is_str(), v.query("users[0].admin")!.is_bool())
+    println("len:", v.len(), v.get("users")!.len(), v.query("users[0].name")!.len(), v.get("count")!.len())
+    println("keys:", v.keys(), v.get("users")!.at(0)!.keys(), v.get("count")!.keys())
+    println("has:", v.has("meta"), v.has("nope"), v.get("users")!.has("x"))
+    println("query:", v.query("users[1].name"), v.query("meta.list[1][0]"), v.query("users[-1].tags[-1]"), v.query("meta.ver"))
+    println("query missing:", v.query("users[5].name"), v.query("nope.x"), v.query("users.name"), v.query("users[x]"), v.query("users[0"), v.query("count.x"))
+    println("query empty path:", v.query("") == v)
+    let ann = v.query("users[0]")!
+    println("get_*:", ann.get_str("name", "?"), ann.get_int("age", -1), ann.get_float("score", 0.0), ann.get_bool("admin", false))
+    println("get_* defaults:", ann.get_str("age", "?"), ann.get_int("name", -1), ann.get_float("nope", 1.5), ann.get_bool("name", false), v.get("users")!.get_str("x", "not an object"))
+    let bob = v.query("users[1]")!
+    println("int from whole float:", bob.get_int("age", -1), json_float(2.5).as_int(), json_float(1e300).as_int(), json_int(7).as_float())
+    println("as_*:", json_bool(true).as_bool(), json_int(1).as_bool(), json_str("s").as_str(), json_int(1).as_str(), json_null().as_array(), json_null().as_object())
+    println("at:", v.get("users")!.at(5), json_int(3).at(0), json_int(3).get("x"))
+    let arr = v.get("users")!.as_array()!
+    println("as_array len:", arr.len(), arr[1].get_str("name", ""))
+    let obj = v.get("meta")!.as_object()!
+    println("as_object keys:", obj.keys())
+
+    // ---- mutation through accessors
+    let list = json_array()
+    list.push(json_int(1))
+    list.push(json_str("two"))
+    json_int(5).push(json_int(1))          // ignored: not an array
+    println("pushed:", list, list.len())
+    let o = json_object()
+    o.set("a", json_int(1))
+    o.set("b", json_int(2))
+    o.set("a", json_int(10))
+    println("set:", o, o.remove("b"), o.remove("b"), o)
+    json_int(5).set("x", json_int(1))      // ignored: not an object
+    println("remove on non-object:", json_int(5).remove("x"))
+    // as_array returns the same array object
+    v.get("users")!.as_array()!.push(json_str("third"))
+    println("users now:", v.get("users")!.len(), v.query("users[2]"))
+    println("object_of / array_of:", json_object_of({"k": json_int(1)}), json_array_of([json_null(), json_bool(false)]))
+    println("equality:", json_parse("[1, \{\"a\": null}]").unwrap() == json_array_of([json_int(1), json_object_of({"a": json_null()})]),
+            json_int(1) == json_float(1.0))
+
+    // ---- match on values
+    var total = 0.0
+    for item in json_parse("[1, 2.5, \"skip\", 3, null, [4]]").unwrap().as_array()! {
+        match item {
+            JsonValue.Int(i) => total += i as float
+            JsonValue.Float(f) => total += f
+            _ => {}
+        }
+    }
+    println("sum of numbers:", total)
+
+    // ---- json_parse_or_panic
+    println("or_panic ok:", json_parse_or_panic("[true]"))
+    println("or_panic err:", catch_panic(|| { json_parse_or_panic("[tru]") }))
+
+    // ---- files
+    let path = temp_dir() + "atf_std_json_test.json"
+    println("write file:", json_write_file(path, doc))
+    let back = json_read_file(path)
+    println("read file equal:", back.unwrap() == doc)
+    println("file text starts:", quote_str(read_file(path)!.substr(0, 12)), read_file(path)!.ends_with("}\n"))
+    println("compact file:", json_write_file(path, json_int_array([1, 2]), 0), quote_str(read_file(path)!))
+    delete_file(path)
+    println("missing file:", json_read_file(path).is_err(), json_read_file(path).err()!.starts_with("cannot read file"))
+
+    // ---- larger document: build, stringify, parse back
+    let big = json_array()
+    for i in 0..2000 {
+        let item = json_object()
+        item.set("id", json_int(i))
+        item.set("name", json_str("item #{i}"))
+        item.set("value", json_float(i as float / 8.0))
+        item.set("even", json_bool(i % 2 == 0))
+        big.push(item)
+    }
+    let big_text = json_stringify(big)
+    let big_back = json_parse(big_text).unwrap()
+    println("big:", big_text.len(), big_back.len(), big_back.query("[1999].name"), big_back.query("[7].value"), big_back == big)
+
+    println("failures:", failures)
+    return failures
+}

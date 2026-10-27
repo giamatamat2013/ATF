@@ -1,0 +1,76 @@
+// text_wrap.atf - word wrapping, justification and a simple text box.
+// Shows: split_whitespace, building lines in arrays, pad_left / pad_right / pad_center,
+//        repeat, loops with remaining-space arithmetic.
+// Run:   python run_atf.py run examples/text_wrap.atf
+
+let TEXT = "ATF is a small compiled language. It is easy to learn, produces native Windows programs and has a garbage collector, so you never free memory by hand."
+
+// greedy line breaking: put as many words on a line as fit into `width`
+fn wrap(text: str, width: int) -> [str] {
+    var lines: [str] = []
+    var line = ""
+    for w in text.split_whitespace() {
+        if line.len() == 0 {
+            line = w
+        } else if line.len() + 1 + w.len() <= width {
+            line = line + " " + w
+        } else {
+            lines.push(line)
+            line = w
+        }
+    }
+    if line.len() > 0 { lines.push(line) }
+    return lines
+}
+
+// spread the spaces so that every line except the last has exactly `width` characters
+fn justify(line: str, width: int) -> str {
+    let words = line.split(" ")
+    if words.len() == 1 { return line }
+    var letters = 0
+    for w in words { letters += w.len() }
+    let gaps = words.len() - 1
+    let spaces = width - letters
+    var out = ""
+    for i in 0..words.len() {
+        out = out + words[i]
+        if i < gaps {
+            // the first (spaces % gaps) gaps get one extra space
+            let extra = if i < spaces % gaps { 1 } else { 0 }
+            out = out + " ".repeat(spaces / gaps + extra)
+        }
+    }
+    return out
+}
+
+fn boxed(lines: [str]) {
+    var w = 0
+    for l in lines { w = max(w, l.len()) }
+    println("+" + "-" * (w + 2) + "+")
+    for l in lines { println("| " + pad_right(l, w) + " |") }
+    println("+" + "-" * (w + 2) + "+")
+}
+
+fn main() {
+    let lines = wrap(TEXT, 32)
+    println("wrapped to 32 columns ({lines.len()} lines):")
+    for l in lines { println("|" + pad_right(l, 32) + "|") }
+
+    println()
+    println("justified:")
+    for i in 0..lines.len() {
+        let l = if i < lines.len() - 1 { justify(lines[i], 32) } else { lines[i] }
+        println("|" + pad_right(l, 32) + "|")
+    }
+
+    println()
+    println("centered:")
+    for l in wrap(TEXT, 40) { println("|" + pad_center(l, 40) + "|") }
+
+    println()
+    println("right aligned:")
+    for l in wrap(TEXT, 40) { println("|" + pad_left(l, 40) + "|") }
+
+    println()
+    boxed(wrap(TEXT, 28))
+}

@@ -1,0 +1,8 @@
+// parse_int() does not detect overflow (silently wraps) and accepts strings made only of '_'
+fn main() {
+    println("9223372036854775808".parse_int())
+    println("-9223372036854775809".parse_int())
+    println("99999999999999999999".parse_int())
+    println("0x10000000000000000".parse_int())
+    println("_".parse_int(), "-_".parse_int(), "0x_".parse_int(), "1__2".parse_int(), "_5".parse_int())
+}

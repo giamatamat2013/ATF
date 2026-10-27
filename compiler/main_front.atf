@@ -1,0 +1,166 @@
+// ATF compiler driver (self-hosted):  atf run|build|check file.atf
+import "util"
+import "lexer"
+import "ast"
+import "parser"
+import "types"
+import "tir"
+import "checker"
+import "check_expr"
+import "check_expr2"
+import "check_call"
+import "check_stmt"
+import "synth"
+
+const VERSION = "0.2.0 (self-hosted)"
+const PRELUDE_SRC = include_str("../atf/stdlib/prelude.atf")
+const PRELUDE_NAME = "<std>/prelude.atf"
+
+const USAGE = """ATF {VERSION} - a small, fast, compiled programming language
+
+usage:
+  atf run   file.atf [args...]     compile and run
+  atf build file.atf [-o out.exe]  compile to a native executable
+  atf check file.atf               check for errors only
+  atf version
+"""
+
+struct Module {
+    items: [Item],
+    prelude: bool
+}
+
+var loaded: {str: bool} = {}
+var modules: [Module] = []
+
+fn std_dir() -> str {
+    return path_dir(exe_path()) + "/stdlib"
+}
+
+// resolve an import name relative to the importing file
+fn resolve_import(name: str, from_file: str) -> str {
+    var n = name
+    if not n.ends_with(".atf") { n = n + ".atf" }
+    if n.starts_with("std/") { return std_dir() + "/" + n[4..] }
+    let p = norm_path(path_dir(from_file) + "/" + n)
+    if file_exists(p) { return p }
+    let p2 = std_dir() + "/" + n
+    if file_exists(p2) { return p2 }
+    return p
+}
+
+fn load_module(path: str, prelude: bool, src_text: str?, from_pos: Pos) {
+    if path in loaded { return }
+    loaded[path] = true
+    var text = ""
+    if src_text != nil {
+        text = src_text!
+    } else {
+        let data = read_file(path)
+        if data == nil { fail(from_pos, "cannot find file '{path}'") }
+        text = data!
+    }
+    if text.starts_with("\u{FEFF}") { text = text[3..] }
+    text = text.replace("\r\n", "\n")
+    sources[path] = text
+    let items = parse_source(text, path)
+    for it in items {
+        match it {
+            Item.Import(d) => {
+                let ip = resolve_import(d.path, path)
+                if not file_exists(ip) {
+                    fail(d.pos, "cannot find module '{d.path}'",
+                         "imports are relative to this file, or  import \"std/name\"  for the standard library")
+                }
+                load_module(ip, prelude or ip.starts_with(std_dir()), nil, d.pos)
+            }
+            _ => {}
+        }
+    }
+    modules.push(Module(items, prelude))
+}
+
+// compile a program file; returns the executable's bytes or nil (errors are in diags)
+fn compile_file(path: str, check_only: bool) -> Bytes? {
+    var exe: Bytes? = nil
+    let ok = guarded(|| {
+        load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
+        load_module(path, false, nil, NOPOS)
+        var ms: [([Item], bool)] = []
+        for m in modules { ms.push((m.items, m.prelude)) }
+        let prog = check_program(ms)
+        if prog != nil and not check_only { fail(NOPOS, "no backend in this build") }
+    })
+    if not ok or diags.len() > 0 {
+        eprintln(render_diags())
+        return nil
+    }
+    if check_only { return Bytes([]) }
+    return exe
+}
+
+fn exe_path_for(path: str, out: str?) -> str {
+    if out != nil { return out! }
+    var base = path
+    let dot = base.rfind(".")
+    if dot > 0 and dot > base.rfind("/") and dot > base.rfind("\\") { base = base[..dot] }
+    return base + ".exe"
+}
+
+fn main(args: [str]) -> int {
+    if getenv("ATF_PATH_STYLE") == "base" { path_style_base = true }
+    if args.len() < 1 or args[0] == "-h" or args[0] == "--help" or args[0] == "help" {
+        print(USAGE)
+        return 0
+    }
+    let cmd = args[0]
+    if cmd == "version" {
+        println("ATF {VERSION}")
+        return 0
+    }
+    if cmd == "run" or cmd == "build" or cmd == "check" {
+        if args.len() < 2 {
+            eprintln("error: missing file name\n\n" + USAGE)
+            return 2
+        }
+        let path = args[1]
+        if not file_exists(path) {
+            eprintln("error: file not found: {path}")
+            return 2
+        }
+        let exe = compile_file(path, cmd == "check")
+        if exe == nil { return 1 }
+        if cmd == "check" {
+            println("ok")
+            return 0
+        }
+        if cmd == "build" {
+            var out: str? = nil
+            for i in 0..args.len() - 1 {
+                if args[i] == "-o" { out = args[i + 1] }
+            }
+            let target = exe_path_for(path, out)
+            if not write_file(target, exe!.to_str()) {
+                eprintln("error: cannot write {target}")
+                return 1
+            }
+            println("built {target}")
+            return 0
+        }
+        // run: write to the temp directory and execute
+        let dir = temp_dir() + "atf"
+        make_dir(dir)
+        var name = path
+        let slash = name.rfind("/")
+        let bslash = name.rfind("\\")
+        if bslash > slash { name = name[bslash + 1..] } else if slash >= 0 { name = name[slash + 1..] }
+        let tmp = "{dir}\\{name}-{int_to_hex(str_hash(path) & 0xFFFFFFFF)}.exe"
+        if not write_file(tmp, exe!.to_str()) {
+            eprintln("error: cannot write {tmp}")
+            return 1
+        }
+        return run_process(tmp, args[2..])
+    }
+    eprintln("error: unknown command '{cmd}'\n\n" + USAGE)
+    return 2
+}

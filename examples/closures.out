@@ -1,0 +1,22 @@
+counter c: 10 15 20  counter d: 0 1
+add3(4) = 7  add10(4) = 14
+square then add3 of 5: 28
+twice(add3)(0): 6
+twice(square)(3): 81
+number of digits of 12345: 5  of 7: 1
+[49, 10, 700, 27]
+add(6, 7) = 13
+mul(6, 7) = 42
+max(6, 7) = 7
+total after the loop: 55
+doubled:   [10, 6, 16, 2, 18, 4, 14]
+odd only:  [5, 3, 1, 9, 7]
+sum:       35
+product:   15120
+any > 8?   true  all > 0? true
+first > 6: 8  first > 100: nil
+longest as text: 25
+by age desc, then name: [("Mia", 31), ("Zoe", 31), ("Adam", 25), ("Bob", 19)]
+[25, 64, 81, 49]
+["APPLE", "BANANA", "KIWI"]
+["0:apple", "1:fig", "2:banana", "3:kiwi"]

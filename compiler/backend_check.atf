@@ -1,0 +1,14 @@
+// Type checks the whole backend (x64, pe, codegen) and references the public entry point.
+import "backend_stub"
+import "x64"
+import "pe"
+import "codegen"
+
+fn main(args: [str]) {
+    if args.len() > 100 {
+        let p = new_program()
+        let b = generate_exe(p)
+        println(b.len())
+    }
+    println("backend ok")
+}

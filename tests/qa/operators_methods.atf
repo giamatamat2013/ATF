@@ -1,0 +1,124 @@
+// operator overloading, cmp/eq methods, comparisons of strings/tuples/structs, chained calls, literals
+struct V2 { x: int, y: int }
+struct Money { cents: int }
+struct Version { major: int, minor: int, patch: int }
+struct Matrix { rows: [[int]] }
+struct Bag { items: [str] }
+struct Chain { log: [str] }
+
+impl V2 {
+    fn op_add(self, o: V2) -> V2 { return V2(self.x + o.x, self.y + o.y) }
+    fn op_sub(self, o: V2) -> V2 { return V2(self.x - o.x, self.y - o.y) }
+    fn op_mul(self, k: int) -> V2 { return V2(self.x * k, self.y * k) }
+    fn op_div(self, k: int) -> V2 { return V2(self.x / k, self.y / k) }
+    fn op_mod(self, k: int) -> V2 { return V2(self.x % k, self.y % k) }
+    fn op_neg(self) -> V2 { return V2(-self.x, -self.y) }
+    fn op_index(self, i: int) -> int { if i == 0 { return self.x } return self.y }
+    fn to_str(self) -> str { return "<{self.x},{self.y}>" }
+}
+
+impl Money {
+    fn cmp(self, o: Money) -> int { return self.cents - o.cents }
+    fn to_str(self) -> str { return "${self.cents / 100}.{pad_zero(str(self.cents % 100), 2)}" }
+}
+
+impl Version {
+    fn cmp(self, o: Version) -> int {
+        if self.major != o.major { return self.major - o.major }
+        if self.minor != o.minor { return self.minor - o.minor }
+        return self.patch - o.patch
+    }
+    fn eq(self, o: Version) -> bool { return self.cmp(o) == 0 }
+}
+
+impl Matrix {
+    fn op_mul(self, o: Matrix) -> Matrix {
+        let n = self.rows.len()
+        let m = o.rows[0].len()
+        var out: [[int]] = []
+        for i in 0..n {
+            var row: [int] = []
+            for j in 0..m {
+                var s = 0
+                for k in 0..o.rows.len() { s += self.rows[i][k] * o.rows[k][j] }
+                row.push(s)
+            }
+            out.push(row)
+        }
+        return Matrix(out)
+    }
+}
+
+impl Bag {
+    fn op_contains(self, s: str) -> bool { return self.items.contains(s) }
+    fn op_index(self, i: int) -> str { return self.items[i] }
+    fn op_set_index(self, i: int, v: str) { self.items[i] = v }
+    fn len(self) -> int { return self.items.len() }
+}
+
+impl Chain {
+    fn add(self, s: str) -> Chain {
+        self.log.push(s)
+        return self
+    }
+    fn done(self) -> str { return self.log.join(">") }
+}
+
+fn main() {
+    let a = V2(1, 2)
+    let b = V2(10, 20)
+    println(a + b, b - a, a * 3, b / 3, b % 3, -a, a[0], a[1], a + b * 2, -(a + b))
+    var c = a
+    c += b
+    c -= V2(1, 1)
+    c *= 2
+    println(c, a)
+    println(a == V2(1, 2), a != b, same(a, a), same(a, V2(1, 2)))
+    let m1 = Money(1999)
+    let m2 = Money(250)
+    println(m1, m2, m1 > m2, m1 < m2, m1 >= Money(1999), m1 <= m2, m1 == Money(1999), m1 != m2)
+    println([Money(300), Money(5), Money(120)].sorted(), max(m1, m2), min(m1, m2))
+    let vs = [Version(1, 2, 3), Version(1, 10, 0), Version(0, 9, 9), Version(1, 2, 10)]
+    println(vs.sorted().map(|v| "{v.major}.{v.minor}.{v.patch}"))
+    println(Version(1, 0, 0) == Version(1, 0, 0), Version(1, 0, 0) < Version(1, 0, 1), vs.index_of(Version(1, 10, 0)))
+    let mat = Matrix([[1, 2], [3, 4]])
+    println((mat * mat).rows, (mat * Matrix([[1], [1]])).rows)
+    let bag = Bag(["x", "y"])
+    bag[1] = "z"
+    println("x" in bag, "y" in bag, "z" in bag, bag[1], bag.len(), len(bag))
+    // chained calls and method calls on literals
+    println(Chain([]).add("a").add("b").add("c").done())
+    println("  Hello ".trim().lower().replace("l", "L").upper().len(), [3, 1, 2].sorted().reversed().map(|x| x * 2))
+    println(5.to_str().len(), 255.to_hex().upper(), (-3).abs().pow(3), 2.5.floor().to_int(), true.to_str(), "ab".repeat(2).upper())
+    println([1, 2, 3].len(), {"a": 1}.len(), (1, 2).0, "xyz"[1], [[1, 2], [3]][0][1], "a,b".split(",")[1].upper())
+    // comparison operators on strings, tuples, bools, bytes, optionals
+    println("a" < "b", "abc" < "abd", "Z" < "a", "" < " ", "a" <= "a", "b" >= "a")
+    println((1, 2) < (1, 3), (2, 0) > (1, 9), (1, "a") < (1, "b"), (1, 2) == (1, 2), (1, 2) != (2, 1), (1, (2, 3)) < (1, (2, 4)))
+    println(false < true, 'a' < 'b', 'z' > 'a', Money(1) < Money(2) and (1, 1) < (1, 2))
+    // chained comparisons are just and-ed comparisons
+    let x = 5
+    var zero = 0
+    println(1 < x and x < 10, x == 5 or x / zero == 1, not (x > 3), x != 5 and x / zero == 1)
+    // shadowing in nested scopes, in loops, of parameters
+    let s = 1
+    var total = 0
+    for s in 0..3 {
+        let s = s * 10
+        total += s
+    }
+    {
+        let s = "inner"
+        println(s)
+    }
+    println(s, total, shadow_param(4))
+    let v = [1, 2]
+    let v = v.map(|q| q + 1)
+    let v = v.len()
+    println(v)
+}
+
+fn shadow_param(n: int) -> int {
+    let n = n * 2
+    let n = n + 1
+    return n
+}

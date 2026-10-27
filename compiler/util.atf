@@ -1,0 +1,223 @@
+// ATF compiler (self-hosted) - shared utilities: positions, diagnostics, byte buffers
+
+struct Pos {
+    file: str,
+    line: int,
+    col: int
+}
+
+let NOPOS = Pos("<builtin>", 0, 0)
+
+struct Diag {
+    msg: str,
+    pos: Pos,
+    hint: str
+}
+
+var diags: [Diag] = []
+var sources: {str: str} = {}
+
+const COMPILE_ERROR = "\u{1}compile-error"
+
+// while library code is checked for a user call: where that call is (errors are shown there)
+var error_origin: Pos?
+var error_origin_fn: str = ""
+
+// records an error and unwinds to the nearest guarded() section
+fn fail(pos: Pos, msg: str, hint: str = "") -> never {
+    if error_origin != nil and pos.file.starts_with("<std>") {
+        var h = "the problem is inside the library function " + error_origin_fn
+        if hint.len() > 0 { h = hint + "  (" + h + ")" }
+        diags.push(Diag(msg, error_origin!, h))
+    } else {
+        diags.push(Diag(msg, pos, hint))
+    }
+    panic(COMPILE_ERROR)
+}
+
+// unwinds without recording a new error (a follow-up of an error that was already reported)
+fn fail_silent() -> never {
+    panic(COMPILE_ERROR)
+}
+
+// Runs f; returns false if it ended with a compile error (already recorded in diags).
+fn guarded(f: fn()) -> bool {
+    let m = catch_panic(f)
+    if m == nil { return true }
+    if m! == COMPILE_ERROR { return false }
+    eprintln("internal compiler error: " + m!)
+    exit(70)
+}
+
+fn render_diag(d: Diag) -> str {
+    var out = "error: " + d.msg
+    if d.pos.line > 0 {
+        out = out + "\n  --> " + short_path(d.pos.file) + ":" + str(d.pos.line) + ":" + str(d.pos.col)
+        let src = sources.try_get(d.pos.file)
+        if src != nil {
+            let lines = src!.split("\n")
+            if d.pos.line <= lines.len() {
+                var text = lines[d.pos.line - 1]
+                if text.ends_with("\r") { text = text[..text.len() - 1] }
+                let gutter = str(d.pos.line)
+                out = out + "\n " + gutter + " | " + text
+                out = out + "\n " + " ".repeat(gutter.len()) + " | " + " ".repeat(max(d.pos.col - 1, 0)) + "^"
+            }
+        }
+    }
+    if d.hint.len() > 0 { out = out + "\n  hint: " + d.hint }
+    return out
+}
+
+fn render_diags() -> str {
+    var seen: {str: bool} = {}
+    var out: [str] = []
+    var n = 0
+    for d in diags {
+        if n >= 10 { break }
+        let r = render_diag(d)
+        if r in seen { continue }
+        seen[r] = true
+        out.push(r)
+        n += 1
+    }
+    if diags.len() > 10 { out.push("... and " + str(diags.len() - 10) + " more errors") }
+    return "\n\n".join(out)
+}
+
+// ---- "did you mean ...?" - same algorithm as Python's difflib.get_close_matches (cutoff 0.6)
+// longest common block of a[alo..ahi] and b[blo..bhi]: (start in a, start in b, length)
+fn longest_match(a: str, b: str, alo: int, ahi: int, blo: int, bhi: int) -> (int, int, int) {
+    var besti = alo
+    var bestj = blo
+    var bestsize = 0
+    var j2len = array_make::<int>(b.len() + 1)
+    var newj2len = array_make::<int>(b.len() + 1)
+    for i in alo..ahi {
+        for j in blo..bhi {
+            newj2len[j + 1] = 0
+        }
+        for j in blo..bhi {
+            if a.byte_at(i) == b.byte_at(j) {
+                let k = j2len[j] + 1
+                newj2len[j + 1] = k
+                if k > bestsize {
+                    besti = i - k + 1
+                    bestj = j - k + 1
+                    bestsize = k
+                }
+            }
+        }
+        let t = j2len
+        j2len = newj2len
+        newj2len = t
+    }
+    return (besti, bestj, bestsize)
+}
+
+fn similarity(a: str, b: str) -> float {
+    let la = a.len()
+    let lb = b.len()
+    if la + lb == 0 { return 1.0 }
+    var queue: [(int, int, int, int)] = [(0, la, 0, lb)]
+    var matched = 0
+    while queue.len() > 0 {
+        let q = queue.pop()
+        let m = longest_match(a, b, q.0, q.1, q.2, q.3)
+        if m.2 > 0 {
+            matched += m.2
+            if q.0 < m.0 and q.2 < m.1 { queue.push((q.0, m.0, q.2, m.1)) }
+            if m.0 + m.2 < q.1 and m.1 + m.2 < q.3 { queue.push((m.0 + m.2, q.1, m.1 + m.2, q.3)) }
+        }
+    }
+    return 2.0 * (matched as float) / ((la + lb) as float)
+}
+
+fn suggest(name: str, candidates: [str]) -> str {
+    var best = ""
+    var best_score = 0.0
+    var found = false
+    let lname = name.lower()
+    for c in candidates {
+        let score = similarity(c.lower(), lname)
+        if score >= 0.6 {
+            if not found or score > best_score or (score == best_score and c > best) {
+                best = c
+                best_score = score
+                found = true
+            }
+        }
+    }
+    if found { return "did you mean '" + best + "'?" }
+    return ""
+}
+
+var path_style_base: bool
+
+fn short_path(p: str) -> str {
+    if path_style_base {
+        var i = p.len() - 1
+        while i >= 0 and p.byte_at(i) != '/' and p.byte_at(i) != '\\' { i -= 1 }
+        return p[i + 1..]
+    }
+    return p
+}
+
+// growable byte buffer used for machine code and files
+struct Bytes {
+    data: [byte]
+}
+
+fn bytes_new() -> Bytes {
+    return Bytes([])
+}
+
+impl Bytes {
+    fn len(self) -> int { return self.data.len() }
+    fn u8(self, v: int) { self.data.push(byte(v & 255)) }
+    fn u16(self, v: int) {
+        self.u8(v)
+        self.u8(v >> 8)
+    }
+    fn u32(self, v: int) {
+        self.u8(v)
+        self.u8(v >> 8)
+        self.u8(v >> 16)
+        self.u8(v >> 24)
+    }
+    fn u64(self, v: int) {
+        self.u32(v)
+        self.u32(v >>> 32)
+    }
+    fn raw(self, s: str) {
+        for i in 0..s.len() { self.data.push(byte(s.byte_at(i))) }
+    }
+    fn zeros(self, n: int) {
+        for i in 0..n { self.data.push(0) }
+    }
+    fn append(self, o: Bytes) {
+        for i in 0..o.data.len() { self.data.push(o.data[i]) }
+    }
+    fn get(self, i: int) -> int { return self.data[i] }
+    fn set_u32(self, pos: int, v: int) {
+        self.data[pos] = byte(v & 255)
+        self.data[pos + 1] = byte((v >> 8) & 255)
+        self.data[pos + 2] = byte((v >> 16) & 255)
+        self.data[pos + 3] = byte((v >> 24) & 255)
+    }
+    fn set_u64(self, pos: int, v: int) {
+        self.set_u32(pos, v)
+        self.set_u32(pos + 4, v >>> 32)
+    }
+    fn align(self, a: int) {
+        while self.data.len() % a != 0 { self.data.push(0) }
+    }
+    fn to_str(self) -> str {
+        let n = self.data.len()
+        let r = str_new(n)
+        if n > 0 { __memcpy(str_data(r), self.data.data as ptr<byte>, n) }
+        return r
+    }
+}
+
+fn i64_to_bits(v: float) -> int { return __f2bits(v) }

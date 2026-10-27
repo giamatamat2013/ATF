@@ -1,0 +1,242 @@
+// atf fmt - re-indents source code: 4 spaces per open bracket, no trailing spaces, at most one empty line in a row.
+// Text inside multi-line strings is never touched.
+
+struct LineInfo {
+    opens: [int],        // line numbers of the brackets still open at the start of the line
+    kinds: [int],        // and the bracket characters
+    in_string: bool,     // the line starts inside a multi-line string
+    closers: int         // closing brackets at the very start of the line
+}
+
+fn scan_lines(src: str) -> [LineInfo] {
+    var infos: [LineInfo] = []
+    var opens: [int] = []
+    var kinds: [int] = []
+    var i = 0
+    let n = src.len()
+    var in_triple = false
+    var in_raw = false
+    var raw_end = ""
+    var in_block = 0
+    var line_start = true
+    var cur = LineInfo([], [], false, 0)
+    var counting_closers = true
+    infos.push(cur)
+    while i < n {
+        let c = src.byte_at(i)
+        if c == '\n' {
+            i += 1
+            cur = LineInfo(opens.copy(), kinds.copy(), in_triple or in_raw, 0)
+            infos.push(cur)
+            counting_closers = true
+            continue
+        }
+        if in_triple {
+            if c == '\\' { i += 2; continue }
+            if c == '"' and i + 2 < n and src.byte_at(i + 1) == '"' and src.byte_at(i + 2) == '"' {
+                in_triple = false
+                i += 3
+                continue
+            }
+            i += 1
+            continue
+        }
+        if in_raw {
+            if src[i..].starts_with(raw_end) {
+                in_raw = false
+                i += raw_end.len()
+                continue
+            }
+            i += 1
+            continue
+        }
+        if in_block > 0 {
+            if c == '*' and i + 1 < n and src.byte_at(i + 1) == '/' {
+                in_block -= 1
+                i += 2
+                continue
+            }
+            if c == '/' and i + 1 < n and src.byte_at(i + 1) == '*' {
+                in_block += 1
+                i += 2
+                continue
+            }
+            i += 1
+            continue
+        }
+        if c == ' ' or c == 9 or c == 13 {
+            i += 1
+            continue
+        }
+        if c == '/' and i + 1 < n and src.byte_at(i + 1) == '/' {
+            while i < n and src.byte_at(i) != '\n' { i += 1 }
+            continue
+        }
+        if c == '/' and i + 1 < n and src.byte_at(i + 1) == '*' {
+            in_block = 1
+            counting_closers = false
+            i += 2
+            continue
+        }
+        if c == '}' or c == ')' or c == ']' {
+            if opens.len() > 0 {
+                opens.pop()
+                kinds.pop()
+            }
+            if counting_closers { cur.closers += 1 }
+            i += 1
+            continue
+        }
+        counting_closers = false
+        if c == '{' or c == '(' or c == '[' {
+            opens.push(infos.len() - 1)
+            kinds.push(c)
+            i += 1
+            continue
+        }
+        if c == 'r' and i + 1 < n and (src.byte_at(i + 1) == '"' or src.byte_at(i + 1) == '#') {
+            var j = i + 1
+            var hashes = 0
+            while j < n and src.byte_at(j) == '#' {
+                hashes += 1
+                j += 1
+            }
+            if j < n and src.byte_at(j) == '"' {
+                in_raw = true
+                raw_end = "\"" + "#".repeat(hashes)
+                i = j + 1
+                continue
+            }
+        }
+        if c == '"' {
+            if i + 2 < n and src.byte_at(i + 1) == '"' and src.byte_at(i + 2) == '"' {
+                in_triple = true
+                i += 3
+                continue
+            }
+            // ordinary string: skip to its end on this line (interpolations may contain braces and strings)
+            i += 1
+            var d = 0
+            while i < n and src.byte_at(i) != '\n' {
+                let ch = src.byte_at(i)
+                if ch == '\\' {
+                    i += 2
+                    continue
+                }
+                if ch == '{' and not (i + 1 < n and src.byte_at(i + 1) == '"') { d += 1 }
+                if ch == '}' and d > 0 { d -= 1 }
+                if ch == '"' and d == 0 { break }
+                i += 1
+            }
+            if i < n and src.byte_at(i) == '"' { i += 1 }
+            continue
+        }
+        if c == '\'' {
+            // char literal
+            var j = i + 1
+            if j < n and src.byte_at(j) == '\\' { j += 2 } else { j += 1 }
+            while j < n and src.byte_at(j) != '\'' and src.byte_at(j) != '\n' { j += 1 }
+            i = j + 1
+            continue
+        }
+        i += 1
+    }
+    return infos
+}
+
+// does a line end in a way that continues the statement on the next line?
+fn continues(line: str) -> bool {
+    var t = line
+    let c = t.find("//")
+    if c >= 0 { t = t[..c] }
+    t = t.trim_end()
+    if t.len() == 0 { return false }
+    for e in [" or", " and", " not", " in", "+", "-", "*", "/", "%", "=", "&", "|", "^", ",", ".", "->", "=>", "??", "<<", ">>"] {
+        if t.ends_with(e) and not t.ends_with("++") { return true }
+    }
+    return false
+}
+
+fn starts_continued(t: str) -> bool {
+    return (t.starts_with(".") and not t.starts_with("..")) or t.starts_with("and ") or t.starts_with("or ") or t.starts_with("&&") or t.starts_with("||") or t.starts_with("??")
+}
+
+fn format_source(src: str) -> str {
+    let text = src.replace("\r\n", "\n")
+    let lines = text.split("\n")
+    let infos = scan_lines(text)
+    var out: [str] = []
+    var blank = 0
+    var prev_code = ""
+    for k in 0..lines.len() {
+        let line = lines[k]
+        let info = infos[k]
+        if info.in_string {
+            out.push(line)
+            blank = 0
+            continue
+        }
+        let t = line.trim()
+        if t.len() == 0 {
+            blank += 1
+            if blank <= 1 and out.len() > 0 { out.push("") }
+            continue
+        }
+        blank = 0
+        // one level per line that opened brackets which are still open
+        var keep = info.opens.len() - info.closers
+        if keep < 0 { keep = 0 }
+        var d = 0
+        var prev = -1
+        for q in 0..keep {
+            if info.opens[q] != prev {
+                d += 1
+                prev = info.opens[q]
+            }
+        }
+        var indent = "    ".repeat(d)
+        // continuation lines (inside ( ) or [ ], or after an operator) may keep a deeper, aligned indentation
+        let in_parens = keep > 0 and info.closers == 0 and info.kinds[keep - 1] != '{'
+        if in_parens or continues(prev_code) or starts_continued(t) {
+            var cur = 0
+            while cur < line.len() and line.byte_at(cur) == ' ' { cur += 1 }
+            if cur > indent.len() { indent = " ".repeat(cur) }
+        }
+        out.push(indent + t)
+        prev_code = t
+    }
+    while out.len() > 0 and out[out.len() - 1] == "" { out.pop() }
+    return "\n".join(out) + "\n"
+}
+
+fn run_fmt(args: [str]) -> int {
+    var check = false
+    var files: [str] = []
+    for a in args {
+        if a == "--check" { check = true } else { files.push(a) }
+    }
+    if files.len() == 0 {
+        eprintln("usage: atf fmt file.atf... [--check]")
+        return 2
+    }
+    var changed = 0
+    for f in files {
+        let src = read_file(f)
+        if src == nil {
+            eprintln("error: cannot read {f}")
+            return 1
+        }
+        let res = format_source(src!)
+        if res != src!.replace("\r\n", "\n") {
+            changed += 1
+            if check {
+                println("would reformat {f}")
+            } else {
+                write_file(f, res)
+                println("formatted {f}")
+            }
+        }
+    }
+    if check and changed > 0 { return 1 }
+    return 0
+}

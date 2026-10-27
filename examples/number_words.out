@@ -1,0 +1,16 @@
+          0: zero
+          7: seven
+         13: thirteen
+         20: twenty
+         42: forty-two
+         99: ninety-nine
+        100: one hundred
+        101: one hundred one
+        342: three hundred forty-two
+       1000: one thousand
+       1234: one thousand two hundred thirty-four
+      90210: ninety thousand two hundred ten
+    1000000: one million
+ 2147483647: two billion one hundred forty-seven million four hundred eighty-three thousand six hundred forty-seven
+        -15: minus fifteen
+1st 2nd 3rd 4th 11th 12th 13th 21st 22nd 23rd 101st 111th 112th

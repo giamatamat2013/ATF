@@ -1,0 +1,699 @@
+// A small x86-64 assembler (port of atf/x64.py): just the instructions the compiler needs.
+//
+// Operands are `Operand` values: Imm(int) | R(reg number) | X(xmm number) | M(Mem).
+// Code labels are ints handed out by new_label(); references to symbols that live in other
+// sections (data, imports) become relocations resolved by the PE linker.
+import "util"
+
+// [base + index*scale + disp]  or  [rip + sym + disp].  base/index: register number, -1 = none.  sym: "" = none.
+struct Mem {
+    base: int,
+    index: int,
+    scale: int,
+    disp: int,
+    sym: str
+}
+
+enum Operand {
+    Imm(int),
+    R(int),
+    X(int),
+    M(Mem)
+}
+
+// register numbers
+const NRAX = 0
+const NRCX = 1
+const NRDX = 2
+const NRBX = 3
+const NRSP = 4
+const NRBP = 5
+const NRSI = 6
+const NRDI = 7
+const NR8 = 8
+const NR9 = 9
+const NR10 = 10
+const NR11 = 11
+const NR12 = 12
+const NR13 = 13
+const NR14 = 14
+const NR15 = 15
+
+let REGS: [Operand] = [Operand.R(0), Operand.R(1), Operand.R(2), Operand.R(3), Operand.R(4), Operand.R(5), Operand.R(6), Operand.R(7),
+                       Operand.R(8), Operand.R(9), Operand.R(10), Operand.R(11), Operand.R(12), Operand.R(13), Operand.R(14), Operand.R(15)]
+let XMM: [Operand] = [Operand.X(0), Operand.X(1), Operand.X(2), Operand.X(3), Operand.X(4), Operand.X(5), Operand.X(6), Operand.X(7),
+                      Operand.X(8), Operand.X(9), Operand.X(10), Operand.X(11), Operand.X(12), Operand.X(13), Operand.X(14), Operand.X(15)]
+let RAX = REGS[0]
+let RCX = REGS[1]
+let RDX = REGS[2]
+let RBX = REGS[3]
+let RSP = REGS[4]
+let RBP = REGS[5]
+let RSI = REGS[6]
+let RDI = REGS[7]
+let R8 = REGS[8]
+let R9 = REGS[9]
+let R10 = REGS[10]
+let R11 = REGS[11]
+let R12 = REGS[12]
+let R13 = REGS[13]
+let R14 = REGS[14]
+let R15 = REGS[15]
+
+fn oimm(v: int) -> Operand { return Operand.Imm(v) }
+
+impl Operand {
+    // register number of an R / X operand
+    fn n(self) -> int {
+        match self {
+            Operand.R(n) => return n
+            Operand.X(n) => return n
+            _ => panic("x64: operand is not a register")
+        }
+    }
+    fn is_reg(self) -> bool {
+        return match self {
+            Operand.R(n) => true
+            _ => false
+        }
+    }
+    fn is_xreg(self) -> bool {
+        return match self {
+            Operand.X(n) => true
+            _ => false
+        }
+    }
+    fn is_mem(self) -> bool {
+        return match self {
+            Operand.M(m) => true
+            _ => false
+        }
+    }
+    fn is_imm(self) -> bool {
+        return match self {
+            Operand.Imm(v) => true
+            _ => false
+        }
+    }
+    fn imm_val(self) -> int {
+        match self {
+            Operand.Imm(v) => return v
+            _ => panic("x64: operand is not an immediate")
+        }
+    }
+    // is this exactly general purpose register `n`?
+    fn is_reg_n(self, n: int) -> bool {
+        return match self {
+            Operand.R(k) => k == n
+            _ => false
+        }
+    }
+    fn mem(self) -> Mem {
+        match self {
+            Operand.M(m) => return m
+            _ => panic("x64: operand is not a memory operand")
+        }
+    }
+}
+
+// ---- memory operand constructors (all return Operand.M)
+fn mem_b(base: Operand, disp: int) -> Operand {
+    return Operand.M(Mem(base.n(), -1, 1, disp, ""))
+}
+
+fn mem_bi(base: Operand, index: Operand, scale: int, disp: int) -> Operand {
+    return Operand.M(Mem(base.n(), index.n(), scale, disp, ""))
+}
+
+fn mem_sym(sym: str, disp: int) -> Operand {
+    return Operand.M(Mem(-1, -1, 1, disp, sym))
+}
+
+// [index*scale + disp32]  (index < 0: [disp32])
+fn mem_abs(index: int, scale: int, disp: int) -> Operand {
+    return Operand.M(Mem(-1, index, scale, disp, ""))
+}
+
+// condition codes
+const CC_O = 0
+const CC_NO = 1
+const CC_B = 2
+const CC_AE = 3
+const CC_E = 4
+const CC_NE = 5
+const CC_BE = 6
+const CC_A = 7
+const CC_S = 8
+const CC_NS = 9
+const CC_P = 10
+const CC_NP = 11
+const CC_L = 12
+const CC_GE = 13
+const CC_LE = 14
+const CC_G = 15
+
+fn cc_code(name: str) -> int {
+    if name == "o" { return 0 }
+    if name == "no" { return 1 }
+    if name == "b" or name == "c" { return 2 }
+    if name == "ae" or name == "nc" { return 3 }
+    if name == "e" or name == "z" { return 4 }
+    if name == "ne" or name == "nz" { return 5 }
+    if name == "be" { return 6 }
+    if name == "a" { return 7 }
+    if name == "s" { return 8 }
+    if name == "ns" { return 9 }
+    if name == "p" { return 10 }
+    if name == "np" { return 11 }
+    if name == "l" { return 12 }
+    if name == "ge" { return 13 }
+    if name == "le" { return 14 }
+    if name == "g" { return 15 }
+    panic("x64: unknown condition code " + name)
+}
+
+// ALU opcode extensions
+fn alu_ext(op: str) -> int {
+    if op == "add" { return 0 }
+    if op == "or" { return 1 }
+    if op == "and" { return 4 }
+    if op == "sub" { return 5 }
+    if op == "xor" { return 6 }
+    if op == "cmp" { return 7 }
+    panic("x64: unknown ALU op " + op)
+}
+
+fn x_fits8(v: int) -> bool { return v >= -128 and v <= 127 }
+
+fn x_fits32(v: int) -> bool { return v >= -2147483648 and v < 2147483648 }
+
+fn scale_bits(s: int) -> int {
+    if s == 1 { return 0 }
+    if s == 2 { return 1 }
+    if s == 4 { return 2 }
+    if s == 8 { return 3 }
+    panic("x64: bad index scale " + str(s))
+}
+
+struct Fixup {
+    pos: int,
+    label: int
+}
+
+// rel32 to an external symbol: patched at pos; `after` = number of bytes following the 4 byte field
+struct Reloc {
+    pos: int,
+    sym: str,
+    after: int,
+    addend: int
+}
+
+struct Asm {
+    buf: Bytes,
+    labels: [int],               // label number -> offset (-1: not bound yet); entry 0 unused
+    fixups: [Fixup],             // rel32 to code label
+    relocs: [Reloc],             // rel32 to external symbol
+    nlabel: int,
+    rip_pending: bool,
+    rip_pos: int,
+    rip_sym: str,
+    rip_addend: int
+}
+
+fn new_asm() -> Asm {
+    return Asm(bytes_new(), [-1], [], [], 0, false, 0, "", 0)
+}
+
+impl Asm {
+    // ---- labels -----------------------------------------------------------
+    fn new_label(self) -> int {
+        self.nlabel += 1
+        self.labels.push(-1)
+        return self.nlabel
+    }
+
+    fn bind(self, label: int) {
+        self.labels[label] = self.buf.len()
+    }
+
+    fn label_off(self, label: int) -> int {
+        let t = self.labels[label]
+        if t < 0 { panic("x64: label " + str(label) + " was never bound") }
+        return t
+    }
+
+    fn here(self) -> int { return self.buf.len() }
+
+    // pads with int3 up to a multiple of n (between functions: never executed)
+    fn align_int3(self, n: int) {
+        while self.buf.len() % n != 0 { self.buf.u8(0xCC) }
+    }
+
+    // pads with the recommended multi-byte NOPs up to a multiple of n
+    fn align_nop(self, n: int) {
+        var k = (n - self.buf.len() % n) % n
+        while k > 0 {
+            let m = min(k, 8)
+            if m == 1 {
+                self.buf.u8(0x90)
+            } else if m == 2 {
+                self.buf.u8(0x66)
+                self.buf.u8(0x90)
+            } else {
+                // 0F 1F /0 with a growing address form: 3 to 8 bytes
+                if m == 6 { self.buf.u8(0x66) }
+                self.buf.u8(0x0F)
+                self.buf.u8(0x1F)
+                if m == 3 {
+                    self.buf.u8(0x00)
+                } else if m == 4 {
+                    self.buf.u8(0x40)
+                    self.buf.u8(0x00)
+                } else if m == 5 or m == 6 {
+                    self.buf.u8(0x44)
+                    self.buf.u8(0x00)
+                    self.buf.u8(0x00)
+                } else if m == 7 {
+                    self.buf.u8(0x80)
+                    self.buf.u32(0)
+                } else {
+                    self.buf.u8(0x84)
+                    self.buf.u8(0x00)
+                    self.buf.u32(0)
+                }
+            }
+            k -= m
+        }
+    }
+
+    fn finish(self) -> Bytes {
+        for fx in self.fixups {
+            let target = self.label_off(fx.label)
+            self.buf.set_u32(fx.pos, target - (fx.pos + 4))
+        }
+        self.fixups = []
+        return self.buf
+    }
+
+    // ---- raw encoding -----------------------------------------------------
+    // prefix (0 = none), REX, opcode (1-3 bytes packed big endian), modrm/sib/disp, immediate of immsz (0, 1 or 4) bytes.
+    // `reg` is a register number or a /digit.
+    fn emit(self, prefix: int, opc: int, reg: int, rm: Operand, w: int, immsz: int, imm: int, force_rex: bool) {
+        let b = self.buf
+        if prefix != 0 { b.u8(prefix) }
+        var rex = 0x40 | (w << 3)
+        if reg >= 8 { rex = rex | 4 }
+        match rm {
+            Operand.M(m) => {
+                if m.index >= 8 { rex = rex | 2 }
+                if m.base >= 8 { rex = rex | 1 }
+            }
+            _ => {
+                if rm.n() >= 8 { rex = rex | 1 }
+            }
+        }
+        if rex != 0x40 or force_rex { b.u8(rex) }
+        if opc > 0xFFFF { b.u8(opc >> 16) }
+        if opc > 0xFF { b.u8(opc >> 8) }
+        b.u8(opc)
+        let r = (reg & 7) << 3
+        match rm {
+            Operand.M(m) => self.mem(r, m)
+            _ => b.u8(0xC0 | r | (rm.n() & 7))
+        }
+        if immsz == 1 { b.u8(imm) } else if immsz == 4 { b.u32(imm) }
+        if self.rip_pending {
+            self.relocs.push(Reloc(self.rip_pos, self.rip_sym, b.len() - (self.rip_pos + 4), self.rip_addend))
+            self.rip_pending = false
+        }
+    }
+
+    fn mem(self, r: int, m: Mem) {
+        let b = self.buf
+        if m.sym != "" {
+            b.u8(0x05 | r)
+            self.rip_pending = true
+            self.rip_pos = b.len()
+            self.rip_sym = m.sym
+            self.rip_addend = m.disp
+            b.u32(0)
+            return
+        }
+        let base = m.base
+        let index = m.index
+        let disp = m.disp
+        if base < 0 {
+            // [index*scale + disp32] or [disp32]
+            b.u8(0x04 | r)
+            var idx = 4
+            if index >= 0 { idx = index & 7 }
+            b.u8((scale_bits(m.scale) << 6) | (idx << 3) | 5)
+            b.u32(disp)
+            return
+        }
+        let bn = base & 7
+        let need_sib = index >= 0 or bn == 4
+        var md = 2
+        if disp == 0 and bn != 5 { md = 0 } else if x_fits8(disp) { md = 1 }
+        if need_sib {
+            b.u8((md << 6) | r | 4)
+            var idx = 4
+            if index >= 0 { idx = index & 7 }
+            b.u8((scale_bits(m.scale) << 6) | (idx << 3) | bn)
+        } else {
+            b.u8((md << 6) | r | bn)
+        }
+        if md == 1 { b.u8(disp) } else if md == 2 { b.u32(disp) }
+    }
+
+    // ---- moves ------------------------------------------------------------
+    fn mov(self, dst: Operand, src: Operand) {
+        match dst {
+            Operand.R(dn) => {
+                match src {
+                    Operand.R(sn) => self.emit(0, 0x8B, dn, src, 1, 0, 0, false)
+                    Operand.M(sm) => self.emit(0, 0x8B, dn, src, 1, 0, 0, false)
+                    Operand.Imm(v) => self.mov_imm(dst, v)
+                    _ => panic("x64: mov: bad source operand")
+                }
+            }
+            Operand.M(dm) => {
+                match src {
+                    Operand.R(sn) => self.emit(0, 0x89, sn, dst, 1, 0, 0, false)
+                    Operand.Imm(v) => {
+                        if not x_fits32(v) { panic("x64: mov: immediate too large for a memory destination") }
+                        self.emit(0, 0xC7, 0, dst, 1, 4, v, false)
+                    }
+                    _ => panic("x64: mov: bad source operand")
+                }
+            }
+            _ => panic("x64: mov: bad destination operand")
+        }
+    }
+
+    fn mov_imm(self, dst: Operand, v: int) {
+        let n = dst.n()
+        if v == 0 {
+            self.emit(0, 0x33, n, dst, 0, 0, 0, false)         // xor r32, r32
+        } else if v > 0 and v < 4294967296 {
+            if n >= 8 { self.buf.u8(0x41) }
+            self.buf.u8(0xB8 + (n & 7))
+            self.buf.u32(v)
+        } else if x_fits32(v) {
+            self.emit(0, 0xC7, 0, dst, 1, 4, v, false)
+        } else {
+            var rex = 0x48
+            if n >= 8 { rex = 0x49 }
+            self.buf.u8(rex)
+            self.buf.u8(0xB8 + (n & 7))
+            self.buf.u64(v)
+        }
+    }
+
+    // mov that never touches flags (no xor trick)
+    fn mov_imm_keepflags(self, dst: Operand, v: int) {
+        if v == 0 {
+            let n = dst.n()
+            if n >= 8 { self.buf.u8(0x41) }
+            self.buf.u8(0xB8 + (n & 7))
+            self.buf.u32(0)
+        } else {
+            self.mov_imm(dst, v)
+        }
+    }
+
+    fn mov_mem_reg8(self, m: Operand, r: Operand) {
+        self.emit(0, 0x88, r.n(), m, 0, 0, 0, true)
+    }
+
+    fn movzx8(self, dst: Operand, src: Operand) {       // dst: reg64   src: Mem(byte) or Reg(low 8)
+        self.emit(0, 0x0FB6, dst.n(), src, 0, 0, 0, src.is_reg())
+    }
+
+    fn movzx16(self, dst: Operand, src: Operand) {
+        self.emit(0, 0x0FB7, dst.n(), src, 0, 0, 0, false)
+    }
+
+    fn mov32_load(self, dst: Operand, m: Operand) {     // zero extending 32-bit load
+        self.emit(0, 0x8B, dst.n(), m, 0, 0, 0, false)
+    }
+
+    fn mov32_store(self, m: Operand, r: Operand) {
+        self.emit(0, 0x89, r.n(), m, 0, 0, 0, false)
+    }
+
+    fn movsx32(self, dst: Operand, src: Operand) {
+        self.emit(0, 0x63, dst.n(), src, 1, 0, 0, false)
+    }
+
+    fn movsx8(self, dst: Operand, src: Operand) {
+        self.emit(0, 0x0FBE, dst.n(), src, 1, 0, 0, src.is_reg())
+    }
+
+    fn lea(self, dst: Operand, m: Operand) {
+        self.emit(0, 0x8D, dst.n(), m, 1, 0, 0, false)
+    }
+
+    fn push(self, r: Operand) {
+        let n = r.n()
+        if n >= 8 { self.buf.u8(0x41) }
+        self.buf.u8(0x50 + (n & 7))
+    }
+
+    fn pop(self, r: Operand) {
+        let n = r.n()
+        if n >= 8 { self.buf.u8(0x41) }
+        self.buf.u8(0x58 + (n & 7))
+    }
+
+    fn xchg(self, a: Operand, b_: Operand) {
+        self.emit(0, 0x87, a.n(), b_, 1, 0, 0, false)
+    }
+
+    // ---- ALU --------------------------------------------------------------
+    fn alu(self, op: str, dst: Operand, src: Operand) {
+        let ext = alu_ext(op)
+        match src {
+            Operand.Imm(v) => {
+                if x_fits8(v) {
+                    self.emit(0, 0x83, ext, dst, 1, 1, v, false)
+                } else {
+                    if not x_fits32(v) { panic("x64: immediate too large for " + op) }
+                    self.emit(0, 0x81, ext, dst, 1, 4, v, false)
+                }
+            }
+            Operand.R(sn) => self.emit(0, ext * 8 + 1, sn, dst, 1, 0, 0, false)
+            _ => {
+                if not dst.is_reg() { panic("x64: alu: destination must be a register") }
+                self.emit(0, ext * 8 + 3, dst.n(), src, 1, 0, 0, false)
+            }
+        }
+    }
+
+    fn add(self, d: Operand, s: Operand) { self.alu("add", d, s) }
+    fn sub(self, d: Operand, s: Operand) { self.alu("sub", d, s) }
+    fn and_(self, d: Operand, s: Operand) { self.alu("and", d, s) }
+    fn or_(self, d: Operand, s: Operand) { self.alu("or", d, s) }
+    fn xor(self, d: Operand, s: Operand) { self.alu("xor", d, s) }
+    fn cmp(self, d: Operand, s: Operand) { self.alu("cmp", d, s) }
+
+    fn cmp8_mem_imm(self, m: Operand, v: int) {
+        self.emit(0, 0x80, 7, m, 0, 1, v & 255, false)
+    }
+
+    fn test(self, a: Operand, b_: Operand) {
+        match b_ {
+            Operand.Imm(v) => self.emit(0, 0xF7, 0, a, 1, 4, v, false)
+            _ => self.emit(0, 0x85, b_.n(), a, 1, 0, 0, false)
+        }
+    }
+
+    fn imul(self, dst: Operand, src: Operand) {
+        self.emit(0, 0x0FAF, dst.n(), src, 1, 0, 0, false)
+    }
+
+    fn imul3(self, dst: Operand, src: Operand, imm: int) {
+        if x_fits8(imm) {
+            self.emit(0, 0x6B, dst.n(), src, 1, 1, imm, false)
+        } else {
+            self.emit(0, 0x69, dst.n(), src, 1, 4, imm, false)
+        }
+    }
+
+    fn cqo(self) {
+        self.buf.u8(0x48)
+        self.buf.u8(0x99)
+    }
+
+    fn idiv(self, src: Operand) { self.emit(0, 0xF7, 7, src, 1, 0, 0, false) }
+    fn neg(self, r: Operand) { self.emit(0, 0xF7, 3, r, 1, 0, 0, false) }
+    fn not_(self, r: Operand) { self.emit(0, 0xF7, 2, r, 1, 0, 0, false) }
+    fn inc(self, r: Operand) { self.emit(0, 0xFF, 0, r, 1, 0, 0, false) }
+    fn dec(self, r: Operand) { self.emit(0, 0xFF, 1, r, 1, 0, 0, false) }
+
+    // kind: "shl" | "shr" | "sar";  amount: Imm(n) or any other operand (= shift by cl)
+    fn shift(self, kind: str, dst: Operand, amount: Operand) {
+        var ext = 7
+        if kind == "shl" { ext = 4 } else if kind == "shr" { ext = 5 } else if kind != "sar" { panic("x64: bad shift " + kind) }
+        match amount {
+            Operand.Imm(v) => {
+                if v == 1 {
+                    self.emit(0, 0xD1, ext, dst, 1, 0, 0, false)
+                } else {
+                    self.emit(0, 0xC1, ext, dst, 1, 1, v & 63, false)
+                }
+            }
+            _ => self.emit(0, 0xD3, ext, dst, 1, 0, 0, false)      // by cl
+        }
+    }
+
+    fn setcc(self, cc: int, r: Operand) {
+        self.emit(0, 0x0F90 + cc, 0, r, 0, 0, 0, true)
+    }
+
+    fn cmov(self, cc: int, dst: Operand, src: Operand) {
+        self.emit(0, 0x0F40 + cc, dst.n(), src, 1, 0, 0, false)
+    }
+
+    fn popcnt(self, dst: Operand, src: Operand) {
+        self.emit(0xF3, 0x0FB8, dst.n(), src, 1, 0, 0, false)
+    }
+
+    fn bsr(self, dst: Operand, src: Operand) {
+        self.emit(0, 0x0FBD, dst.n(), src, 1, 0, 0, false)
+    }
+
+    fn bsf(self, dst: Operand, src: Operand) {
+        self.emit(0, 0x0FBC, dst.n(), src, 1, 0, 0, false)
+    }
+
+    // ---- control flow -----------------------------------------------------
+    fn jmp(self, label: int) {
+        self.buf.u8(0xE9)
+        self.fixups.push(Fixup(self.buf.len(), label))
+        self.buf.u32(0)
+    }
+
+    fn jcc(self, cc: int, label: int) {
+        self.buf.u8(0x0F)
+        self.buf.u8(0x80 + cc)
+        self.fixups.push(Fixup(self.buf.len(), label))
+        self.buf.u32(0)
+    }
+
+    fn call(self, label: int) {
+        self.buf.u8(0xE8)
+        self.fixups.push(Fixup(self.buf.len(), label))
+        self.buf.u32(0)
+    }
+
+    // call [rip+sym]  (imports)
+    fn call_sym(self, sym: str) {
+        self.emit(0, 0xFF, 2, mem_sym(sym, 0), 0, 0, 0, false)
+    }
+
+    fn call_reg(self, r: Operand) { self.emit(0, 0xFF, 2, r, 0, 0, 0, false) }
+    fn jmp_reg(self, r: Operand) { self.emit(0, 0xFF, 4, r, 0, 0, 0, false) }
+
+    fn ret(self) { self.buf.u8(0xC3) }
+    fn leave(self) { self.buf.u8(0xC9) }
+    fn int3(self) { self.buf.u8(0xCC) }
+
+    fn ud2(self) {
+        self.buf.u8(0x0F)
+        self.buf.u8(0x0B)
+    }
+
+    fn rep_movsb(self) {
+        self.buf.u8(0xF3)
+        self.buf.u8(0xA4)
+    }
+
+    fn rep_stosb(self) {
+        self.buf.u8(0xF3)
+        self.buf.u8(0xAA)
+    }
+
+    // lea dst, [rip + code label]
+    fn lea_label(self, dst: Operand, label: int) {
+        let n = dst.n()
+        var rex = 0x48
+        if n >= 8 { rex = 0x4C }
+        self.buf.u8(rex)
+        self.buf.u8(0x8D)
+        self.buf.u8(0x05 | ((n & 7) << 3))
+        self.fixups.push(Fixup(self.buf.len(), label))
+        self.buf.u32(0)
+    }
+
+    // ---- SSE2 -------------------------------------------------------------
+    fn movsd(self, dst: Operand, src: Operand) {
+        if dst.is_xreg() {
+            if src.is_xreg() {
+                self.emit(0x66, 0x0F28, dst.n(), src, 0, 0, 0, false)      // movapd
+            } else {
+                self.emit(0xF2, 0x0F10, dst.n(), src, 0, 0, 0, false)
+            }
+        } else {
+            self.emit(0xF2, 0x0F11, src.n(), dst, 0, 0, 0, false)
+        }
+    }
+
+    fn sse(self, op: str, dst: Operand, src: Operand) {
+        var code = 0
+        if op == "addsd" { code = 0x58 }
+        else if op == "mulsd" { code = 0x59 }
+        else if op == "subsd" { code = 0x5C }
+        else if op == "divsd" { code = 0x5E }
+        else if op == "sqrtsd" { code = 0x51 }
+        else if op == "minsd" { code = 0x5D }
+        else if op == "maxsd" { code = 0x5F }
+        else { panic("x64: unknown SSE op " + op) }
+        self.emit(0xF2, 0x0F00 | code, dst.n(), src, 0, 0, 0, false)
+    }
+
+    fn ucomisd(self, a: Operand, b_: Operand) {
+        self.emit(0x66, 0x0F2E, a.n(), b_, 0, 0, 0, false)
+    }
+
+    fn cvtsi2sd(self, dst: Operand, src: Operand) {
+        self.emit(0xF2, 0x0F2A, dst.n(), src, 1, 0, 0, false)
+    }
+
+    fn cvttsd2si(self, dst: Operand, src: Operand) {
+        self.emit(0xF2, 0x0F2C, dst.n(), src, 1, 0, 0, false)
+    }
+
+    fn movq_to_x(self, x: Operand, r: Operand) {
+        self.emit(0x66, 0x0F6E, x.n(), r, 1, 0, 0, false)
+    }
+
+    fn movq_to_r(self, r: Operand, x: Operand) {
+        self.emit(0x66, 0x0F7E, x.n(), r, 1, 0, 0, false)
+    }
+
+    fn xorpd(self, a: Operand, b_: Operand) {
+        self.emit(0x66, 0x0F57, a.n(), b_, 0, 0, 0, false)
+    }
+
+    fn andpd(self, a: Operand, b_: Operand) {
+        self.emit(0x66, 0x0F54, a.n(), b_, 0, 0, 0, false)
+    }
+
+    // mode: 0 nearest, 1 floor, 2 ceil, 3 trunc  (| 8 = suppress precision exception)
+    fn roundsd(self, dst: Operand, src: Operand, mode: int) {
+        self.emit(0x66, 0x0F3A0B, dst.n(), src, 0, 1, mode | 8, false)
+    }
+
+    fn movaps(self, dst: Operand, src: Operand) {
+        self.emit(0, 0x0F28, dst.n(), src, 0, 0, 0, false)
+    }
+
+    fn movups_load(self, dst: Operand, m: Operand) {
+        self.emit(0, 0x0F10, dst.n(), m, 0, 0, 0, false)
+    }
+
+    fn movups_store(self, m: Operand, src: Operand) {
+        self.emit(0, 0x0F11, src.n(), m, 0, 0, 0, false)
+    }
+}

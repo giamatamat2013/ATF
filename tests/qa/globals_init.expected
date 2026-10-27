@@ -1,0 +1,4 @@
+10 11 22 global 3.0 -10 1099511627776 1099511627775 true global!
+100 101 [10, 11, 22] {"a": 10} 110 1 GLOBAL Cfg{level: 11, name: "global"}
+1 2 2
+[10, 11, 22, 99] {"a": 10, "b": 2} Cfg{level: 12, name: "global"}

@@ -1,0 +1,18 @@
+fn main() {
+    let t = clock()
+    let n = 20000000
+    var sieve = array_make::<bool>(n + 1)
+    var count = 0
+    for i in 2..=n {
+        if not sieve[i] {
+            count += 1
+            var j = i * i
+            while j <= n {
+                sieve[j] = true
+                j += i
+            }
+        }
+    }
+    println(count)
+    println("time", clock() - t)
+}

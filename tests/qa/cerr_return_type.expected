@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected str but found int
+  --> cerr_return_type.atf:2:12
+ 2 |     return 42
+   |            ^
+  hint: use str(x) to convert it to text

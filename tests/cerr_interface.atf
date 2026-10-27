@@ -1,0 +1,5 @@
+interface Shape { fn area(self) -> float }
+struct Dog { n: int }
+fn main() {
+    let s: Shape = Dog(1)
+}

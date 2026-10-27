@@ -1,0 +1,50 @@
+// string functions with empty strings, unicode and edge indices
+fn main() {
+    let e = ""
+    println("[{e}]", e.len(), e.is_empty(), e.upper(), e.lower(), e.reverse(), e.trim(), "[{e.capitalize()}]")
+    println(e.find(""), e.find("a"), e.rfind(""), e.contains(""), e.starts_with(""), e.ends_with(""), e.count("a"))
+    println(e.split(","), e.split(""), e.split_whitespace(), e.lines(), e.chars(), e.bytes())
+    println(e.replace("a", "b"), "[{e.repeat(5)}]", "ab".repeat(0), "ab".repeat(-1), "[{ ", ".join([]) }]")
+    println("abc".find(""), "abc".rfind(""), "abc".find("abcd"), "abc".rfind("abcd"), "aaa".rfind("aa"), "aaa".find("aa"))
+    println("abcabc".find_from("c", 3), "abcabc".find_from("c", 6), "abcabc".find_from("", 2))
+    println("a,b,,c,".split(","), ",".split(","), "abc".split("abc"), "aXbXc".split("X"), "abc".split(""))
+    println("a::b::c".split("::"), "a:::b".split("::"), "  a  b  ".split(" "))
+    println(" \t a b \n c\r\n".split_whitespace(), "x\ny\n\nz".lines(), "x\r\ny\r\n".lines(), "\n".lines(), "\n\n".lines())
+    println("hello".replace("l", ""), "aaaa".replace("aa", "b"), "abc".replace("", "x"), "abc".replace("abc", ""), "aaa".replace("a", "aa"))
+    println("banana".count("a"), "banana".count("an"), "aaaa".count("aa"), "abc".count(""))
+    println(" \t\n x y \r\n".trim(), "[" + "  x ".trim_start() + "]", "[" + "  x ".trim_end() + "]")
+    println("hello WORLD 123".upper(), "Hello WORLD 123".lower(), "hello".capitalize(), "HELLO".capitalize(), "1abc".capitalize())
+    println("abc".starts_with("abcd"), "abc".ends_with("zabc"), "abc".starts_with("ab"), "abc".ends_with("bc"))
+    println("12345".is_digits(), "".is_digits(), "12a".is_digits(), "-1".is_digits())
+    // indexing and slicing within range
+    let s = "hello"
+    println(s[0], s[4], s[0..0], s[0..5], s[2..], s[..2], s[5..], s[..0], s[1..4], s[5..5])
+    println(s.substr(1, 3), s.substr(0, 0), s.byte_at(1), s.chars(), s.bytes())
+    // unicode: everything is bytes
+    let u = "héllo wörld ☺"
+    println(u.len(), u.upper(), u.reverse().len(), u.find("ö"), u.contains("☺"), u.split(" "))
+    println("λ".len(), chr(955), ord("λ"), chr(955).bytes(), chr(0x1F600).len(), "\u{263A}" == chr(0x263A))
+    println(chr(65), chr(127), chr(128).bytes(), chr(2047).bytes(), chr(2048).bytes(), chr(65535).bytes(), chr(65536).bytes())
+    println(ord("A"), ord("ABC"), 'A', 'z' - 'a', '\n', '\\', '\'')
+    // comparisons
+    println("abc" < "abd", "abc" < "ab", "" < "a", "a" < "", "abc" == "abc", "abc" != "abc ", "B" < "a", "é" > "z")
+    println("abc" <= "abc", "abc" >= "abd", str_cmp("a", "b"), str_cmp("b", "a"), str_cmp("x", "x"), str_cmp("", ""))
+    println(min("pear", "apple"), max("pear", "apple"), ["b", "a", "c", "", "ab"].sorted())
+    // concatenation and conversion
+    var acc = ""
+    for i in 0..10 { acc = acc + str(i) }
+    acc += "!"
+    println(acc, acc.len(), str(true) + str(12) + str('c') + str(2.5))
+    println("x" * 3, "-" * 0, "ab" + "", "" + "cd")
+    // escapes and literals
+    println("tab\there", "quote\"q", "back\\slash", "brace\{x}", "nul?" + "\x41\x42", "\u{48}\u{49}")
+    println(r"raw\n{x}\t", """triple "quoted" {1 + 1}""")
+    let multi = """line1
+line2"""
+    println(multi.lines(), multi.len())
+    // pad functions
+    println("[" + "ab".pad_left(5) + "]", "[" + "ab".pad_right(5) + "]", "[" + pad_center("ab", 5) + "]", "[" + pad_zero("-7", 4) + "]", "[" + pad_zero("abc", 2) + "]")
+    println("[" + pad_left("", 3) + "]", "[" + pad_zero("+5", 4) + "]", "[" + "toolong".pad_left(3) + "]")
+    // hashing is deterministic and content based
+    println("abc".hash() == ("ab" + "c").hash(), "abc".hash() == "abd".hash())
+}

@@ -1,0 +1,67 @@
+// base_convert.atf - converting numbers between bases 2 to 36.
+// Shows: digit tables as strings, while loops, integer division, parse_int_base,
+//        the built-in to_hex / to_bin, format specs {n:x} {n:b}, bit operations.
+// Run:   python run_atf.py run examples/base_convert.atf
+
+let DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+fn to_base(n: int, base: int) -> str {
+    if base < 2 or base > 36 { panic("base must be between 2 and 36") }
+    if n == 0 { return "0" }
+    var m = abs(n)
+    var out = ""
+    while m > 0 {
+        out = DIGITS[m % base] + out
+        m = m / base
+    }
+    if n < 0 { out = "-" + out }
+    return out
+}
+
+fn from_base(text: str, base: int) -> int? {
+    var result = 0
+    var neg = false
+    var first = true
+    for c in text.lower() {
+        if first and c == "-" {
+            neg = true
+            first = false
+            continue
+        }
+        first = false
+        let d = DIGITS.find(c)
+        if d < 0 or d >= base { return nil }
+        result = result * base + d
+    }
+    if neg { return -result }
+    return result
+}
+
+fn main() {
+    for n in [0, 5, 10, 255, 1000, 65535, -42] {
+        println("{n:>6}: bin {to_base(n, 2):>18}  oct {to_base(n, 8):>7}  hex {to_base(n, 16):>5}  base36 {to_base(n, 36)}")
+    }
+
+    // the built-in helpers agree with our function
+    println("built-in:", 255.to_hex(), 255.to_bin(), "{255:x} {255:X} {255:b}")
+    println("zero padded: {5:08b} {255:04x}")
+
+    // and back again
+    println(from_base("ff", 16), from_base("11111111", 2), from_base("zz", 36), from_base("-101", 2))
+    println(from_base("12", 2), from_base("xyz", 10))        // invalid digits give nil
+    println("ff".parse_int_base(16), "777".parse_int_base(8))
+
+    // round trip for many numbers and bases
+    var ok = true
+    for base in 2..=36 {
+        for n in [0, 1, 7, 99, 12345, 987654321, -31337] {
+            if from_base(to_base(n, base), base) != n { ok = false }
+        }
+    }
+    println("round trip ok for bases 2..36:", ok)
+
+    // bit tricks
+    let x = 0b1011_0110
+    println("x = {x} = {x:b}, popcount {x.popcount()}, x & 0xF = {x & 0xF}, x >> 4 = {x >> 4}, x << 2 = {x << 2}")
+    println("is power of two:", [1, 6, 64, 100, 1024].map(|v| v & (v - 1) == 0))
+}

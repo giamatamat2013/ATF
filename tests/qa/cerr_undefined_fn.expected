@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: unknown function 'compute_summ'
+  --> cerr_undefined_fn.atf:3:13
+ 3 |     println(compute_summ(1))
+   |             ^
+  hint: did you mean 'compute_sum'?

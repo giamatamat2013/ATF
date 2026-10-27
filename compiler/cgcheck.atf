@@ -1,0 +1,25 @@
+// Test driver for the stage 1 code generator: reads a typed-IR dump (build/irdump.py) and writes the exe.
+// usage: cgcheck in.ir out.exe
+import "backend_stub"
+import "irload"
+import "x64"
+import "pe"
+import "codegen"
+
+fn main(args: [str]) {
+    if args.len() < 2 {
+        eprintln("usage: cgcheck in.ir out.exe")
+        exit(2)
+    }
+    let text = read_file(args[0])
+    if text == nil {
+        eprintln("cannot read " + args[0])
+        exit(2)
+    }
+    let prog = load_ir(text!)
+    let exe = generate_exe(prog)
+    if not write_file(args[1], exe.to_str()) {
+        eprintln("cannot write " + args[1])
+        exit(2)
+    }
+}

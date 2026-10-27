@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: 'id' takes 1 type argument(s)
+  --> cerr_wrong_type_args.atf:3:27
+ 3 |     println(id::<int, str>(1))
+   |                           ^

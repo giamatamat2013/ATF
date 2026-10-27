@@ -1,0 +1,22 @@
+deposit 25.50 to Alice
+  ok, balance is now $125.50
+withdraw 500.00 from Alice
+  error: insufficient funds: balance $125.50, requested $500.00
+withdraw 0.99 from Bob
+  ok, balance is now $24.51
+deposit -5 to Bob
+  error: deposit must be positive
+transfer 40.00 from Alice to Bob
+  moved $40.00
+transfer 1000.00 from Bob to Alice
+  failed: insufficient funds: balance $64.51, requested $1000.00
+Alice: $85.50
+    - opened by Alice
+    - deposit  $100.00
+    - deposit  $25.50
+    - withdraw $40.00
+Bob: $64.51
+    - opened by Bob
+    - deposit  $25.50
+    - withdraw $0.99
+    - deposit  $40.00

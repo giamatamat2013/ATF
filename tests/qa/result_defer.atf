@@ -1,0 +1,127 @@
+// Result and ?, defer with return/break/continue/loops, defer ordering
+enum MyErr { NotFound(str), Invalid(int) }
+
+fn parse_pos(s: str) -> Result<int, str> {
+    let n = s.parse_int()
+    if n == nil { return Result.Err("not a number: {s}") }
+    if n! < 0 { return Result.Err("negative: {s}") }
+    return Result.Ok(n!)
+}
+
+fn sum3(a: str, b: str, c: str) -> Result<int, str> {
+    let x = parse_pos(a)?
+    let y = parse_pos(b)?
+    let z = parse_pos(c)?
+    return Result.Ok(x + y + z)
+}
+
+fn lookup(m: {str: int}, k: str) -> Result<int, MyErr> {
+    if not m.has(k) { return Result.Err(MyErr.NotFound(k)) }
+    let v = m[k]
+    if v < 0 { return Result.Err(MyErr.Invalid(v)) }
+    return Result.Ok(v)
+}
+
+fn total(m: {str: int}, ks: [str]) -> Result<int, MyErr> {
+    var t = 0
+    for k in ks { t += lookup(m, k)? }
+    return Result.Ok(t)
+}
+
+fn nested_q(s: str) -> Result<str, str> {
+    let n = parse_pos(s)?
+    let doubled = Result.Ok(n * 2) as Result<int, str>
+    let d = doubled?
+    return Result.Ok("ok {d}")
+}
+
+fn first_char_code(s: str?) -> int? {
+    let t = s?
+    if t.len() == 0 { return nil }
+    return t.byte_at(0)
+}
+
+var trace: [str] = []
+
+fn log(s: str) { trace.push(s) }
+
+fn with_defers(mode: int) -> int {
+    defer log("d1")
+    defer log("d2")
+    if mode == 0 { return 10 }
+    log("body")
+    defer log("d3")
+    if mode == 1 { return 20 }
+    return 30
+}
+
+fn defer_sees_final_value() -> int {
+    var x = 1
+    defer log("x at exit = {x}")
+    x = 2
+    return x * 100
+}
+
+fn defer_in_loops() {
+    for i in 0..4 {
+        defer log("loop end {i}")
+        if i == 1 { continue }
+        if i == 3 { break }
+        log("iter {i}")
+    }
+    log("after loop")
+}
+
+fn defer_block() {
+    defer {
+        log("block a")
+        log("block b")
+    }
+    log("main body")
+}
+
+fn defer_with_q(s: str) -> Result<int, str> {
+    defer log("cleanup {s}")
+    let v = parse_pos(s)?
+    log("parsed {v}")
+    return Result.Ok(v)
+}
+
+fn main() {
+    println(sum3("1", "2", "3"), sum3("1", "x", "3"), sum3("1", "2", "-3"))
+    println(parse_pos("5").is_ok(), parse_pos("x").is_err(), parse_pos("7").unwrap(), parse_pos("x").unwrap_or(-1))
+    println(parse_pos("8").ok(), parse_pos("x").ok(), parse_pos("x").err(), parse_pos("9").err())
+    println(parse_pos("4").expect("should parse"))
+    let m = {"a": 1, "b": 2, "neg": -5}
+    println(total(m, ["a", "b"]), total(m, ["a", "zz", "neg"]), total(m, ["neg"]), total(m, []))
+    match total(m, ["b", "nope"]) {
+        Result.Ok(v) => println("ok", v)
+        Result.Err(MyErr.NotFound(k)) => println("missing key", k)
+        Result.Err(MyErr.Invalid(v)) => println("invalid", v)
+        _ => println("impossible")  // WORKAROUND: nested patterns are not seen as exhaustive (bug_match_nested_exhaustive)
+    }
+    println(nested_q("21"), nested_q("q"))
+    println(first_char_code("A"), first_char_code(""), first_char_code(nil))
+    let r: Result<[int], str> = Result.Ok([1, 2])
+    println(r, r.unwrap().len())
+    let r2: Result<int, [str]> = Result.Err(["e1", "e2"])
+    println(r2, r2.err()!.len())
+    println(Result.Ok(1) as Result<int, str> == Result.Ok(1) as Result<int, str>)
+
+    for mode in 0..3 {
+        trace = []
+        let v = with_defers(mode)
+        println(v, trace)
+    }
+    trace = []
+    println(defer_sees_final_value(), trace)
+    trace = []
+    defer_in_loops()
+    println(trace)
+    trace = []
+    defer_block()
+    println(trace)
+    trace = []
+    println(defer_with_q("12"), defer_with_q("bad"), trace)
+    // (defer + panic is tested in bug_defer_panic.atf)
+}

@@ -1,0 +1,306 @@
+// Test support: reads the typed-IR text dump written by build/irdump.py (Python stage 0 front end) and rebuilds
+// a Program from it, so that the stage 1 code generator can be compared byte for byte with the Python one
+// without needing the stage 1 checker.  (Types are reduced to float / void / never / "other": that is all the code
+// generator looks at.)
+import "util"
+import "ast"
+import "types"
+import "tir"
+
+fn ir_hexv(c: int) -> int {
+    if c >= '0' and c <= '9' { return c - '0' }
+    if c >= 'a' and c <= 'f' { return c - 'a' + 10 }
+    if c >= 'A' and c <= 'F' { return c - 'A' + 10 }
+    panic("irload: bad hex digit")
+}
+
+fn ir_unhex(s: str) -> str {
+    if s == "-" { return "" }
+    let sb = str_builder()
+    var i = 0
+    while i + 1 < s.len() {
+        sb.add_byte(byte(ir_hexv(s.byte_at(i)) * 16 + ir_hexv(s.byte_at(i + 1))))
+        i += 2
+    }
+    return sb.finish()
+}
+
+fn ir_hex64(s: str) -> int {
+    var v = 0
+    for i in 0..s.len() { v = (v << 4) | ir_hexv(s.byte_at(i)) }
+    return v
+}
+
+fn ir_type(c: str) -> Type {
+    if c == "F" { return Type.Float }
+    if c == "V" { return Type.Void }
+    if c == "N" { return Type.Never }
+    return Type.Int
+}
+
+struct IrReader {
+    toks: [str],
+    pos: int,
+    vars: [Var],
+    funcs: [FnInst],
+    globals: [GlobalVar],
+    exts: [Extern]
+}
+
+impl IrReader {
+    fn tok(self) -> str {
+        let t = self.toks[self.pos]
+        self.pos += 1
+        return t
+    }
+    fn int_(self) -> int { return self.tok().to_int() }
+    fn hexstr(self) -> str { return ir_unhex(self.tok()) }
+    fn expect(self, t: str) {
+        let g = self.tok()
+        if g != t { panic("irload: expected '" + t + "' but found '" + g + "' at token " + str(self.pos)) }
+    }
+    fn var_(self) -> Var { return self.vars[self.int_()] }
+    fn fn_(self) -> FnInst { return self.funcs[self.int_()] }
+
+    fn exprs(self, n: int) -> [TExpr] {
+        var r: [TExpr] = []
+        for i in 0..n { r.push(self.expr()) }
+        return r
+    }
+
+    fn stmts(self) -> [TStmt] {
+        let n = self.int_()
+        var r: [TStmt] = []
+        for i in 0..n { r.push(self.stmt()) }
+        return r
+    }
+
+    fn expr(self) -> TExpr {
+        let k = self.tok()
+        let ty = ir_type(self.tok())
+        let pos = Pos("", self.int_(), 0)
+        if k == "C" {
+            let kind = self.tok()
+            let v = self.tok()
+            if kind == "i" { return TExpr(TK.Const(CK.Int, v.to_int(), 0.0, ""), ty, pos) }
+            if kind == "b" { return TExpr(TK.Const(CK.Bool, v.to_int(), 0.0, ""), ty, pos) }
+            if kind == "n" { return TExpr(TK.Const(CK.Nil, v.to_int(), 0.0, ""), ty, pos) }
+            if kind == "f" { return TExpr(TK.Const(CK.Float, 0, __bits2f(ir_hex64(v)), ""), ty, pos) }
+            if kind == "s" { return TExpr(TK.Const(CK.Str, 0, 0.0, ir_unhex(v)), ty, pos) }
+            panic("irload: bad const kind " + kind)
+        }
+        if k == "V" { return TExpr(TK.VarRef(self.var_()), ty, pos) }
+        if k == "G" { return TExpr(TK.GlobalRef(self.globals[self.int_()]), ty, pos) }
+        if k == "R" { return TExpr(TK.FnRef(self.fn_()), ty, pos) }
+        if k == "U" {
+            let op = self.tok()
+            return TExpr(TK.Un(op, self.expr()), ty, pos)
+        }
+        if k == "B" {
+            let op = self.tok()
+            let l = self.expr()
+            let r = self.expr()
+            return TExpr(TK.Bin(op, l, r), ty, pos)
+        }
+        if k == "A" {
+            let l = self.expr()
+            let r = self.expr()
+            return TExpr(TK.And(l, r), ty, pos)
+        }
+        if k == "O" {
+            let l = self.expr()
+            let r = self.expr()
+            return TExpr(TK.Or(l, r), ty, pos)
+        }
+        if k == "T" {
+            let kind = self.tok()
+            return TExpr(TK.Cvt(kind, self.expr()), ty, pos)
+        }
+        if k == "L" {
+            let f = self.fn_()
+            let n = self.int_()
+            return TExpr(TK.Call(f, self.exprs(n)), ty, pos)
+        }
+        if k == "X" {
+            let ext = self.exts[self.int_()]
+            let n = self.int_()
+            return TExpr(TK.CallExt(ext, self.exprs(n)), ty, pos)
+        }
+        if k == "I" {
+            let f = self.expr()
+            let n = self.int_()
+            return TExpr(TK.CallInd(f, self.exprs(n)), ty, pos)
+        }
+        if k == "D" {
+            let obj = self.expr()
+            let idx = self.int_()
+            return TExpr(TK.Load(obj, idx), ty, pos)
+        }
+        if k == "P" {
+            let b = self.expr()
+            let i = self.expr()
+            let es = self.int_()
+            return TExpr(TK.PtrIdx(b, i, es), ty, pos)
+        }
+        if k == "Y" {
+            let b = self.expr()
+            let i = self.expr()
+            let es = self.int_()
+            return TExpr(TK.ArrIdx(b, i, es), ty, pos)
+        }
+        if k == "N" {
+            let n = self.int_()
+            return TExpr(TK.NewObj(self.exprs(n)), ty, pos)
+        }
+        if k == "Q" {
+            let name = self.tok()
+            let n = self.int_()
+            return TExpr(TK.Intr(name, self.exprs(n)), ty, pos)
+        }
+        if k == "K" {
+            let c = self.expr()
+            let a = self.expr()
+            let b = self.expr()
+            return TExpr(TK.Cond(c, a, b), ty, pos)
+        }
+        if k == "S" {
+            let ss = self.stmts()
+            let e = self.expr()
+            return TExpr(TK.Seq(ss, e), ty, pos)
+        }
+        if k == "M" {
+            let f = self.fn_()
+            let n = self.int_()
+            var caps: [Var] = []
+            for i in 0..n { caps.push(self.var_()) }
+            return TExpr(TK.MkClosure(f, caps), ty, pos)
+        }
+        panic("irload: unknown expression tag " + k)
+    }
+
+    fn stmt(self) -> TStmt {
+        let k = self.tok()
+        let pos = Pos("", self.int_(), 0)
+        if k == "d" {
+            let v = self.var_()
+            if self.int_() == 0 { return TStmt(SK.Decl(v, nil), pos) }
+            return TStmt(SK.Decl(v, self.expr()), pos)
+        }
+        if k == "s" {
+            let t = self.expr()
+            let v = self.expr()
+            return TStmt(SK.Set(t, v), pos)
+        }
+        if k == "e" { return TStmt(SK.ExprS(self.expr()), pos) }
+        if k == "i" {
+            let c = self.expr()
+            let th = self.stmts()
+            let el = self.stmts()
+            return TStmt(SK.If(c, th, el), pos)
+        }
+        if k == "w" {
+            let c = self.expr()
+            let body = self.stmts()
+            let stp = self.stmts()
+            return TStmt(SK.While(c, body, stp), pos)
+        }
+        if k == "b" { return TStmt(SK.Break, pos) }
+        if k == "c" { return TStmt(SK.Continue, pos) }
+        if k == "r" {
+            if self.int_() == 0 { return TStmt(SK.Ret(nil), pos) }
+            return TStmt(SK.Ret(self.expr()), pos)
+        }
+        if k == "k" { return TStmt(SK.Blk(self.stmts()), pos) }
+        panic("irload: unknown statement tag " + k)
+    }
+}
+
+fn load_ir(text: str) -> Program {
+    let r = IrReader{ toks: text.split_whitespace(), pos: 0, vars: [], funcs: [], globals: [], exts: [] }
+    let prog = new_program()
+    r.expect("ATFIR")
+    r.expect("1")
+    r.expect("globals")
+    let ng = r.int_()
+    for i in 0..ng {
+        r.expect("g")
+        let sym = r.hexstr()
+        let g = new_global(sym, Type.Int, NOPOS)
+        g.sym = sym
+        r.globals.push(g)
+        prog.globals.push(g)
+    }
+    r.expect("externs")
+    let ne = r.int_()
+    for i in 0..ne {
+        r.expect("x")
+        let dll = r.hexstr()
+        let name = r.hexstr()
+        let ret32 = r.int_() != 0
+        let ex = Extern(dll, name, [], Type.Void, ret32)
+        r.exts.push(ex)
+        prog.externs.push(ex)
+    }
+    r.expect("vars")
+    let nv = r.int_()
+    var roots: [int] = []
+    for i in 0..nv {
+        r.expect("v")
+        let name = r.hexstr()
+        let ty = ir_type(r.tok())
+        let v = new_var(name, ty, true, NOPOS)
+        v.captured = r.int_() != 0
+        v.assigned = r.int_() != 0
+        roots.push(r.int_())
+        r.vars.push(v)
+    }
+    for i in 0..nv {
+        if roots[i] >= 0 { r.vars[i].root = r.vars[roots[i]] }
+    }
+    r.expect("funcs")
+    let nf = r.int_()
+    for i in 0..nf {
+        r.expect("f")
+        let name = r.hexstr()
+        let file = r.hexstr()
+        let line = r.int_()
+        let is_lambda = r.int_() != 0
+        let is_prelude = r.int_() != 0
+        let ret = ir_type(r.tok())
+        var params: [Var] = []
+        let np = r.int_()
+        for j in 0..np { params.push(r.var_()) }
+        let f = new_fninst(name, params, ret)
+        let nvars = r.int_()
+        for j in 0..nvars { f.vars.push(r.var_()) }
+        let ncaps = r.int_()
+        for j in 0..ncaps {
+            let outer = r.var_()
+            let inner = r.var_()
+            f.captures.push(outer)
+            f.capture_inner[outer.uid] = inner
+        }
+        f.is_lambda = is_lambda
+        f.is_prelude = is_prelude
+        f.pos = Pos(file, line, 0)
+        r.funcs.push(f)
+        prog.funcs.push(f)
+    }
+    r.expect("entry")
+    prog.entry = r.funcs[r.int_()]
+    r.expect("alloc")
+    prog.alloc = r.funcs[r.int_()]
+    r.expect("rt")
+    let nrt = r.int_()
+    for i in 0..nrt {
+        r.expect("t")
+        let name = r.hexstr()
+        prog.rt[name] = r.funcs[r.int_()]
+    }
+    for i in 0..nf {
+        r.expect("body")
+        let idx = r.int_()
+        r.funcs[idx].body = r.stmts()
+    }
+    return prog
+}

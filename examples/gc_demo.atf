@@ -1,0 +1,62 @@
+// gc_demo.atf - the garbage collector at work.
+// Shows: allocating lots of short lived objects without ever freeing anything, gc() to force a
+//        collection, gc_runs() and gc_live_bytes(), keeping long lived data alive across collections.
+// Run:   python run_atf.py run examples/gc_demo.atf
+
+struct Node {
+    value: int,
+    next: Node?
+}
+
+// builds a list of n nodes
+fn make_list(n: int) -> Node? {
+    var head: Node? = nil
+    for i in 0..n {
+        head = Node{ value: i, next: head }
+    }
+    return head
+}
+
+fn sum_list(head: Node?) -> int {
+    var total = 0
+    var cur = head
+    while let n = cur {
+        total += n.value
+        cur = n.next
+    }
+    return total
+}
+
+fn main() {
+    // this data stays reachable the whole time
+    let keep = make_list(100000)
+    let before = gc_runs()
+
+    // 2000 lists of 10000 nodes = 20 million nodes (about 640 MB) are created and dropped
+    var checksum = 0
+    for round in 0..2000 {
+        let tmp = make_list(10000)
+        checksum += sum_list(tmp)
+    }
+    println("checksum of the temporary lists:", checksum)
+    println("the collector ran while we worked:", gc_runs() > before)
+
+    // the long lived list survived every collection unharmed
+    println("sum of the long lived list:", sum_list(keep))
+
+    // an explicit collection; afterwards live bytes counts what is still reachable
+    gc()
+    let live_mb = gc_live_bytes() / 1024 / 1024
+    println("live data after gc() is small (under 16 MB):", live_mb < 16)
+
+    // big strings and arrays are collected too
+    var s = ""
+    for i in 0..20000 { s = s + "x" }
+    var arrays = 0
+    for i in 0..200 {
+        let a = array_make::<int>(1000000)
+        a[0] = i
+        arrays += a.len()
+    }
+    println("string length {s.len()}, allocated {arrays / 1000000} million array elements in total")
+}

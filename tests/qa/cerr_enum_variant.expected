@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: Color has no variant 'Blue'
+  --> cerr_enum_variant.atf:3:19
+ 3 |     let c = Color.Blue
+   |                   ^
+  hint: variants: Red, Green

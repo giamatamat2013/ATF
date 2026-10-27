@@ -1,0 +1,61 @@
+// stats.atf - read numbers from standard input and print statistics.
+// Shows: read_line() returning str?, parse_float, loops until end of input, sorting,
+//        float formatting, a histogram.
+// Run:   python run_atf.py run examples/stats.atf < examples/stats.in
+//        (numbers may be separated by spaces or commas, several per line; bad words are skipped)
+
+fn main() {
+    var values: [float] = []
+    var skipped: [str] = []
+    loop {
+        let line = read_line()
+        if line == nil { break }                  // end of input
+        for word in line!.replace(",", " ").split_whitespace() {
+            let v = word.parse_float()
+            if v == nil {
+                skipped.push(word)
+            } else {
+                values.push(v!)
+            }
+        }
+    }
+
+    if values.len() == 0 {
+        println("no numbers were given")
+        return
+    }
+
+    let n = values.len()
+    let sorted = values.sorted()
+    let total = values.sum()
+    let mean = total / float(n)
+
+    var sq = 0.0
+    for v in values { sq += (v - mean) * (v - mean) }
+    let variance = sq / float(n)
+
+    var median = sorted[n / 2]
+    if n % 2 == 0 { median = (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0 }
+
+    println("count    : {n}")
+    println("sum      : {total:.2f}")
+    println("mean     : {mean:.3f}")
+    println("median   : {median:.3f}")
+    println("min, max : {sorted[0]}, {sorted[n - 1]}")
+    println("std dev  : {sqrt(variance):.3f}")
+    if skipped.len() > 0 {
+        println("skipped  : {skipped}")
+    }
+
+    // histogram with buckets of width 10
+    println("histogram:")
+    var buckets: {int: int} = {}
+    for v in sorted {
+        let b = int(floor(v / 10.0)) * 10
+        buckets[b] = buckets.get(b, 0) + 1
+    }
+    for b, count in buckets {
+        let bar = "#".repeat(count)
+        println("  {b:>3}..{b + 9:<3} | {bar} {count}")
+    }
+}

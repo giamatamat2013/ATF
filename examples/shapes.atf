@@ -1,0 +1,82 @@
+// shapes.atf - geometric shapes modelled as an enum with data.
+// Shows: enums with payloads, match (patterns and guards), methods on enums, floats.
+// Run:   python run_atf.py run examples/shapes.atf
+
+enum Shape {
+    Circle(float),                 // radius
+    Rect(float, float),            // width, height
+    Triangle(float, float, float)  // three sides
+}
+
+impl Shape {
+    fn area(self) -> float {
+        return match self {
+            Shape.Circle(r) => PI * r * r
+            Shape.Rect(w, h) => w * h
+            Shape.Triangle(a, b, c) => {
+                // Heron's formula
+                let s = (a + b + c) / 2.0
+                sqrt(s * (s - a) * (s - b) * (s - c))
+            }
+        }
+    }
+
+    fn perimeter(self) -> float {
+        return match self {
+            Shape.Circle(r) => 2.0 * PI * r
+            Shape.Rect(w, h) => 2.0 * (w + h)
+            Shape.Triangle(a, b, c) => a + b + c
+        }
+    }
+
+    fn name(self) -> str {
+        return match self {
+            Shape.Circle(r) => "circle"
+            Shape.Rect(w, h) if w == h => "square"
+            Shape.Rect(w, h) => "rectangle"
+            Shape.Triangle(a, b, c) if a == b and b == c => "equilateral triangle"
+            Shape.Triangle(a, b, c) => "triangle"
+        }
+    }
+
+    // a new shape, scaled by factor k
+    fn scaled(self, k: float) -> Shape {
+        return match self {
+            Shape.Circle(r) => Shape.Circle(r * k)
+            Shape.Rect(w, h) => Shape.Rect(w * k, h * k)
+            Shape.Triangle(a, b, c) => Shape.Triangle(a * k, b * k, c * k)
+        }
+    }
+}
+
+fn main() {
+    let shapes = [
+        Shape.Circle(1.5),
+        Shape.Rect(3.0, 4.0),
+        Shape.Rect(2.0, 2.0),
+        Shape.Triangle(3.0, 4.0, 5.0),
+        Shape.Triangle(2.0, 2.0, 2.0)
+    ]
+    println("{pad_right("shape", 22)} {pad_left("area", 8)} {pad_left("perimeter", 10)}")
+    var total = 0.0
+    for s in shapes {
+        println("{s.name():<22} {s.area():8.3f} {s.perimeter():10.3f}")
+        total += s.area()
+    }
+    println("total area: {total:.3f}")
+
+    // the debug text of an enum value shows its variant and payload
+    println(shapes[1])
+    println(shapes[0].scaled(2.0))
+
+    // scaling by k multiplies the area by k * k
+    let big = shapes[3].scaled(10.0)
+    println("{big.name()} area {big.area()} (was {shapes[3].area()})")
+
+    // pick the largest shape
+    var best = shapes[0]
+    for s in shapes {
+        if s.area() > best.area() { best = s }
+    }
+    println("largest: {best.name()} with area {best.area():.2f}")
+}

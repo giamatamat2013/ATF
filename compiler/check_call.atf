@@ -1,0 +1,1122 @@
+// Calls, methods, constructors, lambdas and built-in special forms (port of atf/check_call.py)
+import "util"
+import "ast"
+import "types"
+import "tir"
+import "tirutil"
+import "checker"
+import "check_expr"
+
+struct MethodHit {
+    imp: ImplInfo,
+    fi: FnInfo,
+    binds: {str: Type}
+}
+
+// signature of the simple intrinsics: argument types and result type
+fn intrinsic_sig(name: str) -> ([Type], Type)? {
+    return match name {
+        "__sqrt" => ([TFloat], TFloat)
+        "__floor" => ([TFloat], TFloat)
+        "__ceil" => ([TFloat], TFloat)
+        "__trunc" => ([TFloat], TFloat)
+        "__fabs" => ([TFloat], TFloat)
+        "__f2bits" => ([TFloat], TInt)
+        "__bits2f" => ([TInt], TFloat)
+        "__sp" => ([], TInt)
+        "__popcnt" => ([TInt], TInt)
+        "__clz" => ([TInt], TInt)
+        "__ctz" => ([TInt], TInt)
+        "__trap" => ([], TNever)
+        "__data_start" => ([], TInt)
+        "__data_end" => ([], TInt)
+        "__tb" => ([], TInt)
+        "__text_start" => ([], TInt)
+        "__fp" => ([], TInt)
+        _ => nil
+    }
+}
+
+fn is_special_form(name: str) -> bool {
+    return match name {
+        "print" => true
+        "println" => true
+        "eprint" => true
+        "eprintln" => true
+        "str" => true
+        "int" => true
+        "float" => true
+        "byte" => true
+        "bool" => true
+        "assert" => true
+        "panic" => true
+        "__comprehension" => true
+        "copy" => true
+        "same" => true
+        "include_str" => true
+        _ => false
+    }
+}
+
+fn is_other_intrinsic(name: str) -> bool {
+    return match name {
+        "__setjmp" => true
+        "__longjmp" => true
+        "__sizeof" => true
+        "__pointer_free" => true
+        "__has_default" => true
+        "__default" => true
+        "__eq" => true
+        "__cmp" => true
+        "__hash" => true
+        "__str" => true
+        "__debug" => true
+        "__memcpy" => true
+        "__memset" => true
+        "__save_regs" => true
+        "__call_cdecl" => true
+        _ => false
+    }
+}
+
+fn av_pos(av: AV, default: Pos) -> Pos {
+    return match av {
+        AV.Ast(a) => a.expr.pos
+        AV.Typed(t) => t.pos
+    }
+}
+
+fn av_is_lambda(av: AV) -> bool {
+    return match av {
+        AV.Ast(a) => {
+            match a.expr.k {
+                ExprK.Lambda(p, r, b) => true
+                _ => false
+            }
+        }
+        AV.Typed(t) => false
+    }
+}
+
+fn args_to_av(args: [Arg]) -> [AV] {
+    var out: [AV] = []
+    for a in args { out.push(AV.Ast(a)) }
+    return out
+}
+
+fn typed_to_av(args: [TExpr]) -> [AV] {
+    var out: [AV] = []
+    for a in args { out.push(AV.Typed(a)) }
+    return out
+}
+
+impl Checker {
+    // ------------------------------------------------------------------ method lookup
+    fn find_methods(self, t: Type, name: str) -> [MethodHit] {
+        var res: [MethodHit] = []
+        let lst = self.methods.get(head_key(t) + "|" + name, [])
+        for me in lst {
+            var binds: {str: Type} = {}
+            if unify(me.imp.self_type!, t, binds) {
+                res.push(MethodHit(me.imp, me.fi, binds))
+            }
+        }
+        return res
+    }
+
+    fn try_method(self, recv: TExpr, name: str, args: [TExpr], pos: Pos, expected: Type? = nil) -> TExpr? {
+        let found = self.find_methods(recv.ty, name)
+        if found.len() == 0 { return nil }
+        let h = found[0]
+        if not h.fi.has_self { return nil }
+        return self.invoke(h.fi, h.binds.copy(), recv, typed_to_av(args), pos, expected, nil)
+    }
+
+    // ------------------------------------------------------------------ core of every call
+    // maps call arguments (positional / named) to parameter slots
+    fn bind_args(self, fi: FnInfo, args: [AV], nself: int, pos: Pos) -> [AV?] {
+        let params = fi.decl.params[nself..]
+        var slots: [AV?] = []
+        for p in params { slots.push(nil) }
+        var npos = 0
+        var named_seen = false
+        for av in args {
+            var named = ""
+            var npos_ = pos
+            match av {
+                AV.Ast(a) => {
+                    named = a.name
+                    npos_ = a.pos
+                }
+                _ => {}
+            }
+            if named != "" {
+                named_seen = true
+                var found = false
+                for i in 0..params.len() {
+                    if params[i].name == named {
+                        if slots[i] != nil { fail(npos_, "argument '{named}' given twice") }
+                        match av {
+                            AV.Ast(a) => slots[i] = AV.Ast(Arg("", a.expr, a.pos))
+                            _ => {}
+                        }
+                        found = true
+                        break
+                    }
+                }
+                if not found {
+                    var pn: [str] = []
+                    for p in params { pn.push(p.name) }
+                    fail(npos_, "function '{fi.name}' has no parameter named '{named}'", "parameters: " + ", ".join(pn))
+                }
+            } else {
+                if named_seen { fail(av_pos(av, pos), "positional arguments must come before named ones") }
+                if npos >= params.len() { self.arity_error(fi, params, args.len(), pos) }
+                slots[npos] = av
+                npos += 1
+            }
+        }
+        return slots
+    }
+
+    fn arity_error(self, fi: FnInfo, params: [Param], given: int, pos: Pos) -> never {
+        var required = 0
+        for p in params {
+            if p.default == nil { required += 1 }
+        }
+        var sigs: [str] = []
+        for p in params { sigs.push("{p.name}: {self.type_text(p.ty)}") }
+        var takes = "{params.len()} argument(s)"
+        if required != params.len() { takes = "{required} to {params.len()} arguments" }
+        fail(pos, "'{fi.name}' takes {takes} but {given} given", "signature: {fi.name}({ ", ".join(sigs)})")
+    }
+
+    fn type_text(self, t: TypeExpr?) -> str {
+        if t == nil { return "?" }
+        match t!.k {
+            TypeK.Name(n, args) => {
+                if args.len() > 0 {
+                    var parts: [str] = []
+                    for a in args { parts.push(self.type_text(a)) }
+                    return n + "<" + ", ".join(parts) + ">"
+                }
+                return n
+            }
+            TypeK.Array(e) => return "[" + self.type_text(e) + "]"
+            TypeK.Map(k, v) => return "\{" + self.type_text(k) + ": " + self.type_text(v) + "\}"
+            TypeK.Opt(i) => return self.type_text(i) + "?"
+            TypeK.Tuple(es) => {
+                var parts: [str] = []
+                for a in es { parts.push(self.type_text(a)) }
+                return "(" + ", ".join(parts) + ")"
+            }
+            TypeK.Fn(ps, r) => {
+                var parts: [str] = []
+                for a in ps { parts.push(self.type_text(a)) }
+                var s = "fn(" + ", ".join(parts) + ")"
+                if r != nil { s = s + " -> " + self.type_text(r) }
+                return s
+            }
+            TypeK.Ptr(e) => return "ptr<" + self.type_text(e) + ">"
+        }
+    }
+
+    fn unify_arg(self, pattern: Type, te: TExpr, binds: {str: Type}) -> bool {
+        let t = te.ty
+        if t == TNil or t == TNever { return true }
+        if not has_params(pattern) { return self.try_coerce(te, pattern) != nil }
+        if unify(pattern, t, binds) { return true }
+        match pattern {
+            Type.Param(n, u) => {
+                let cur = binds.try_get(pattern.key())
+                if cur != nil and self.try_coerce(te, cur!) != nil { return true }
+                if cur != nil {
+                    let c = cur!
+                    if (c == TInt or c == TByte) and t == TFloat {
+                        binds[pattern.key()] = TFloat
+                        return true
+                    }
+                    if c == TByte and t == TInt {
+                        binds[pattern.key()] = TInt
+                        return true
+                    }
+                    if (c == TInt or c == TByte) and (t == TInt or t == TByte) { return true }
+                    if c == TFloat and (t == TInt or t == TByte) { return true }
+                }
+            }
+            _ => {}
+        }
+        return false
+    }
+
+    fn av_value(self, av: AV, hint: Type?) -> TExpr {
+        match av {
+            AV.Ast(a) => return self.ce_value(a.expr, hint)
+            AV.Typed(t) => {
+                if t.ty == TVoid { fail(t.pos, "this expression does not produce a value") }
+                return t
+            }
+        }
+    }
+
+    fn av_any(self, av: AV, hint: Type?) -> TExpr {
+        match av {
+            AV.Ast(a) => return self.ce(a.expr, hint)
+            AV.Typed(t) => return t
+        }
+    }
+
+    // call function/method `fi`. binds: type-parameter bindings known so far (from the receiver).
+    fn invoke(self, fi: FnInfo, binds: {str: Type}, recv: TExpr?, args: [AV], pos: Pos, expected: Type?, explicit_targs: [TypeExpr]?) -> TExpr {
+        let sig = self.generic_sig(fi)
+        let gp = sig.0
+        let gr = sig.1
+        var nself = 0
+        if recv != nil { nself = 1 }
+        if recv != nil and not fi.has_self {
+            var tn = "Type"
+            if fi.imp != nil { tn = fi.imp!.self_type!.to_str() }
+            fail(pos, "'{fi.name}' is a static function; call it as  {tn}.{fi.name}(...)")
+        }
+        if recv == nil and fi.has_self {
+            fail(pos, "'{fi.name}' is a method; call it on a value like  x.{fi.name}(...)")
+        }
+        let params = fi.decl.params[nself..]
+        let slots = self.bind_args(fi, args, nself, pos)
+        if explicit_targs != nil and explicit_targs!.len() > 0 {
+            let ets = explicit_targs!
+            if ets.len() > fi.own_tp.len() { fail(pos, "'{fi.name}' takes {fi.own_tp.len()} type argument(s)") }
+            for i in 0..ets.len() {
+                binds[fi.own_tp[i].key()] = self.resolve_type(ets[i], self.ctx().tscope)
+            }
+        }
+        var typed: [TExpr?] = []
+        for s in slots { typed.push(nil) }
+        var later: [int] = []
+        for i in 0..slots.len() {
+            if slots[i] == nil { continue }
+            let a = slots[i]!
+            if av_is_lambda(a) {
+                later.push(i)
+                continue
+            }
+            let pt = gp[nself + i]
+            var hint: Type? = subst(pt, binds)
+            if has_params(hint!) { hint = nil }
+            let te = self.av_value(a, hint)
+            typed[i] = te
+            if not self.unify_arg(pt, te, binds) {
+                self.mismatch(te.ty, subst(pt, binds), av_pos(a, pos))
+            }
+        }
+        for i in later {
+            let pt = subst(gp[nself + i], binds)
+            let te = self.av_any(slots[i]!, pt)
+            typed[i] = te
+            if not self.unify_arg(gp[nself + i], te, binds) {
+                self.mismatch(te.ty, subst(gp[nself + i], binds), av_pos(slots[i]!, pos))
+            }
+        }
+        // defaults
+        for i in 0..params.len() {
+            if typed[i] == nil {
+                let p = params[i]
+                if p.default == nil {
+                    var sigs: [str] = []
+                    for q in params { sigs.push("{q.name}: {self.type_text(q.ty)}") }
+                    fail(pos, "missing argument '{p.name}' in call to '{fi.name}'", "signature: {fi.name}({ ", ".join(sigs)})")
+                }
+                let pt = subst(gp[nself + i], binds)
+                var hint: Type? = pt
+                if has_params(pt) { hint = nil }
+                let te = self.ce_value(p.default!, hint)
+                typed[i] = te
+                self.unify_arg(gp[nself + i], te, binds)
+            }
+        }
+        // remaining type parameters
+        if expected != nil {
+            var missing = false
+            for tp in fi.tp_objs {
+                if not (tp.key() in binds) { missing = true }
+            }
+            if missing { unify(gr, expected!, binds) }
+        }
+        for tp in fi.tp_objs {
+            if not (tp.key() in binds) {
+                fail(pos, "cannot infer the type parameter '{type_name_of(tp)}' of '{fi.name}'",
+                     "give an explicit type, e.g. a type annotation on the variable, or  {fi.name}::<int>(...)")
+            }
+        }
+        var targs: [Type] = []
+        for tp in fi.tp_objs { targs.push(binds[tp.key()]) }
+        let inst = self.get_inst(fi, targs)
+        let caller = self.ctx().inst
+        caller.callees[inst.uid] = inst
+        if inst.is_prelude and inst.origin == nil {
+            if caller.is_prelude { inst.origin = caller.origin } else { inst.origin = pos }
+        }
+        var out: [TExpr] = []
+        if recv != nil { out.push(recv!) }
+        for i in 0..typed.len() {
+            let pt = inst.params[nself + i].ty
+            var p = pos
+            if slots[i] != nil { p = av_pos(slots[i]!, pos) }
+            out.push(self.coerce(typed[i]!, pt, p))
+        }
+        return texpr(TK.Call(inst, out), inst.ret, pos)
+    }
+
+    // ------------------------------------------------------------------ calls
+    fn x_Call(self, e: Expr, callee: Expr, args: [Arg], expected: Type?) -> TExpr {
+        match callee.k {
+            ExprK.Ident(name, targs) => return self.call_ident(e, callee, name, targs, args, expected)
+            ExprK.Field(obj, name) => {
+                let tn = self.type_ident(obj)
+                if tn != nil { return self.call_static(tn!, callee, name, e, args, expected) }
+                let recv = self.ce_value(obj)
+                return self.call_method(recv, callee, name, e, args, expected)
+            }
+            ExprK.TupleField(obj, idx) => {
+                self.ce_value(obj)
+                fail(e.pos, "cannot call a tuple element like a method")
+            }
+            _ => {}
+        }
+        let f = self.ce_value(callee)
+        return self.call_value(f, e, args, expected)
+    }
+
+    fn call_value(self, f: TExpr, e: Expr, args: [Arg], expected: Type?) -> TExpr {
+        if not is_func(f.ty) { fail(e.pos, "cannot call a value of type {f.ty.to_str()}") }
+        let ps = fn_params(f.ty)
+        if args.len() != ps.len() {
+            fail(e.pos, "this function takes {ps.len()} argument(s) but {args.len()} given", "its type is {f.ty.to_str()}")
+        }
+        var out: [TExpr] = []
+        for i in 0..args.len() {
+            if args[i].name != "" { fail(args[i].pos, "named arguments cannot be used when calling a function value") }
+            out.push(self.ce_as(args[i].expr, ps[i]))
+        }
+        return texpr(TK.CallInd(f, out), fn_ret(f.ty), e.pos)
+    }
+
+    fn call_method(self, recv: TExpr, callee: Expr, name: str, e: Expr, args: [Arg], expected: Type?) -> TExpr {
+        let t = recv.ty
+        match t {
+            Type.Iface(info) => {
+                let r = self.iface_call(recv, info, name, args, e.pos)
+                if r != nil { return r! }
+                var names: [str] = []
+                for m in self.iface_methods(info) { names.push(m.name) }
+                fail(callee.pos, "interface {info.name} has no method '{name}'", suggest(name, names))
+            }
+            _ => {}
+        }
+        // field holding a function
+        if is_struct_t(t) {
+            let fields = self.struct_fields(t)
+            for i in 0..fields.len() {
+                if fields[i].name == name and is_func(fields[i].ty) {
+                    return self.call_value(texpr(TK.Load(recv, i), fields[i].ty, callee.pos), e, args, expected)
+                }
+            }
+        }
+        let found = self.find_methods(t, name)
+        if found.len() == 0 {
+            if is_opt(t) {
+                fail(callee.pos, "cannot call '.{name}()' on {t.to_str()} because it may be nil",
+                     "unwrap it first:  x!.{name}(...)   or   if let v = x \{ v.{name}(...) \}")
+            }
+            self.no_method(t, name, callee.pos)
+        }
+        let h = found[0]
+        if not h.fi.has_self {
+            fail(callee.pos, "'{name}' is a static function; call it as  {t.to_str()}.{name}(...)")
+        }
+        return self.invoke(h.fi, h.binds.copy(), recv, args_to_av(args), e.pos, expected, nil)
+    }
+
+    fn no_method(self, t: Type, name: str, pos: Pos) -> never {
+        var names: [str] = []
+        var seen: {str: bool} = {}
+        let hk = head_key(t) + "|"
+        for key in self.methods.keys() {
+            if key.starts_with(hk) {
+                let mname = key[hk.len()..]
+                if not mname.starts_with("op_") and not mname.starts_with("__") and not (mname in seen) {
+                    seen[mname] = true
+                    names.push(mname)
+                }
+            }
+        }
+        if is_struct_t(t) {
+            for f in self.struct_fields(t) {
+                if not (f.name in seen) {
+                    seen[f.name] = true
+                    names.push(f.name)
+                }
+            }
+        }
+        var hint = suggest(name, names)
+        if hint == "" and names.len() > 0 and names.len() < 14 {
+            names.sort()
+            hint = "available: " + ", ".join(names)
+        }
+        fail(pos, "{t.to_str()} has no method '{name}'", hint)
+    }
+
+    fn call_static(self, tn: str, callee: Expr, name: str, e: Expr, args: [Arg], expected: Type?) -> TExpr {
+        let pos = e.pos
+        let ei = self.enums.try_get(tn)
+        if ei != nil {
+            let info = ei!
+            let vi = info.vindex.try_get(name)
+            if vi != nil {
+                let et = self.enum_type_for(info, expected)
+                if et == nil { return self.generic_variant(info, vi!, e, args, expected) }
+                let payload = self.variant_payload(et!, vi!)
+                if args.len() != payload.len() {
+                    fail(pos, "{tn}.{name} takes {payload.len()} value(s) but {args.len()} given")
+                }
+                var targs: [TExpr] = []
+                for i in 0..args.len() { targs.push(self.ce_as(args[i].expr, payload[i])) }
+                return self.make_variant(et!, vi!, targs, pos)
+            }
+        }
+        // static method
+        var dummy: Type? = nil
+        let si = self.structs.try_get(tn)
+        if si != nil {
+            dummy = Type.Struct(si!, si!.tparams)
+        } else if ei != nil {
+            dummy = Type.Enum(ei!, ei!.tparams)
+        } else if prim_type(tn) != nil {
+            dummy = prim_type(tn)
+        } else if tn in self.aliases {
+            fail(pos, "call static functions on the real type name, not the alias '{tn}'")
+        }
+        var cands: [MethodEntry] = []
+        if dummy != nil { cands = self.methods.get(head_key(dummy!) + "|" + name, []) }
+        if cands.len() == 0 {
+            var names: [str] = []
+            if dummy != nil {
+                let hk = head_key(dummy!) + "|"
+                for key in self.methods.keys() {
+                    if key.starts_with(hk) { names.push(key[hk.len()..]) }
+                }
+            }
+            if ei != nil {
+                for v in ei!.decl.variants { names.push(v.name) }
+            }
+            fail(callee.pos, "'{tn}' has no function or variant '{name}'", suggest(name, names))
+        }
+        let cand = cands[0]
+        let fi = cand.fi
+        if fi.has_self {
+            // Type.method(obj, args) style call
+            if args.len() == 0 { fail(pos, "'{name}' is a method; call it on a value like  x.{name}()") }
+            let recv = self.ce_value(args[0].expr)
+            let found = self.find_methods(recv.ty, name)
+            if found.len() == 0 { self.no_method(recv.ty, name, pos) }
+            let h = found[0]
+            return self.invoke(h.fi, h.binds.copy(), recv, args_to_av(args[1..]), pos, expected, nil)
+        }
+        return self.invoke(fi, {}, nil, args_to_av(args), pos, expected, nil)
+    }
+
+    fn generic_variant(self, info: EnumInfo, vi: int, e: Expr, args: [Arg], expected: Type?) -> TExpr {
+        let pos = e.pos
+        let tps = info.tparams
+        var ts: {str: Type} = {}
+        for p in tps { ts[type_name_of(p)] = p }
+        let v = info.decl.variants[vi]
+        var pts: [Type] = []
+        for t in v.payload { pts.push(self.resolve_type(t, ts)) }
+        if args.len() != pts.len() {
+            fail(pos, "{info.name}.{v.name} takes {pts.len()} value(s) but {args.len()} given")
+        }
+        var binds: {str: Type} = {}
+        if expected != nil {
+            match expected! {
+                Type.Enum(ei, eargs) => {
+                    if ei.id == info.id {
+                        for i in 0..tps.len() { binds[tps[i].key()] = eargs[i] }
+                    }
+                }
+                _ => {}
+            }
+        }
+        var typed: [TExpr] = []
+        for i in 0..args.len() {
+            var hint: Type? = subst(pts[i], binds)
+            if has_params(hint!) { hint = nil }
+            let te = self.ce_value(args[i].expr, hint)
+            typed.push(te)
+            self.unify_arg(pts[i], te, binds)
+        }
+        for p in tps {
+            if not (p.key() in binds) {
+                fail(pos, "cannot infer the type parameter '{type_name_of(p)}' of {info.name}",
+                     "add a type annotation, e.g.  let x: {info.name}<int> = ...")
+            }
+        }
+        var targs: [Type] = []
+        for p in tps { targs.push(binds[p.key()]) }
+        let et = Type.Enum(info, targs)
+        let payload = self.variant_payload(et, vi)
+        var out: [TExpr] = []
+        for i in 0..typed.len() { out.push(self.coerce(typed[i], payload[i])) }
+        return self.make_variant(et, vi, out, pos)
+    }
+
+    // ------------------------------------------------------------------ calls by name
+    fn call_ident(self, e: Expr, callee: Expr, name: str, targs: [TypeExpr]?, args: [Arg], expected: Type?) -> TExpr {
+        let pos = e.pos
+        let v = self.lookup_var(name)
+        if v != nil {
+            self.touch(v!)
+            return self.call_value(texpr(TK.VarRef(v!), v!.ty, callee.pos), e, args, expected)
+        }
+        let fi = self.find_fn(name)
+        if fi != nil and not fi!.prelude {
+            return self.invoke(fi!, {}, nil, args_to_av(args), pos, expected, targs)
+        }
+        // a global variable or constant holding a function
+        if fi == nil and (self.find_global(name) != nil or self.find_const(name) != nil) {
+            let f = self.x_Ident(callee, name, nil)
+            if is_func(f.ty) { return self.call_value(f, e, args, expected) }
+            fail(callee.pos, "'{name}' is a {f.ty.to_str()}, not a function")
+        }
+        if is_special_form(name) { return self.special_form(e, name, args, expected) }
+        if intrinsic_sig(name) != nil or is_other_intrinsic(name) {
+            return self.intrinsic_call(e, name, targs, args, expected)
+        }
+        if fi != nil { return self.invoke(fi!, {}, nil, args_to_av(args), pos, expected, targs) }
+        let si = self.structs.try_get(name)
+        if si != nil { return self.construct(si!, args, [], pos, expected, targs) }
+        let ei = self.externs.try_get(name)
+        if ei != nil {
+            let ext = self.extern_for(ei!)
+            if args.len() != ext.params.len() {
+                fail(pos, "'{name}' takes {ext.params.len()} argument(s) but {args.len()} given")
+            }
+            var out: [TExpr] = []
+            for i in 0..args.len() { out.push(self.ce_as(args[i].expr, ext.params[i])) }
+            return texpr(TK.CallExt(ext, out), ext.ret, pos)
+        }
+        if name in self.enums {
+            fail(pos, "'{name}' is an enum; create a value with  {name}.Variant")
+        }
+        if name in self.failed_names { fail_silent() }
+        fail(callee.pos, "unknown function '{name}'", suggest(name, self.visible_names()))
+    }
+
+    // ---- struct construction ------------------------------------------------------------
+    // args: positional/named call arguments; named_fields: fields from a struct literal
+    fn construct(self, info: StructInfo, args: [Arg], named_fields: [FieldInit], pos: Pos, expected0: Type?, targs: [TypeExpr]?) -> TExpr {
+        var expected = expected0
+        if expected != nil and is_opt(expected!) { expected = opt_inner(expected!) }
+        let tps = info.tparams
+        var ts: {str: Type} = {}
+        for p in tps { ts[type_name_of(p)] = p }
+        var fields: [Field] = []
+        for f in info.decl.fields { fields.push(Field(f.name, self.resolve_type(f.ty, ts))) }
+        var binds: {str: Type} = {}
+        if expected != nil {
+            match expected! {
+                Type.Struct(si, sargs) => {
+                    if si.id == info.id {
+                        for i in 0..tps.len() { binds[tps[i].key()] = sargs[i] }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if targs != nil {
+            for i in 0..targs!.len() {
+                if i < tps.len() { binds[tps[i].key()] = self.resolve_type(targs![i], self.ctx().tscope) }
+            }
+        }
+        var vals: {str: (Expr, Pos)} = {}
+        var order: [str] = []
+        for f in fields { order.push(f.name) }
+        var i = 0
+        for a in args {
+            if a.name != "" {
+                vals[a.name] = (a.expr, a.pos)
+            } else {
+                if i >= fields.len() {
+                    fail(pos, "{info.name} has only {fields.len()} field(s) but {args.len()} values were given", "fields: " + ", ".join(order))
+                }
+                vals[fields[i].name] = (a.expr, a.expr.pos)
+                i += 1
+            }
+        }
+        for nf in named_fields {
+            if nf.name in vals { fail(nf.pos, "field '{nf.name}' is given twice") }
+            vals[nf.name] = (nf.expr, nf.pos)
+        }
+        for n in vals.keys() {
+            if not order.contains(n) {
+                var hint = suggest(n, order)
+                if hint == "" { hint = "fields: " + ", ".join(order) }
+                fail(vals[n].1, "{info.name} has no field '{n}'", hint)
+            }
+        }
+        for f in info.decl.fields {
+            if not (f.name in vals) and f.default != nil { vals[f.name] = (f.default!, pos) }
+        }
+        for n in order {
+            if not (n in vals) {
+                fail(pos, "missing field '{n}' when creating {info.name}", "fields: " + ", ".join(order))
+            }
+        }
+        var typed: {str: TExpr} = {}
+        var later: [Field] = []
+        for f in fields {
+            let a = vals[f.name].0
+            let p = vals[f.name].1
+            var is_lambda = false
+            match a.k {
+                ExprK.Lambda(lp, lr, lb) => is_lambda = true
+                _ => {}
+            }
+            if is_lambda {
+                later.push(f)
+                continue
+            }
+            var hint: Type? = subst(f.ty, binds)
+            if has_params(hint!) { hint = nil }
+            let te = self.ce_value(a, hint)
+            typed[f.name] = te
+            if not self.unify_arg(f.ty, te, binds) { self.mismatch(te.ty, subst(f.ty, binds), p) }
+        }
+        for f in later {
+            let a = vals[f.name].0
+            let te = self.ce(a, subst(f.ty, binds))
+            typed[f.name] = te
+            self.unify_arg(f.ty, te, binds)
+        }
+        for tp in tps {
+            if not (tp.key() in binds) {
+                fail(pos, "cannot infer the type parameter '{type_name_of(tp)}' of {info.name}",
+                     "add a type annotation, e.g.  let x: {info.name}<int> = ...")
+            }
+        }
+        var sargs2: [Type] = []
+        for tp in tps { sargs2.push(binds[tp.key()]) }
+        let st = Type.Struct(info, sargs2)
+        let concrete = self.struct_fields(st)
+        var out: [TExpr] = []
+        for cf in concrete { out.push(self.coerce(typed[cf.name], cf.ty, vals[cf.name].1)) }
+        return texpr(TK.NewObj(out), st, pos)
+    }
+
+    fn x_StructLit(self, e: Expr, name: Expr, fields: [FieldInit], expected: Type?) -> TExpr {
+        var sname = ""
+        var stargs: [TypeExpr]? = nil
+        match name.k {
+            ExprK.Ident(n, ta) => {
+                sname = n
+                stargs = ta
+            }
+            _ => {}
+        }
+        let info = self.structs.try_get(sname)
+        if info == nil {
+            if sname in self.enums { fail(e.pos, "'{sname}' is an enum, not a struct") }
+            var names: [str] = []
+            for k in self.structs.keys() { names.push(k) }
+            fail(e.pos, "unknown struct '{sname}'", suggest(sname, names))
+        }
+        return self.construct(info!, [], fields, e.pos, expected, stargs)
+    }
+
+    // ---- lambdas ---------------------------------------------------------------------------
+    fn x_Lambda(self, e: Expr, lparams: [LParam], lret: TypeExpr?, body: Block, expected0: Type?) -> TExpr {
+        var expected = expected0
+        if expected != nil and is_opt(expected!) { expected = opt_inner(expected!) }
+        var exp: Type? = nil
+        if expected != nil and is_func(expected!) { exp = expected }
+        if exp != nil and fn_params(exp!).len() != lparams.len() {
+            fail(e.pos, "this function takes {fn_params(exp!).len()} parameter(s) here but the lambda has {lparams.len()}")
+        }
+        var ptypes: [Type] = []
+        for i in 0..lparams.len() {
+            let lp = lparams[i]
+            if lp.ty != nil {
+                ptypes.push(self.resolve_type(lp.ty!, self.ctx().tscope))
+            } else if exp != nil and not has_params(fn_params(exp!)[i]) {
+                ptypes.push(fn_params(exp!)[i])
+            } else {
+                fail(e.pos, "cannot infer the type of parameter '{lp.name}'", "annotate it:  |{lp.name}: int| ...")
+            }
+        }
+        var ret: Type? = nil
+        if lret != nil {
+            ret = self.resolve_type(lret!, self.ctx().tscope)
+        } else if exp != nil and not has_params(fn_ret(exp!)) {
+            ret = fn_ret(exp!)
+        }
+        var params: [Var] = []
+        for i in 0..lparams.len() {
+            let v = new_var(lparams[i].name, ptypes[i], true, e.pos)
+            v.is_param = true
+            params.push(v)
+        }
+        var rt0 = TVoid
+        if ret != nil { rt0 = ret! }
+        let inst = new_fninst("lambda@{e.pos.line}", params, rt0)
+        inst.is_lambda = true
+        var vars: [Var] = []
+        for p in params { vars.push(p) }
+        inst.vars = vars
+        inst.pos = e.pos
+        let parent_ctx = self.ctx()
+        inst.is_prelude = parent_ctx.inst.is_prelude
+        let ctx = new_fnctx(inst, parent_ctx.tscope, parent_ctx, ret)
+        self.cx = ctx
+        for v in params { ctx.scopes[0][v.name] = v }
+        let errors_before = diags.len()
+        if stmts_have_defer(body.stmts) { self.init_defers(ctx) }
+        var blk = self.check_block_stmts(body.stmts, false)
+        if ctx.defer_var != nil { blk = self.wrap_defer_fn(ctx, blk) }
+        if ctx.ret == nil { ctx.ret = TVoid }
+        inst.ret = ctx.ret!
+        inst.body = blk
+        if diags.len() == errors_before and inst.ret != TVoid and inst.ret != TNever and not self.terminates(blk) {
+            fail(e.pos, "this lambda must return a value of type {inst.ret.to_str()} on every path")
+        }
+        self.cx = parent_ctx
+        self.program.funcs.push(inst)
+        parent_ctx.inst.callees[inst.uid] = inst
+        for c in inst.captures { c.root_var().weight += 1 }
+        var pts: [Type] = []
+        for p in params { pts.push(p.ty) }
+        var caps: [Var] = []
+        for c in inst.captures { caps.push(c) }
+        return texpr(TK.MkClosure(inst, caps), Type.Func(pts, inst.ret), e.pos)
+    }
+
+    // ---- intrinsics ----------------------------------------------------------------------------
+    fn intrinsic_call(self, e: Expr, name: str, targs: [TypeExpr]?, args: [Arg], expected: Type?) -> TExpr {
+        let pos = e.pos
+        let sig = intrinsic_sig(name)
+        if sig != nil {
+            let ats = sig!.0
+            if args.len() != ats.len() { fail(pos, "{name} takes {ats.len()} argument(s)") }
+            var out: [TExpr] = []
+            for i in 0..args.len() { out.push(self.ce_as(args[i].expr, ats[i])) }
+            return texpr(TK.Intr(name[2..], out), sig!.1, pos)
+        }
+        if name == "__has_default" or name == "__default" {
+            if targs == nil or targs!.len() == 0 { fail(pos, "use  {name}::<T>()") }
+            let t = self.resolve_type(targs![0], self.ctx().tscope)
+            let has = t == TStr or self.is_array_t(t) or self.is_map_t(t)
+            if name == "__has_default" { return c_bool(has, pos) }
+            if has or t == TFloat { return self.default_value(t, pos) }
+            return c_int(0, t, pos)
+        }
+        if name == "__pointer_free" {
+            if targs == nil or targs!.len() == 0 { fail(pos, "use  __pointer_free::<T>()") }
+            let t = self.resolve_type(targs![0], self.ctx().tscope)
+            let free = t == TInt or t == TFloat or t == TBool or t == TByte or is_simple_enum(t)
+            return c_bool(free, pos)
+        }
+        if name == "__sizeof" {
+            if targs == nil or targs!.len() == 0 { fail(pos, "use  __sizeof::<T>()") }
+            let t = self.resolve_type(targs![0], self.ctx().tscope)
+            return self.ci(self.esize(t), pos)
+        }
+        if name == "__memcpy" or name == "__memset" {
+            if args.len() != 3 { fail(pos, "{name} takes 3 arguments") }
+            let a = self.ce_value(args[0].expr)
+            var b = self.ce_value(args[1].expr)
+            let n = self.ce_as(args[2].expr, TInt)
+            if name == "__memset" { b = self.coerce(b, TInt) }
+            return texpr(TK.Intr(name[2..], [a, b, n]), TVoid, pos)
+        }
+        if name == "__setjmp" {
+            let a = self.ce_value(args[0].expr)
+            return texpr(TK.Intr("setjmp", [a]), TInt, pos)
+        }
+        if name == "__longjmp" {
+            let a = self.ce_value(args[0].expr)
+            return texpr(TK.Intr("longjmp", [a]), TNever, pos)
+        }
+        if name == "__save_regs" {
+            let a = self.ce_value(args[0].expr)
+            return texpr(TK.Intr("save_regs", [a]), TVoid, pos)
+        }
+        if name == "__eq" {
+            let a = self.ce_value(args[0].expr)
+            let b = self.ce_as(args[1].expr, a.ty)
+            return self.eq_expr(a, b, pos)
+        }
+        if name == "__cmp" {
+            let a = self.ce_value(args[0].expr)
+            let b = self.ce_as(args[1].expr, a.ty)
+            return self.cmp_expr(a, b, pos)
+        }
+        if name == "__hash" {
+            let a = self.ce_value(args[0].expr)
+            return self.hash_expr(a, pos)
+        }
+        if name == "__str" { return self.str_of(self.ce_value(args[0].expr)) }
+        if name == "__debug" { return self.str_of(self.ce_value(args[0].expr), true) }
+        fail(pos, "unknown intrinsic " + name)
+    }
+
+    // ---- special forms ---------------------------------------------------------------------------
+    fn special_form(self, e: Expr, name: str, args: [Arg], expected: Type?) -> TExpr {
+        return match name {
+            "print" => self.sf_print(e, args, false, false)
+            "println" => self.sf_print(e, args, true, false)
+            "eprint" => self.sf_print(e, args, false, true)
+            "eprintln" => self.sf_print(e, args, true, true)
+            "str" => self.str_of(self.one_arg(e, args, "str"))
+            "int" => self.sf_int(e, args)
+            "float" => self.sf_float(e, args)
+            "byte" => self.sf_byte(e, args)
+            "bool" => self.sf_bool(e, args)
+            "assert" => self.sf_assert(e, args)
+            "panic" => self.sf_panic(e, args)
+            "copy" => self.sf_copy(e, args)
+            "same" => self.sf_same(e, args)
+            "include_str" => self.sf_include_str(e, args)
+            _ => self.sf_comprehension(e, args, expected)
+        }
+    }
+
+    fn sf_print(self, e: Expr, args: [Arg], nl: bool, err: bool) -> TExpr {
+        let pos = e.pos
+        let stmts: [TStmt] = []
+        var fname = "print_str"
+        if err { fname = "eprint_str" }
+        var parts: [TExpr] = []
+        for i in 0..args.len() {
+            let a = args[i]
+            if a.name != "" { fail(a.pos, "print does not take named arguments") }
+            let te = self.ce_value(a.expr)
+            var s = self.str_of(te)
+            if args.len() > 1 and not (is_const(s) or is_varref(s)) {
+                s = self.bind_tmp(s, stmts)           // evaluate every argument before printing anything
+            }
+            if i > 0 { parts.push(c_str(" ", NOPOS)) }
+            parts.push(s)
+        }
+        if nl { parts.push(c_str("\n", NOPOS)) }
+        var merged: [TExpr] = []
+        for p in parts {
+            if is_const(p) and merged.len() > 0 and is_const(merged[merged.len() - 1]) {
+                merged[merged.len() - 1] = c_str(const_sval(merged[merged.len() - 1]) + const_sval(p), NOPOS)
+            } else {
+                merged.push(p)
+            }
+        }
+        if merged.len() == 0 {
+            return texpr(TK.Seq([], c_int(0, TVoid, NOPOS)), TVoid, pos)
+        }
+        var calls: [TExpr] = []
+        for m in merged { calls.push(self.call_rt(fname, [m], [], pos)) }
+        if calls.len() == 1 and stmts.len() == 0 { return calls[0] }
+        var all: [TStmt] = []
+        for s in stmts { all.push(s) }
+        for i in 0..calls.len() - 1 { all.push(tstmt(SK.ExprS(calls[i]), NOPOS)) }
+        return texpr(TK.Seq(all, calls[calls.len() - 1]), TVoid, pos)
+    }
+
+    fn one_arg(self, e: Expr, args: [Arg], name: str) -> TExpr {
+        if args.len() != 1 or args[0].name != "" { fail(e.pos, "{name}() takes exactly one argument") }
+        return self.ce_value(args[0].expr)
+    }
+
+    fn sf_int(self, e: Expr, args: [Arg]) -> TExpr {
+        let x = self.one_arg(e, args, "int")
+        let t = x.ty
+        let pos = e.pos
+        if t == TInt { return x }
+        if t == TFloat {
+            if is_const(x) { return c_int(const_fval(x) as int, TInt, pos) }
+            return texpr(TK.Cvt("f2i", x), TInt, pos)
+        }
+        if t == TByte or t == TBool or is_ptr(t) or is_simple_enum(t) { return texpr(TK.Cvt("nop", x), TInt, pos) }
+        if t == TStr { return self.call_rt("str_to_int", [x], [], pos) }
+        fail(pos, "cannot convert {t.to_str()} to int")
+    }
+
+    fn sf_float(self, e: Expr, args: [Arg]) -> TExpr {
+        let x = self.one_arg(e, args, "float")
+        let t = x.ty
+        if t == TFloat { return x }
+        if t == TInt or t == TByte { return self.coerce(x, TFloat) }
+        if t == TStr { return self.call_rt("str_to_float", [x], [], e.pos) }
+        fail(e.pos, "cannot convert {t.to_str()} to float")
+    }
+
+    fn sf_byte(self, e: Expr, args: [Arg]) -> TExpr {
+        var x = self.one_arg(e, args, "byte")
+        if x.ty == TByte { return x }
+        if x.ty == TFloat { x = texpr(TK.Cvt("f2i", x), TInt, e.pos) }
+        if x.ty == TInt or x.ty == TBool { return texpr(TK.Cvt("trunc8", x), TByte, e.pos) }
+        fail(e.pos, "cannot convert {x.ty.to_str()} to byte")
+    }
+
+    fn sf_bool(self, e: Expr, args: [Arg]) -> TExpr {
+        let x = self.one_arg(e, args, "bool")
+        if x.ty == TBool { return x }
+        if x.ty == TInt or x.ty == TByte {
+            return texpr(TK.Bin("ne", self.coerce(x, TInt), self.ci(0)), TBool, e.pos)
+        }
+        if is_opt(x.ty) or is_ptr(x.ty) {
+            return texpr(TK.Bin("ne", x, c_nil(x.ty, NOPOS)), TBool, e.pos)
+        }
+        fail(e.pos, "cannot convert {x.ty.to_str()} to bool")
+    }
+
+    fn sf_include_str(self, e: Expr, args: [Arg]) -> TExpr {
+        var name = ""
+        var ok = args.len() == 1
+        if ok {
+            match args[0].expr.k {
+                ExprK.StrLit(items) => {
+                    for it in items {
+                        match it {
+                            StrItem.Lit(s) => name = name + s
+                            _ => ok = false
+                        }
+                    }
+                }
+                _ => ok = false
+            }
+        }
+        if not ok { fail(e.pos, "include_str(\"file\") needs a plain string with the file name") }
+        let path = norm_path(path_dir(e.pos.file) + "/" + name)
+        let data = read_file(path)
+        if data == nil { fail(e.pos, "include_str: cannot find '{name}'") }
+        return c_str(data!, e.pos)
+    }
+
+    fn sf_copy(self, e: Expr, args: [Arg]) -> TExpr {
+        let x = self.one_arg(e, args, "copy")
+        let t = x.ty
+        if is_struct_t(t) and not self.is_array_t(t) and not self.is_map_t(t) {
+            let stmts: [TStmt] = []
+            let xs = self.bind_tmp(x, stmts)
+            var vals: [TExpr] = []
+            let fields = self.struct_fields(t)
+            for i in 0..fields.len() { vals.push(texpr(TK.Load(xs, i), fields[i].ty, NOPOS)) }
+            return texpr(TK.Seq(stmts, texpr(TK.NewObj(vals), t, e.pos)), t, e.pos)
+        }
+        if is_tuple(t) {
+            let stmts: [TStmt] = []
+            let xs = self.bind_tmp(x, stmts)
+            var vals: [TExpr] = []
+            let es = tuple_elems(t)
+            for i in 0..es.len() { vals.push(texpr(TK.Load(xs, i), es[i], NOPOS)) }
+            return texpr(TK.Seq(stmts, texpr(TK.NewObj(vals), t, e.pos)), t, e.pos)
+        }
+        if t == TStr or t == TInt or t == TFloat or t == TBool or t == TByte { return x }
+        let r = self.try_method(x, "copy", [], e.pos)
+        if r == nil { fail(e.pos, "copy() works on structs, tuples, arrays and maps, found {t.to_str()}") }
+        return r!
+    }
+
+    fn sf_same(self, e: Expr, args: [Arg]) -> TExpr {
+        if args.len() != 2 { fail(e.pos, "same(a, b) takes two values") }
+        let a = self.ce_value(args[0].expr)
+        let b = self.ce_as(args[1].expr, a.ty)
+        if a.ty == TInt or a.ty == TFloat or a.ty == TBool or a.ty == TByte {
+            fail(e.pos, "same() compares object identity; use == for numbers")
+        }
+        return texpr(TK.Bin("eq", a, b), TBool, e.pos)
+    }
+
+    fn sf_assert(self, e: Expr, args: [Arg]) -> TExpr {
+        let pos = e.pos
+        if args.len() < 1 or args.len() > 2 { fail(pos, "assert(condition) or assert(condition, \"message\")") }
+        let c = self.ce_as(args[0].expr, TBool)
+        var msg = c_str("assertion failed", NOPOS)
+        if args.len() == 2 { msg = self.ce_as(args[1].expr, TStr) }
+        let loc = c_str("", NOPOS)
+        let failc = self.call_rt("assert_fail", [msg, loc], [], pos)
+        let st = tstmt(SK.If(texpr(TK.Un("not", c), TBool, NOPOS), [tstmt(SK.ExprS(failc), NOPOS)], []), NOPOS)
+        return texpr(TK.Seq([st], c_int(0, TVoid, NOPOS)), TVoid, pos)
+    }
+
+    fn sf_panic(self, e: Expr, args: [Arg]) -> TExpr {
+        let pos = e.pos
+        if args.len() != 1 { fail(pos, "panic(\"message\") takes one message") }
+        var msg = self.ce_value(args[0].expr)
+        msg = self.str_of(msg)
+        let loc = c_str("", NOPOS)
+        let c = self.call_rt("panic_at", [msg, loc], [], pos)
+        c.ty = TNever
+        return c
+    }
+
+    // [expr for names in iter if cond]
+    fn sf_comprehension(self, e: Expr, args: [Arg], expected: Type?) -> TExpr {
+        let pos = e.pos
+        let elem_ast = args[0].expr
+        var names: [str] = []
+        match args[1].expr.k {
+            ExprK.TupleLit(items) => {
+                for it in items {
+                    match it.k {
+                        ExprK.StrLit(parts) => {
+                            match parts[0] {
+                                StrItem.Lit(s) => names.push(s)
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        let iter_ast = args[2].expr
+        var cond_ast: Expr? = nil
+        match args[3].expr.k {
+            ExprK.NilLit => {}
+            _ => cond_ast = args[3].expr
+        }
+        var hint: Type? = nil
+        if expected != nil and self.is_array_t(expected!) { hint = type_args(expected!)[0] }
+        return self.build_comprehension(elem_ast, names, iter_ast, cond_ast, hint, pos)
+    }
+}
+
+// ---- path helpers (used by include_str and the driver)
+fn path_dir(p: str) -> str {
+    var i = p.len() - 1
+    while i >= 0 and p.byte_at(i) != '/' and p.byte_at(i) != '\\' { i -= 1 }
+    if i < 0 { return "." }
+    if i == 0 { return p[..1] }
+    return p[..i]
+}
+
+fn norm_path(p: str) -> str {
+    let unified = p.replace("\\", "/")
+    var drive = ""
+    var rest = unified
+    if rest.len() >= 2 and rest.byte_at(1) == ':' {
+        drive = rest[..2]
+        rest = rest[2..]
+    }
+    let absolute = rest.starts_with("/")
+    var out: [str] = []
+    for part in rest.split("/") {
+        if part == "" or part == "." { continue }
+        if part == ".." {
+            if out.len() > 0 and out[out.len() - 1] != ".." { out.pop() } else if not absolute { out.push("..") }
+            continue
+        }
+        out.push(part)
+    }
+    var s = "/".join(out)
+    if absolute { s = "/" + s }
+    return drive + s
+}

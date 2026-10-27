@@ -1,0 +1,128 @@
+// sorting.atf - bubble sort, quicksort and merge sort, written by hand.
+// Shows: arrays passed by reference, swap, recursion, slices, copy(), built-in sort.
+// Run:   python run_atf.py run examples/sorting.atf
+
+fn bubble_sort(a: [int]) {
+    var n = a.len()
+    var swapped = true
+    while swapped {
+        swapped = false
+        for i in 1..n {
+            if a[i - 1] > a[i] {
+                a.swap(i - 1, i)
+                swapped = true
+            }
+        }
+        n -= 1
+    }
+}
+
+fn insertion_sort(a: [int]) {
+    for i in 1..a.len() {
+        let x = a[i]
+        var j = i - 1
+        while j >= 0 and a[j] > x {
+            a[j + 1] = a[j]
+            j -= 1
+        }
+        a[j + 1] = x
+    }
+}
+
+// in-place quicksort of a[lo..=hi]
+fn quick_sort(a: [int], lo: int, hi: int) {
+    if lo >= hi { return }
+    let pivot = a[(lo + hi) / 2]
+    var i = lo
+    var j = hi
+    while i <= j {
+        while a[i] < pivot { i += 1 }
+        while a[j] > pivot { j -= 1 }
+        if i <= j {
+            a.swap(i, j)
+            i += 1
+            j -= 1
+        }
+    }
+    quick_sort(a, lo, j)
+    quick_sort(a, i, hi)
+}
+
+// merge sort returns a new array
+fn merge_sort(a: [int]) -> [int] {
+    if a.len() <= 1 { return a }
+    let mid = a.len() / 2
+    let left = merge_sort(a[..mid])
+    let right = merge_sort(a[mid..])
+    var out: [int] = []
+    var i = 0
+    var j = 0
+    while i < left.len() and j < right.len() {
+        if left[i] <= right[j] {
+            out.push(left[i])
+            i += 1
+        } else {
+            out.push(right[j])
+            j += 1
+        }
+    }
+    while i < left.len() { out.push(left[i]); i += 1 }
+    while j < right.len() { out.push(right[j]); j += 1 }
+    return out
+}
+
+fn is_sorted(a: [int]) -> bool {
+    for i in 1..a.len() {
+        if a[i - 1] > a[i] { return false }
+    }
+    return true
+}
+
+// a reproducible pseudo random array
+fn make_data(n: int, seed: int) -> [int] {
+    rand_seed(seed)
+    var a: [int] = []
+    for i in 0..n { a.push(rand_int(0, 999)) }
+    return a
+}
+
+fn main() {
+    let data = [38, 27, 43, 3, 9, 82, 10, 3, -5, 0]
+    println("input:     ", data)
+
+    let a = data.copy()
+    bubble_sort(a)
+    println("bubble:    ", a)
+
+    let b = data.copy()
+    insertion_sort(b)
+    println("insertion: ", b)
+
+    let c = data.copy()
+    quick_sort(c, 0, c.len() - 1)
+    println("quick:     ", c)
+
+    println("merge:     ", merge_sort(data))
+    println("built-in:  ", data.sorted())
+    println("descending:", data.sorted().reversed())
+    println("input unchanged:", data)
+
+    // sort_by with a comparison function: by last digit, then by value
+    let by_digit = data.copy()
+    by_digit.sort_by(|x, y| {
+        if x % 10 != y % 10 { return x % 10 - y % 10 }
+        return x - y
+    })
+    println("by last digit:", by_digit)
+
+    // all algorithms agree on a larger random input
+    let big = make_data(2000, 7)
+    let expected = big.sorted()
+    let d = big.copy()
+    quick_sort(d, 0, d.len() - 1)
+    let e = big.copy()
+    bubble_sort(e)
+    println("2000 random numbers: quick ok = {d == expected}, bubble ok = {e == expected}, merge ok = {merge_sort(big) == expected}")
+    println("sorted?", is_sorted(expected), is_sorted(big))
+    println("min {expected.first()} max {expected.last()} median {expected[1000]}")
+}

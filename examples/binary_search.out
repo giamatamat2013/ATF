@@ -1,0 +1,13 @@
+search   7: 3
+search  29: 9
+search   2: 0
+search  37: 11
+search   4: nil
+search 100: nil
+2 nil
+3 nil
+lower_bound of 12: 5  of 1: 0  of 50: 12
+numbers below 20: 8
+worst case for 1..1000000: 20 guesses
+guess_game(1, 100) = 6, guess_game(50, 100) = 1, guess_game(100, 100) = 7
+3 * 123456 is at index 123456, 370369 is nil

@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: cannot infer the type parameter 'T' of 'set_new'
+  --> cerr_generic_infer.atf:2:20
+ 2 |     let s = set_new()
+   |                    ^
+  hint: give an explicit type, e.g. a type annotation on the variable, or  set_new::<int>(...)

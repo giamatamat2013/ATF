@@ -1,0 +1,10 @@
+20 words fall into 9 groups
+  4 anagrams: evil, vile, live, veil
+  3 anagrams: listen, silent, enlist
+  3 anagrams: cat, act, tac
+  2 anagrams: google, gogole
+  2 anagrams: dog, god
+  2 anagrams: bat, tab
+  2 anagrams: abc, cab
+no anagram partner: ["banana", "xyz"]
+16 different letters: abcdegilnostvxyz

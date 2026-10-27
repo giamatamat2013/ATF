@@ -1,0 +1,5 @@
+checksum of the temporary lists: 99990000000
+the collector ran while we worked: true
+sum of the long lived list: 4999950000
+live data after gc() is small (under 16 MB): true
+string length 20000, allocated 200 million array elements in total

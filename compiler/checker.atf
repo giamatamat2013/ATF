@@ -1,0 +1,804 @@
+// Semantic analysis: name resolution, type checking, generics (monomorphization) and lowering to typed IR.
+// Port of atf/checker.py - the other parts live in check_expr.atf, check_call.atf, check_stmt.atf, synth.atf
+import "util"
+import "ast"
+import "types"
+import "tir"
+import "tirutil"
+import "globinit"
+
+struct ImplInfo {
+    decl: ImplDecl,
+    prelude: bool,
+    tp_objs: [Type],
+    self_type: Type?
+}
+
+struct FnInfo {
+    id: int,
+    decl: FnDecl,
+    name: str,
+    prelude: bool,
+    imp: ImplInfo?,
+    own_tp: [Type],
+    tp_objs: [Type],
+    has_self: bool,
+    sig: ([Type], Type)?,
+    pos: Pos,
+    is_generic: bool
+}
+
+struct ExternInfo {
+    decl: ExternDecl,
+    name: str,
+    pos: Pos,
+    ext: Extern?
+}
+
+struct ConstInfo {
+    decl: ConstDecl,
+    name: str,
+    prelude: bool,
+    state: int,                  // 0 unresolved, 1 resolving, 2 done
+    value: TExpr?
+}
+
+struct GlobalInfo {
+    decl: GlobalDecl,
+    name: str,
+    prelude: bool,
+    glob: GlobalVar?,
+    state: int
+}
+
+struct MethodEntry {
+    imp: ImplInfo,
+    fi: FnInfo
+}
+
+var fninfo_counter: int = 0
+
+fn new_param_type(name: str) -> Type {
+    return Type.Param(name, next_uid())
+}
+
+fn new_struct_info(decl: StructDecl, prelude: bool) -> StructInfo {
+    var tps: [Type] = []
+    for n in decl.tparams { tps.push(new_param_type(n)) }
+    return StructInfo(next_uid(), decl.name, decl, decl.pos, prelude, tps, prelude and (decl.name == "Array" or decl.name == "Map"), {})
+}
+
+fn new_enum_info(decl: EnumDecl, prelude: bool) -> EnumInfo {
+    var tps: [Type] = []
+    for n in decl.tparams { tps.push(new_param_type(n)) }
+    var simple = true
+    var vindex: {str: int} = {}
+    var tags: [int] = []
+    var nxt = 0
+    for i in 0..decl.variants.len() {
+        let v = decl.variants[i]
+        if v.payload.len() > 0 { simple = false }
+        vindex[v.name] = i
+        if v.value != nil { nxt = v.value! }
+        tags.push(nxt)
+        nxt += 1
+    }
+    return EnumInfo(next_uid(), decl.name, decl, decl.pos, prelude, tps, simple, vindex, {}, tags)
+}
+
+fn new_impl_info(decl: ImplDecl, prelude: bool) -> ImplInfo {
+    var tps: [Type] = []
+    for n in decl.tparams { tps.push(new_param_type(n)) }
+    return ImplInfo(decl, prelude, tps, nil)
+}
+
+fn type_name_of(t: Type) -> str {
+    return match t {
+        Type.Param(n, u) => n
+        _ => t.to_str()
+    }
+}
+
+fn new_fn_info(decl: FnDecl, prelude: bool, imp: ImplInfo?) -> FnInfo {
+    fninfo_counter += 1
+    var own: [Type] = []
+    for n in decl.tparams { own.push(new_param_type(n)) }
+    var all: [Type] = []
+    if imp != nil {
+        for t in imp!.tp_objs { all.push(t) }
+    }
+    for t in own { all.push(t) }
+    let has_self = decl.params.len() > 0 and decl.params[0].name == "self"
+    return FnInfo(fninfo_counter, decl, decl.name, prelude, imp, own, all, has_self, nil, decl.pos, all.len() > 0)
+}
+
+impl FnInfo {
+    fn qualname(self) -> str {
+        if self.imp != nil and self.imp!.self_type != nil {
+            return self.imp!.self_type!.to_str() + "." + self.name
+        }
+        return self.name
+    }
+}
+
+fn head_key(t: Type) -> str {
+    return match t {
+        Type.Struct(info, args) => "struct:" + str(info.id)
+        Type.Enum(info, args) => "enum:" + str(info.id)
+        Type.Tuple(es) => "tuple"
+        Type.Func(ps, r) => "fn"
+        Type.Ptr(e) => "ptr"
+        Type.Opt(i) => "opt"
+        Type.Iface(info) => "iface:" + str(info.id)
+        _ => "prim:" + t.to_str()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+type Scope = {str: Var}
+
+struct FnCtx {
+    inst: FnInst,
+    tscope: {str: Type},
+    parent: FnCtx?,
+    ret: Type?,                          // nil while being inferred (lambdas)
+    scopes: [{str: Var}],
+    scope_dn: [Var?],                    // per scope: number of registered defers when the block started (if it has defers)
+    defer_var: Var?,                     // the function's list of deferred closures (only if it uses defer)
+    catch_saved: Var?,                   // the catch handler that was active when the function started
+    loop_scope_depth: [int],
+    loop_labels: [str],                  // label of each enclosing loop ("" if none)
+    next_label: str,                     // label for the loop being entered
+    is_lambda: bool
+}
+
+fn new_fnctx(inst: FnInst, tscope: {str: Type}, parent: FnCtx?, ret: Type?) -> FnCtx {
+    var scopes: [{str: Var}] = []
+    scopes.push({})
+    var dns: [Var?] = []
+    dns.push(nil)
+    return FnCtx(inst, tscope, parent, ret, scopes, dns, nil, nil, [], [], "", parent != nil)
+}
+
+impl FnCtx {
+    fn push(self) {
+        self.scopes.push({})
+        self.scope_dn.push(nil)
+    }
+    fn pop(self) {
+        self.scopes.pop()
+        self.scope_dn.pop()
+    }
+}
+
+// call-site argument: either source syntax or an already checked expression
+enum AV {
+    Ast(Arg),
+    Typed(TExpr)
+}
+
+struct Checker {
+    structs: {str: StructInfo},
+    enums: {str: EnumInfo},
+    aliases: {str: AliasDecl},
+    fns: {str: FnInfo},
+    consts: {str: ConstInfo},
+    globals: {str: GlobalInfo},
+    externs: {str: ExternInfo},
+    impls: [ImplInfo],
+    methods: {str: [MethodEntry]},       // key: head_key + "|" + method name
+    insts: {str: FnInst},
+    queue: [FnInst],
+    program: Program,
+    synth_cache: {str: FnInst},
+    cx: FnCtx?,
+    array_info: StructInfo?,
+    map_info: StructInfo?,
+    user_fns: [FnInfo],
+    glob_order: [GlobalInfo],
+    failed_names: {str: bool},
+    entry_ctx: FnCtx?,
+    entry_body: [TStmt],
+    ifaces: {str: IfaceInfo},
+    lib_fns: {str: FnInfo},              // the library's own names (what library code sees)
+    lib_consts: {str: ConstInfo},
+    lib_globals: {str: GlobalInfo},
+    scope_lib: int                       // -1: follow the function being checked, 0: program code, 1: library code
+}
+
+fn new_checker() -> Checker {
+    return Checker({}, {}, {}, {}, {}, {}, {}, [], {}, {}, [], new_program(), {}, nil, nil, nil, [], [], {}, nil, [], {}, {}, {}, {}, -1)
+}
+
+impl Checker {
+    fn ctx(self) -> FnCtx { return self.cx! }
+
+    // ---- declarations -------------------------------------------------------
+    fn declare_module(self, items: [Item], prelude: bool) {
+        for it in items {
+            match it {
+                Item.Struct(d) => {
+                    self.dup_check(d.name, d.pos)
+                    var seen: {str: bool} = {}
+                    for f in d.fields {
+                        if f.name in seen { fail(f.pos, "field '{f.name}' is defined twice in {d.name}") }
+                        seen[f.name] = true
+                    }
+                    self.structs[d.name] = new_struct_info(d, prelude)
+                }
+                Item.Enum(d) => {
+                    self.dup_check(d.name, d.pos)
+                    self.enums[d.name] = new_enum_info(d, prelude)
+                }
+                Item.Alias(d) => {
+                    self.dup_check(d.name, d.pos)
+                    self.aliases[d.name] = d
+                }
+                Item.Iface(d) => {
+                    self.dup_check(d.name, d.pos)
+                    self.ifaces[d.name] = IfaceInfo(next_uid(), d.name, d, d.pos, prelude, nil)
+                }
+                Item.Fn(d) => {
+                    let old = self.fns.try_get(d.name)
+                    if old != nil and not (old!.prelude and not prelude) {
+                        fail(d.pos, "function '{d.name}' is defined twice", "first defined at {pos_text(old!.pos)}")
+                    }
+                    let fi = new_fn_info(d, prelude, nil)
+                    self.fns[d.name] = fi
+                    if prelude { self.lib_fns[d.name] = fi } else { self.user_fns.push(fi) }
+                }
+                Item.Impl(d) => self.impls.push(new_impl_info(d, prelude))
+                Item.Const(d) => {
+                    self.value_dup_check(d.name, d.pos, prelude)
+                    let ci = ConstInfo(d, d.name, prelude, 0, nil)
+                    self.consts[d.name] = ci
+                    if prelude { self.lib_consts[d.name] = ci }
+                }
+                Item.Global(d) => {
+                    self.value_dup_check(d.name, d.pos, prelude)
+                    let gi = GlobalInfo(d, d.name, prelude, nil, 0)
+                    self.globals[d.name] = gi
+                    if prelude { self.lib_globals[d.name] = gi }
+                    self.glob_order.push(gi)
+                }
+                Item.Extern(d) => self.externs[d.name] = ExternInfo(d, d.name, d.pos, nil)
+                Item.Import(d) => {}
+            }
+        }
+    }
+
+    // a constant or global of the program may hide one of the library, but not one of the program
+    fn value_dup_check(self, name: str, pos: Pos, prelude: bool) {
+        let ci = self.consts.try_get(name)
+        if ci != nil {
+            if not ci!.prelude or prelude { fail(pos, "'{name}' is defined twice") }
+            self.consts.remove(name)
+        }
+        let gi = self.globals.try_get(name)
+        if gi != nil {
+            if not gi!.prelude or prelude { fail(pos, "'{name}' is defined twice") }
+            self.globals.remove(name)
+        }
+    }
+
+    // is the code being checked part of the library?
+    fn in_lib(self) -> bool {
+        if self.scope_lib >= 0 { return self.scope_lib == 1 }
+        return self.cx != nil and self.cx!.inst.is_prelude
+    }
+
+    fn find_fn(self, name: str) -> FnInfo? {
+        if self.in_lib() { return self.lib_fns.try_get(name) }
+        return self.fns.try_get(name)
+    }
+
+    fn find_const(self, name: str) -> ConstInfo? {
+        if self.in_lib() { return self.lib_consts.try_get(name) }
+        return self.consts.try_get(name)
+    }
+
+    fn find_global(self, name: str) -> GlobalInfo? {
+        if self.in_lib() { return self.lib_globals.try_get(name) }
+        return self.globals.try_get(name)
+    }
+
+    fn dup_check(self, name: str, pos: Pos) {
+        if prim_type(name) != nil { fail(pos, "'{name}' is a built-in type name") }
+        if name in self.structs or name in self.enums or name in self.aliases or name in self.ifaces {
+            fail(pos, "type '{name}' is defined twice")
+        }
+    }
+
+    fn finish_declare(self) {
+        self.array_info = self.structs.try_get("Array")
+        self.map_info = self.structs.try_get("Map")
+        for imp in self.impls {
+            let d = imp.decl
+            var ts: {str: Type} = {}
+            for i in 0..d.tparams.len() { ts[d.tparams[i]] = imp.tp_objs[i] }
+            var ok = true
+            let sf = self
+            let ok2 = guarded(|| { imp.self_type = sf.resolve_type(d.ty, ts) })
+            if not ok2 { continue }
+            ts["Self"] = imp.self_type!
+            let hk = head_key(imp.self_type!)
+            for m in d.methods {
+                let fi = new_fn_info(m, imp.prelude, imp)
+                let key = hk + "|" + m.name
+                var lst = self.methods.get(key, [])
+                for me in lst {
+                    if me.imp.self_type!.eq(imp.self_type!) {
+                        diags.push(Diag("method '{m.name}' is defined twice for {imp.self_type!.to_str()}", m.pos, ""))
+                    }
+                }
+                lst.push(MethodEntry(imp, fi))
+                self.methods[key] = lst
+                if not imp.prelude { self.user_fns.push(fi) }
+            }
+        }
+    }
+
+    // ---- type resolution ----------------------------------------------------
+    fn resolve_type(self, t: TypeExpr, ts: {str: Type}) -> Type {
+        match t.k {
+            TypeK.Name(n, targs) => {
+                let tv = ts.try_get(n)
+                if tv != nil {
+                    if targs.len() > 0 { fail(t.pos, "type parameter '{n}' takes no arguments") }
+                    return tv!
+                }
+                let pv = prim_type(n)
+                if pv != nil {
+                    if targs.len() > 0 { fail(t.pos, "'{n}' takes no type arguments") }
+                    return pv!
+                }
+                let al = self.aliases.try_get(n)
+                if al != nil {
+                    let a = al!
+                    if a.tparams.len() != targs.len() {
+                        fail(t.pos, "type alias '{n}' needs {a.tparams.len()} type argument(s)")
+                    }
+                    var sub = ts.copy()
+                    for i in 0..a.tparams.len() { sub[a.tparams[i]] = self.resolve_type(targs[i], ts) }
+                    return self.resolve_type(a.ty, sub)
+                }
+                let iinfo = self.ifaces.try_get(n)
+                if iinfo != nil {
+                    if targs.len() > 0 { fail(t.pos, "interface '{n}' takes no type arguments") }
+                    return Type.Iface(iinfo!)
+                }
+                var sinfo = self.structs.try_get(n)
+                var einfo = self.enums.try_get(n)
+                if sinfo != nil or einfo != nil {
+                    var args: [Type] = []
+                    for a in targs { args.push(self.resolve_type(a, ts)) }
+                    var tparams: [Type] = []
+                    if sinfo != nil { tparams = sinfo!.tparams } else { tparams = einfo!.tparams }
+                    if args.len() != tparams.len() {
+                        if args.len() == 0 and tparams.len() > 0 {
+                            var names: [str] = []
+                            for p in tparams { names.push(type_name_of(p)) }
+                            fail(t.pos, "'{n}' needs type arguments: {n}<{ ", ".join(names)}>")
+                        }
+                        fail(t.pos, "'{n}' takes {tparams.len()} type argument(s) but {args.len()} given")
+                    }
+                    if sinfo != nil { return Type.Struct(sinfo!, args) }
+                    return Type.Enum(einfo!, args)
+                }
+                var cands: [str] = []
+                for k in ts.keys() { cands.push(k) }
+                for k in ["int", "float", "bool", "byte", "str", "void", "never"] { cands.push(k) }
+                for k in self.structs.keys() { cands.push(k) }
+                for k in self.enums.keys() { cands.push(k) }
+                for k in self.aliases.keys() { cands.push(k) }
+                fail(t.pos, "unknown type '{n}'", suggest(n, cands))
+            }
+            TypeK.Array(e) => return Type.Struct(self.array_info!, [self.resolve_type(e, ts)])
+            TypeK.Map(k, v) => return Type.Struct(self.map_info!, [self.resolve_type(k, ts), self.resolve_type(v, ts)])
+            TypeK.Tuple(es) => {
+                var out: [Type] = []
+                for e in es { out.push(self.resolve_type(e, ts)) }
+                return Type.Tuple(out)
+            }
+            TypeK.Fn(ps, ret) => {
+                var out: [Type] = []
+                for p in ps { out.push(self.resolve_type(p, ts)) }
+                var r = TVoid
+                if ret != nil { r = self.resolve_type(ret!, ts) }
+                return Type.Func(out, r)
+            }
+            TypeK.Opt(inner) => {
+                let i = self.resolve_type(inner, ts)
+                if is_opt(i) { return i }
+                return Type.Opt(i)
+            }
+            TypeK.Ptr(e) => return Type.Ptr(self.resolve_type(e, ts))
+        }
+    }
+
+    // concrete fields of a struct type
+    fn struct_fields(self, t: Type) -> [Field] {
+        match t {
+            Type.Struct(info, args) => {
+                let key = types_key(args)
+                let c = info.cache.try_get(key)
+                if c != nil { return c! }
+                var ts: {str: Type} = {}
+                for i in 0..info.tparams.len() { ts[type_name_of(info.tparams[i])] = args[i] }
+                var out: [Field] = []
+                for f in info.decl.fields { out.push(Field(f.name, self.resolve_type(f.ty, ts))) }
+                info.cache[key] = out
+                return out
+            }
+            _ => panic("struct_fields on a non-struct")
+        }
+    }
+
+    fn variant_payload(self, t: Type, vi: int) -> [Type] {
+        match t {
+            Type.Enum(info, args) => {
+                let key = types_key(args)
+                var c = info.cache.try_get(key)
+                if c == nil {
+                    var ts: {str: Type} = {}
+                    for i in 0..info.tparams.len() { ts[type_name_of(info.tparams[i])] = args[i] }
+                    var all: [[Type]] = []
+                    for v in info.decl.variants {
+                        var p: [Type] = []
+                        for pt in v.payload { p.push(self.resolve_type(pt, ts)) }
+                        all.push(p)
+                    }
+                    info.cache[key] = all
+                    c = all
+                }
+                return c![vi]
+            }
+            _ => panic("variant_payload on a non-enum")
+        }
+    }
+
+    // True if values of t are stored directly (not as heap pointers); optionals of them are boxed.
+    fn is_value_type(self, t: Type) -> bool {
+        match t {
+            Type.Int => return true
+            Type.Float => return true
+            Type.Bool => return true
+            Type.Byte => return true
+            Type.Ptr(e) => return true
+            Type.Enum(info, args) => return info.simple
+            _ => return false
+        }
+    }
+
+    fn esize(self, t: Type) -> int {
+        if t.eq(TByte) or t.eq(TBool) { return 1 }
+        return 8
+    }
+
+    // ---- function signatures / instances --------------------------------------------
+    fn generic_sig(self, fi: FnInfo) -> ([Type], Type) {
+        if fi.sig == nil {
+            var ts: {str: Type} = {}
+            for tp in fi.tp_objs { ts[type_name_of(tp)] = tp }
+            if fi.imp != nil { ts["Self"] = fi.imp!.self_type! }
+            var ptypes: [Type] = []
+            for p in fi.decl.params {
+                if p.name == "self" and p.ty == nil {
+                    if fi.imp == nil { fail(p.pos, "'self' can only be used inside an impl block") }
+                    ptypes.push(fi.imp!.self_type!)
+                } else {
+                    ptypes.push(self.resolve_type(p.ty!, ts))
+                }
+            }
+            var ret = TVoid
+            if fi.decl.ret != nil { ret = self.resolve_type(fi.decl.ret!, ts) }
+            fi.sig = (ptypes, ret)
+        }
+        return fi.sig!
+    }
+
+    fn get_inst(self, fi: FnInfo, targs: [Type]) -> FnInst {
+        let key = str(fi.id) + "|" + types_key(targs)
+        let found = self.insts.try_get(key)
+        if found != nil { return found! }
+        var binds: {str: Type} = {}
+        for i in 0..fi.tp_objs.len() { binds[fi.tp_objs[i].key()] = targs[i] }
+        let sig = self.generic_sig(fi)
+        let gp = sig.0
+        let gr = sig.1
+        var params: [Var] = []
+        for i in 0..fi.decl.params.len() {
+            let p = fi.decl.params[i]
+            let v = new_var(p.name, subst(gp[i], binds), true, p.pos)
+            v.is_param = true
+            params.push(v)
+        }
+        var name = fi.qualname()
+        if targs.len() > 0 { name = fi.qualname() + "<" + types_str(targs) + ">" }
+        let inst = new_fninst(name, params, subst(gr, binds))
+        inst.info = fi
+        inst.targs = targs
+        inst.pos = fi.pos
+        inst.is_prelude = fi.prelude
+        var vars: [Var] = []
+        for p in params { vars.push(p) }
+        inst.vars = vars
+        self.insts[key] = inst
+        self.queue.push(inst)
+        self.program.funcs.push(inst)
+        return inst
+    }
+
+    fn check_inst(self, inst: FnInst) {
+        let saved_lib = self.scope_lib
+        self.scope_lib = -1
+        self.check_inst_body(inst)
+        self.scope_lib = saved_lib
+    }
+
+    fn check_inst_body(self, inst: FnInst) {
+        let fi = inst.info!
+        var binds: {str: Type} = {}
+        var ts: {str: Type} = {}
+        for i in 0..fi.tp_objs.len() {
+            binds[fi.tp_objs[i].key()] = inst.targs[i]
+            ts[type_name_of(fi.tp_objs[i])] = inst.targs[i]
+        }
+        if fi.imp != nil { ts["Self"] = subst(fi.imp!.self_type!, binds) }
+        let ctx = new_fnctx(inst, ts, nil, inst.ret)
+        let saved = self.cx
+        self.cx = ctx
+        for v in inst.params {
+            if v.name in ctx.scopes[0] { fail(v.pos, "parameter '{v.name}' is defined twice") }
+            ctx.scopes[0][v.name] = v
+        }
+        let saved_origin = error_origin
+        let saved_origin_fn = error_origin_fn
+        if inst.is_prelude and inst.origin != nil {
+            error_origin = inst.origin
+            error_origin_fn = inst.name
+        } else {
+            error_origin = nil
+        }
+        let errors_before = diags.len()
+        if stmts_have_defer(fi.decl.body!.stmts) { self.init_defers(ctx) }
+        var body = self.check_block_stmts(fi.decl.body!.stmts, false)
+        if ctx.defer_var != nil { body = self.wrap_defer_fn(ctx, body) }
+        inst.body = body
+        error_origin = saved_origin
+        error_origin_fn = saved_origin_fn
+        // (after an error inside the body a missing return is usually a follow-up of that error)
+        if diags.len() == errors_before and not inst.ret.eq(TVoid) and not inst.ret.eq(TNever) and not self.terminates(body) {
+            fail(fi.decl.body!.pos, "function '{fi.name}' must return a value of type {inst.ret.to_str()} on every path",
+                 "add a 'return' at the end of the function")
+        }
+        self.cx = saved
+    }
+
+    // ---- helpers -----------------------------------------------------------------
+    fn rt(self, name: str, targs: [Type] = []) -> FnInst {
+        let fi = self.lib_fns.try_get(name)
+        if fi == nil {
+            fail(NOPOS, "internal error: runtime function '{name}' missing from the prelude")
+        }
+        return self.get_inst(fi!, targs)
+    }
+
+    fn call_rt(self, name: str, args: [TExpr], targs: [Type] = [], pos: Pos = NOPOS) -> TExpr {
+        let inst = self.rt(name, targs)
+        self.ctx().inst.callees[inst.uid] = inst
+        return texpr(TK.Call(inst, args), inst.ret, pos)
+    }
+
+    fn new_tmp(self, ty: Type, name: str = "$t") -> Var {
+        let v = new_var(name, ty, true, NOPOS)
+        v.is_temp = true
+        self.ctx().inst.vars.push(v)
+        return v
+    }
+
+    fn ci(self, v: int, pos: Pos = NOPOS) -> TExpr {
+        return c_int(v, TInt, pos)
+    }
+
+    // ---- driver ----------------------------------------------------------------------
+    fn run(self) -> Program {
+        self.finish_declare()
+        if diags.len() > 0 { fail_silent() }
+        self.program.alloc = self.rt("__alloc")
+        let main = self.fns.try_get("main")
+        if main == nil or main!.prelude {
+            fail(NOPOS, "no 'main' function found", "every program starts at:  fn main() \{ ... \}")
+        }
+        let entry = self.build_entry(main!)
+        self.program.entry = entry
+        let me = self
+        for gi in self.glob_order {
+            guarded(|| { me.resolve_global(gi) })
+            self.scope_lib = -1
+        }
+        for k in self.consts.keys() {
+            let ci = self.consts[k]
+            guarded(|| { me.resolve_const(ci) })
+            self.scope_lib = -1
+        }
+        for fi in self.user_fns {
+            if not fi.is_generic and not (fi.imp != nil and fi.imp!.tp_objs.len() > 0) {
+                guarded(|| { me.get_inst(fi, []) })
+            }
+        }
+        self.drain()
+        guarded(|| { me.finalize_entry(main!) })
+        self.drain()
+        if diags.len() > 0 { fail_silent() }
+        // drop unreachable instances
+        var reach: {int: bool} = {}
+        var stack: [FnInst] = [entry]
+        while stack.len() > 0 {
+            let f = stack.pop()
+            if f.uid in reach { continue }
+            reach[f.uid] = true
+            for c in f.callees.values() { stack.push(c) }
+        }
+        var kept: [FnInst] = []
+        for f in self.program.funcs {
+            if f.uid in reach { kept.push(f) }
+        }
+        self.program.funcs = kept
+        return self.program
+    }
+
+    fn drain(self) {
+        let me = self
+        while self.queue.len() > 0 {
+            let inst = self.queue.pop()
+            if inst.body != nil { continue }
+            let saved = self.cx
+            let ok = guarded(|| { me.check_inst(inst) })
+            error_origin = nil
+            self.scope_lib = -1
+            if not ok {
+                self.cx = saved
+                inst.body = []
+            }
+        }
+    }
+
+    // __entry: runtime init, global initializers, main(), exit
+    fn build_entry(self, main: FnInfo) -> FnInst {
+        let inst = new_fninst("__entry", [], TVoid)
+        inst.pos = main.pos
+        inst.is_prelude = true
+        inst.body = []
+        self.entry_ctx = new_fnctx(inst, {}, nil, TVoid)
+        self.program.funcs.push(inst)
+        let saved = self.cx
+        self.cx = self.entry_ctx
+        let rt_init = self.rt("__rt_init")
+        inst.callees[rt_init.uid] = rt_init
+        self.entry_body = [tstmt(SK.ExprS(texpr(TK.Call(rt_init, []), TVoid, NOPOS)), NOPOS)]
+        for nm in ["bounds_fail", "div_fail"] {
+            let f = self.rt("rt_" + nm)
+            inst.callees[f.uid] = f
+            self.program.rt[nm] = f
+        }
+        self.cx = saved
+        return inst
+    }
+
+    fn finalize_entry(self, main: FnInfo) {
+        let inst = self.program.entry!
+        let saved = self.cx
+        self.cx = self.entry_ctx
+        self.entry_body = order_global_inits(self.entry_body)
+        let sig = self.generic_sig(main)
+        let gp = sig.0
+        let gr = sig.1
+        let mi = self.get_inst(main, [])
+        inst.callees[mi.uid] = mi
+        var args: [TExpr] = []
+        if gp.len() > 0 {
+            if gp.len() != 1 or not gp[0].eq(Type.Struct(self.array_info!, [TStr])) {
+                fail(main.pos, "main can be  fn main()  or  fn main(args: [str])")
+            }
+            args.push(self.call_rt("__rt_args", []))
+        }
+        let call = texpr(TK.Call(mi, args), gr, NOPOS)
+        var code = call
+        if not gr.eq(TInt) {
+            self.entry_body.push(tstmt(SK.ExprS(call), NOPOS))
+            code = self.ci(0)
+        }
+        self.entry_body.push(tstmt(SK.ExprS(self.call_rt("__rt_exit", [code])), NOPOS))
+        inst.body = self.entry_body
+        self.cx = saved
+    }
+
+    // create the GlobalVar for a top level let/var and emit its initializer into __entry
+    fn resolve_global(self, gi: GlobalInfo) -> GlobalVar {
+        if gi.state == 2 { return gi.glob! }
+        if gi.state == 1 { fail(gi.decl.pos, "global '{gi.name}' depends on itself") }
+        gi.state = 1
+        let saved = self.cx
+        let saved_lib = self.scope_lib
+        self.cx = self.entry_ctx
+        self.scope_lib = 0
+        if gi.prelude { self.scope_lib = 1 }
+        let d = gi.decl
+        let ts: {str: Type} = {}
+        var ty: Type? = nil
+        if d.ty != nil { ty = self.resolve_type(d.ty!, ts) }
+        var init: TExpr? = nil
+        if d.value != nil {
+            var e = self.ce(d.value!, ty)
+            if ty == nil {
+                if e.ty.eq(TNil) or e.ty.eq(TVoid) or e.ty.eq(TNever) {
+                    fail(d.pos, "cannot infer the type of '{gi.name}'", "add a type:  let {gi.name}: T = ...")
+                }
+                ty = e.ty
+            } else {
+                e = self.coerce(e, ty!, d.value!.pos)
+            }
+            init = e
+        } else if ty == nil {
+            fail(d.pos, "global '{gi.name}' needs a type or a value")
+        } else if ty! == TStr or self.is_array_t(ty!) or self.is_map_t(ty!) {
+            init = self.default_value(ty!, d.pos)       // var name: str  starts as "", arrays and maps start empty
+        }
+        let g = new_global(gi.name, ty!, d.pos)
+        gi.glob = g
+        gi.state = 2
+        self.program.globals.push(g)
+        if init != nil and not is_zero_const(init!) {
+            self.entry_body.push(tstmt(SK.Set(texpr(TK.GlobalRef(g), ty!, NOPOS), init!), d.pos))
+        }
+        self.cx = saved
+        self.scope_lib = saved_lib
+        return g
+    }
+
+    fn resolve_const(self, ci: ConstInfo) -> ConstInfo {
+        if ci.state == 2 { return ci }
+        if ci.state == 1 { fail(ci.decl.pos, "constant '{ci.name}' depends on itself") }
+        ci.state = 1
+        let saved = self.cx
+        let saved_lib = self.scope_lib
+        self.cx = self.entry_ctx
+        self.scope_lib = 0
+        if ci.prelude { self.scope_lib = 1 }
+        let d = ci.decl
+        var ty: Type? = nil
+        if d.ty != nil { ty = self.resolve_type(d.ty!, {}) }
+        var val = self.ce(d.value, ty)
+        if ty != nil { val = self.coerce(val, ty!, d.value.pos) }
+        if is_const(val) and not is_nil_const(val) {
+            ci.value = val
+        } else {
+            let g = new_global(ci.name, val.ty, d.pos)
+            self.program.globals.push(g)
+            self.entry_body.push(tstmt(SK.Set(texpr(TK.GlobalRef(g), val.ty, NOPOS), val), d.pos))
+            ci.value = texpr(TK.GlobalRef(g), val.ty, NOPOS)
+        }
+        ci.state = 2
+        self.cx = saved
+        self.scope_lib = saved_lib
+        return ci
+    }
+}
+
+fn pos_text(p: Pos) -> str {
+    return "{p.file}:{p.line}:{p.col}"
+}
+
+// Checks a whole program given as parsed modules (prelude first); returns the typed program.
+// Compile errors are collected in `diags`; the result is nil if there were any.
+fn check_program(modules: [([Item], bool)]) -> Program? {
+    let chk = new_checker()
+    var result: Program? = nil
+    let ok = guarded(|| {
+        for m in modules { chk.declare_module(m.0, m.1) }
+        result = chk.run()
+    })
+    if not ok or diags.len() > 0 { return nil }
+    return result
+}

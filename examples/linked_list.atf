@@ -1,0 +1,112 @@
+// linked_list.atf - a singly linked list built from optional references.
+// Shows: recursive structs, T? optionals, while let, if let, x!, ?? default, methods.
+// Run:   python run_atf.py run examples/linked_list.atf
+
+struct Node {
+    value: int,
+    next: Node?
+}
+
+struct List {
+    head: Node?,
+    size: int
+}
+
+impl List {
+    fn new() -> List {
+        return List{ head: nil, size: 0 }
+    }
+
+    // add at the front
+    fn push_front(self, v: int) {
+        self.head = Node{ value: v, next: self.head }
+        self.size += 1
+    }
+
+    // add at the back
+    fn push_back(self, v: int) {
+        let node = Node{ value: v, next: nil }
+        self.size += 1
+        if self.head == nil {
+            self.head = node
+            return
+        }
+        var cur = self.head!
+        while cur.next != nil {
+            cur = cur.next!
+        }
+        cur.next = node
+    }
+
+    fn pop_front(self) -> int? {
+        if let h = self.head {
+            self.head = h.next
+            self.size -= 1
+            return h.value
+        }
+        return nil
+    }
+
+    fn contains(self, v: int) -> bool {
+        var cur = self.head
+        while let n = cur {
+            if n.value == v { return true }
+            cur = n.next
+        }
+        return false
+    }
+
+    fn reverse(self) {
+        var prev: Node? = nil
+        var cur = self.head
+        while let n = cur {
+            let next = n.next
+            n.next = prev
+            prev = n
+            cur = next
+        }
+        self.head = prev
+    }
+
+    fn to_array(self) -> [int] {
+        var out: [int] = []
+        var cur = self.head
+        while let n = cur {
+            out.push(n.value)
+            cur = n.next
+        }
+        return out
+    }
+
+    fn sum(self) -> int {
+        var total = 0
+        var cur = self.head
+        while let n = cur { total += n.value; cur = n.next }
+        return total
+    }
+}
+
+fn main() {
+    let list = List.new()
+    for i in 1..=5 { list.push_back(i * 10) }
+    list.push_front(5)
+    println("list:", list.to_array(), "size", list.size)
+    println("sum:", list.sum())
+    println("contains 30?", list.contains(30), " contains 31?", list.contains(31))
+
+    list.reverse()
+    println("reversed:", list.to_array())
+
+    // pop returns an optional: an int, or nil when the list is empty
+    let first = list.pop_front()
+    println("popped:", first, "now", list.to_array())
+    println("popped value + 1 =", first! + 1)
+
+    while list.size > 0 {
+        list.pop_front()
+    }
+    let none = list.pop_front()
+    println("popping an empty list gives:", none)
+    println("with a default:", none ?? -1)
+    println("is it nil?", none == nil)
+}

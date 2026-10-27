@@ -1,0 +1,72 @@
+// binary_search.atf - binary search, and the "guess my number" game played by the computer.
+// Shows: generic functions (works for ints, strings and floats), integer midpoints,
+//        returning an index or nil, counting steps, a loop with break.
+// Run:   python run_atf.py run examples/binary_search.atf
+
+// index of x in the sorted array a, or nil
+fn binary_search<T>(a: [T], x: T) -> int? {
+    var lo = 0
+    var hi = a.len() - 1
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2
+        if a[mid] == x { return mid }
+        if a[mid] < x { lo = mid + 1 } else { hi = mid - 1 }
+    }
+    return nil
+}
+
+// the first index whose element is >= x (like C++ lower_bound); a.len() if there is none
+fn lower_bound<T>(a: [T], x: T) -> int {
+    var lo = 0
+    var hi = a.len()
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2
+        if a[mid] < x { lo = mid + 1 } else { hi = mid }
+    }
+    return lo
+}
+
+// guess a secret number in 1..=n by halving the range; returns the number of guesses
+fn guess_game(secret: int, n: int) -> int {
+    var lo = 1
+    var hi = n
+    var guesses = 0
+    loop {
+        let g = (lo + hi) / 2
+        guesses += 1
+        if g == secret { break }
+        if g < secret { lo = g + 1 } else { hi = g - 1 }
+    }
+    return guesses
+}
+
+fn main() {
+    let nums = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
+    for x in [7, 29, 2, 37, 4, 100] {
+        println("search {x:>3}: {binary_search(nums, x)}")
+    }
+
+    let names = ["alice", "bob", "carol", "dave", "erin"]
+    println(binary_search(names, "carol"), binary_search(names, "zed"))
+    let temps = [-5.5, 0.0, 3.25, 9.75, 21.0]
+    println(binary_search(temps, 9.75), binary_search(temps, 10.0))
+
+    println("lower_bound of 12:", lower_bound(nums, 12), " of 1:", lower_bound(nums, 1), " of 50:", lower_bound(nums, 50))
+    println("numbers below 20:", lower_bound(nums, 20))
+
+    // finding a number among a million needs at most 20 guesses
+    var worst = 0
+    var total = 0
+    for secret in 1..=1000000 step 997 {
+        let g = guess_game(secret, 1000000)
+        total += g
+        worst = max(worst, g)
+    }
+    println("worst case for 1..1000000: {worst} guesses")
+    println("guess_game(1, 100) = {guess_game(1, 100)}, guess_game(50, 100) = {guess_game(50, 100)}, guess_game(100, 100) = {guess_game(100, 100)}")
+
+    // binary search on a big array
+    var big: [int] = []
+    for i in 0..1000000 { big.push(i * 3) }
+    println("3 * 123456 is at index {binary_search(big, 370368)}, 370369 is {binary_search(big, 370369)}")
+}

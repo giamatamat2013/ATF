@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: 'continue' can only be used inside a loop
+  --> cerr_continue_outside.atf:2:5
+ 2 |     continue
+   |     ^

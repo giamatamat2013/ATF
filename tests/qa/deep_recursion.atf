@@ -1,0 +1,57 @@
+// deep recursion: 100000+ frames with different frame shapes, allocations during deep recursion
+struct L { v: int, next: L? }
+
+fn count_down(n: int) -> int {
+    if n == 0 { return 0 }
+    return 1 + count_down(n - 1)
+}
+
+fn sum_args(n: int, a: int, b: int, c: float, d: str) -> int {
+    if n == 0 { return a + b + int(c) + d.len() }
+    return sum_args(n - 1, a + 1, b - 1, c + 0.5, d)
+}
+
+fn build(n: int) -> L? {
+    if n == 0 { return nil }
+    return L(n, build(n - 1))
+}
+
+fn list_sum(l: L?) -> int {
+    if l == nil { return 0 }
+    return l!.v + list_sum(l!.next)
+}
+
+fn ping(n: int) -> int {
+    if n == 0 { return 0 }
+    return pong(n - 1) + 1
+}
+
+fn pong(n: int) -> int {
+    if n == 0 { return 0 }
+    return ping(n - 1) + 2
+}
+
+fn alloc_deep(n: int, acc: [str]) -> int {
+    if n == 0 { return acc.len() }
+    acc.push("item" + str(n))
+    let tmp = [n, n + 1, n + 2]
+    return alloc_deep(n - 1, acc) + tmp.len() - 3
+}
+
+fn closure_deep(n: int) -> int {
+    let f = |x: int| x + 1
+    if n == 0 { return 0 }
+    return f(closure_deep(n - 1))
+}
+
+fn main() {
+    println(count_down(100000))
+    println(count_down(200000))
+    println(sum_args(100000, 0, 0, 0.0, "abc"))
+    let l = build(100000)
+    println(list_sum(l))
+    println(ping(100001))
+    var acc: [str] = []
+    println(alloc_deep(100000, acc), acc[0], acc[99999])
+    println(closure_deep(100000))
+}

@@ -1,0 +1,22 @@
+// the different ways to loop, and assignments as lambda bodies
+fn main() {
+    let m = {"x": [1, 2], "y": [3]}
+    for (name, xs) in m { println(name, xs) }
+    for k, v in m { println(k, v.len()) }
+    for k in m { print(k, "") }
+    println()
+
+    let pairs = [(1, "a"), (2, "b")]
+    for (n, s) in pairs { println(n, s) }
+    for i, p in pairs { println(i, p) }
+    for i, c in "hey" { print(i, c, "") }
+    println()
+
+    var total = 0
+    [1, 2, 3].for_each(|x| total += x)
+    var log: [str] = []
+    let add = |s: str| log.push(s)
+    add("first")
+    add("second")
+    println(total, log)
+}

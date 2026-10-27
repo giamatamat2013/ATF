@@ -1,0 +1,180 @@
+// atf repl - an interactive prompt.  Every input is added to a small program that is compiled and run again;
+// only the new output is shown.  Expressions print their value.
+import "util"
+
+struct Repl {
+    items: [str],           // top-level declarations (fn, struct, enum, ...)
+    body: [str],            // statements of main
+    shown: int,             // how much of the program output was already printed
+    dir: str
+}
+
+fn repl_program(r: Repl, extra_items: [str], extra_body: [str]) -> str {
+    var sb = str_builder()
+    for it in r.items { sb.add(it + "\n") }
+    for it in extra_items { sb.add(it + "\n") }
+    sb.add("fn main() \{\n")
+    for s in r.body { sb.add("    " + s + "\n") }
+    for s in extra_body { sb.add("    " + s + "\n") }
+    sb.add("}\n")
+    return sb.finish()
+}
+
+fn is_decl_start(line: str) -> bool {
+    let t = line.trim_start()
+    for kw in ["fn ", "struct ", "enum ", "impl ", "interface ", "const ", "type ", "import ", "extern ", "#["] {
+        if t.starts_with(kw) { return true }
+    }
+    return false
+}
+
+// compiles and runs the candidate program; returns (compiled?, output)
+fn repl_try(r: Repl, src: str) -> (bool, str) {
+    let path = r.dir + "\\repl.atf"
+    let exe = r.dir + "\\repl.exe"
+    let out = r.dir + "\\repl.out"
+    write_file(path, src)
+    loaded = {}
+    modules = []
+    diags = []
+    sources = {}
+    var bytes: Bytes? = nil
+    let ok = guarded(|| {
+        load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
+        load_module(path, false, nil, NOPOS)
+        var ms: [([Item], bool)] = []
+        for m in modules { ms.push((m.items, m.prelude)) }
+        let prog = check_program(ms)
+        if prog != nil {
+            optimize_program(prog!)
+            bytes = generate_exe(prog!)
+        }
+    })
+    if not ok or diags.len() > 0 or bytes == nil { return (false, repl_errors(path)) }
+    write_file(exe, bytes!.to_str())
+    run_command("cmd /c \"\"" + exe + "\" > \"" + out + "\" 2>&1\"")
+    return (true, read_file(out) ?? "")
+}
+
+// errors in what was typed are shown against the typed text (not the generated program around it)
+fn repl_errors(path: str) -> str {
+    var out: [str] = []
+    var seen: {str: bool} = {}
+    for d in diags {
+        var r = ""
+        let src = sources.try_get(d.pos.file)
+        if d.pos.file == path and src != nil and d.pos.line >= 1 {
+            let lines = src!.split("\n")
+            r = "error: " + d.msg
+            if d.pos.line <= lines.len() {
+                var text = lines[d.pos.line - 1]
+                var col = d.pos.col
+                if text.starts_with("    ") {
+                    text = text[4..]
+                    col -= 4
+                }
+                r = r + "\n  | " + text + "\n  | " + " ".repeat(max(col - 1, 0)) + "^"
+            }
+            if d.hint.len() > 0 { r = r + "\n  hint: " + d.hint }
+        } else {
+            r = render_diag(d)
+        }
+        if r in seen { continue }
+        seen[r] = true
+        out.push(r)
+        if out.len() >= 5 { break }
+    }
+    return "\n".join(out)
+}
+
+fn repl_show(r: Repl, output: str) {
+    if output.len() > r.shown {
+        print(output[r.shown..])
+        flush()
+    }
+    r.shown = output.len()
+}
+
+fn run_repl() -> int {
+    let dir = temp_dir() + "atf"
+    make_dir(dir)
+    let r = Repl([], [], 0, dir)
+    println("ATF {VERSION} interactive mode.  Type code; expressions show their value.")
+    println("Commands:  :quit   :reset   :show (the program so far)")
+    loop {
+        print("> ")
+        flush()
+        let l = read_line()
+        if l == nil { break }
+        var line = l!
+        if line.trim() == "" { continue }
+        if line.trim() == ":quit" or line.trim() == ":q" { break }
+        if line.trim() == ":reset" {
+            r.items = []
+            r.body = []
+            r.shown = 0
+            continue
+        }
+        if line.trim() == ":show" {
+            print(repl_program(r, [], []))
+            continue
+        }
+        // continue a block until the braces balance
+        var depth = brace_depth(line)
+        while depth > 0 {
+            print(". ")
+            flush()
+            let more = read_line()
+            if more == nil { break }
+            line = line + "\n" + more!
+            depth += brace_depth(more!)
+        }
+        if is_decl_start(line) {
+            let res = repl_try(r, repl_program(r, [line], []))
+            if res.0 {
+                r.items.push(line)
+                repl_show(r, res.1)
+            } else {
+                eprintln(res.1)
+            }
+            continue
+        }
+        // an expression: print its value (if it has one)
+        let as_print = repl_try(r, repl_program(r, [], ["println(" + line + ")"]))
+        if as_print.0 {
+            // keep the expression itself (not the print) so later inputs do not repeat it
+            let silent = repl_try(r, repl_program(r, [], [line]))
+            if silent.0 {
+                r.body.push(line)
+                print(as_print.1[min(r.shown, as_print.1.len())..])
+                flush()
+                r.shown = silent.1.len()
+            } else {
+                r.body.push("println(" + line + ")")
+                repl_show(r, as_print.1)
+            }
+            continue
+        }
+        let as_stmt = repl_try(r, repl_program(r, [], [line]))
+        if as_stmt.0 {
+            r.body.push(line)
+            repl_show(r, as_stmt.1)
+        } else {
+            eprintln(as_stmt.1)
+        }
+    }
+    return 0
+}
+
+fn brace_depth(s: str) -> int {
+    var d = 0
+    var in_str = false
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == '"' { in_str = not in_str }
+        if in_str { continue }
+        if c == '{' { d += 1 }
+        if c == '}' { d -= 1 }
+    }
+    return d
+}

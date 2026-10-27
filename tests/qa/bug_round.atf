@@ -1,0 +1,7 @@
+// round() is implemented as floor(x + 0.5), which is wrong for 0.49999999999999994 and for large odd floats
+fn main() {
+    println(round(0.49999999999999994), round(-0.49999999999999994))
+    println(round(4503599627370497.0), round(-4503599627370497.0))
+    println(0.49999999999999994.round(), 4503599627370497.0.round())
+    println(round(2.5), round(-2.5), round(0.5), round(1e300))
+}

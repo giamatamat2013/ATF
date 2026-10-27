@@ -1,0 +1,103 @@
+// todo.atf - a to-do list with priorities, filtering and sorting.
+// Shows: enums with integer values, enum methods, structs in arrays, filter / sort_by / map,
+//        reference semantics (changing a task through another variable), same() vs ==.
+// Run:   python run_atf.py run examples/todo.atf
+
+enum Priority { Low = 1, Medium = 2, High = 3 }
+
+impl Priority {
+    fn label(self) -> str {
+        return match self {
+            Priority.Low => "low"
+            Priority.Medium => "medium"
+            Priority.High => "HIGH"
+        }
+    }
+}
+
+struct Task {
+    id: int,
+    title: str,
+    priority: Priority,
+    done: bool,
+    tags: [str]
+}
+
+struct TodoList {
+    tasks: [Task],
+    next_id: int
+}
+
+impl TodoList {
+    fn new() -> TodoList { return TodoList{ tasks: [], next_id: 1 } }
+
+    fn add(self, title: str, priority: Priority, tags: [str]) -> Task {
+        let t = Task{ id: self.next_id, title: title, priority: priority, done: false, tags: tags }
+        self.next_id += 1
+        self.tasks.push(t)
+        return t
+    }
+
+    fn complete(self, id: int) -> bool {
+        for t in self.tasks {
+            if t.id == id {
+                t.done = true
+                return true
+            }
+        }
+        return false
+    }
+
+    fn pending(self) -> [Task] {
+        return self.tasks.filter(|t| not t.done)
+    }
+
+    fn by_tag(self, tag: str) -> [Task] {
+        return self.tasks.filter(|t| t.tags.contains(tag))
+    }
+}
+
+fn show(t: Task) {
+    let mark = if t.done { "x" } else { " " }
+    println("  [{mark}] #{t.id} {t.title:<22} {t.priority.label():<7} {t.tags}")
+}
+
+fn main() {
+    let list = TodoList.new()
+    list.add("write the report", Priority.High, ["work"])
+    let milk = list.add("buy milk", Priority.Low, ["home", "shopping"])
+    list.add("call the dentist", Priority.Medium, ["health"])
+    list.add("fix the bike", Priority.Medium, ["home"])
+    list.add("book flights", Priority.High, ["travel", "work"])
+
+    println("all tasks:")
+    for t in list.tasks { show(t) }
+
+    println("complete #1 and #4:", list.complete(1), list.complete(4))
+    println("complete #99:", list.complete(99))
+
+    // `milk` and the list entry are the same object (structs are references)
+    milk.done = true
+    println("milk is done in the list too:", list.tasks[1].done, " same object:", same(milk, list.tasks[1]))
+
+    println("pending, most important first:")
+    var pending = list.pending()
+    pending.sort_by(|a, b| {
+        if a.priority != b.priority { return int(b.priority) - int(a.priority) }
+        return a.id - b.id
+    })
+    for t in pending { show(t) }
+
+    println("tagged 'work':", list.by_tag("work").map(|t| t.title))
+    println("tagged 'home':", list.by_tag("home").map(|t| t.title))
+
+    let done_count = list.tasks.filter(|t| t.done).len()
+    println("{done_count} of {list.tasks.len()} done")
+    println("priorities as numbers:", list.tasks.map(|t| int(t.priority)))
+    println("high priority titles:", list.tasks.filter(|t| t.priority == Priority.High).map(|t| t.title))
+
+    // == compares contents, same() compares identity
+    let a = Task(1, "x", Priority.Low, false, [])
+    let b = Task(1, "x", Priority.Low, false, [])
+    println("equal contents:", a == b, " same object:", same(a, b))
+}

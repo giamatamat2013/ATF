@@ -1,0 +1,4 @@
+before
+[exit 1]
+[stderr] panic: division by zero
+  at main (err_div.atf:4)

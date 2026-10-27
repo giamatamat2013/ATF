@@ -1,0 +1,67 @@
+// primes.atf - the sieve of Eratosthenes.
+// Shows: array_make, while loops, bool arrays, filtering, string joining.
+// Run:   python run_atf.py run examples/primes.atf
+
+// returns a table where is_prime[i] is true when i is prime
+fn sieve(limit: int) -> [bool] {
+    let is_prime = array_make::<bool>(limit + 1)
+    is_prime.fill(true)
+    is_prime[0] = false
+    if limit >= 1 { is_prime[1] = false }
+    var i = 2
+    while i * i <= limit {
+        if is_prime[i] {
+            var j = i * i
+            while j <= limit {
+                is_prime[j] = false
+                j += i
+            }
+        }
+        i += 1
+    }
+    return is_prime
+}
+
+fn main() {
+    let limit = 100
+    let table = sieve(limit)
+    var primes: [int] = []
+    for i in 0..=limit {
+        if table[i] { primes.push(i) }
+    }
+    println("primes up to {limit}:")
+    println(primes)
+    println("count:", primes.len())
+
+    // twin primes (p, p + 2)
+    var twins: [(int, int)] = []
+    for i in 1..primes.len() {
+        if primes[i] - primes[i - 1] == 2 {
+            twins.push((primes[i - 1], primes[i]))
+        }
+    }
+    println("twin primes:", twins)
+
+    // bigger sieve: how many primes below one million?
+    let big = sieve(1000000)
+    var count = 0
+    for b in big {
+        if b { count += 1 }
+    }
+    println("primes below 1000000:", count)
+
+    // the largest prime gap below one million
+    var last = 2
+    var best_gap = 0
+    var best_at = 0
+    for i in 3..=1000000 {
+        if big[i] {
+            if i - last > best_gap {
+                best_gap = i - last
+                best_at = last
+            }
+            last = i
+        }
+    }
+    println("largest gap: {best_gap} after {best_at}")
+}

@@ -1,0 +1,55 @@
+// word_freq.atf - count how often each word occurs in a text.
+// Shows: strings (lower, split, replace), maps with insertion order, sort_by, tuples.
+// Run:   python run_atf.py run examples/word_freq.atf
+
+let TEXT = """The quick brown fox jumps over the lazy dog.
+The dog barks; the fox runs away. Quick, quick, said the fox!
+A lazy dog is a happy dog."""
+
+// lower-case the text and replace punctuation by spaces
+fn clean(text: str) -> str {
+    var s = text.lower()
+    for p in [".", ",", ";", "!", "?", "\n"] {
+        s = s.replace(p, " ")
+    }
+    return s
+}
+
+fn main() {
+    let words = clean(TEXT).split_whitespace()
+    println("{words.len()} words")
+
+    var counts: {str: int} = {}
+    for w in words {
+        counts[w] = counts.get(w, 0) + 1
+    }
+    println("{counts.len()} different words")
+
+    // items() gives (key, value) tuples; sort by count (descending), then alphabetically
+    var items = counts.items()
+    items.sort_by(|a, b| {
+        if a.1 != b.1 { return b.1 - a.1 }
+        return str_cmp(a.0, b.0)
+    })
+    println("top words:")
+    for i in 0..5 {
+        let (word, n) = items[i]
+        let bar = "*".repeat(n)
+        println("  {word:<8} {n:>2} {bar}")
+    }
+
+    // words that occur exactly once
+    var once: [str] = []
+    for k, v in counts {
+        if v == 1 { once.push(k) }
+    }
+    once.sort()
+    println("once:", ", ".join(once))
+
+    // the longest word
+    var longest = ""
+    for w in words {
+        if w.len() > longest.len() { longest = w }
+    }
+    println("longest word: {longest} ({longest.len()} letters)")
+}

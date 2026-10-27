@@ -1,0 +1,9 @@
+// a global 'var NAME: str' without a value must start as "" (locals do); actual: it is a null pointer -> crash
+var gs: str
+fn main() {
+    var ls: str
+    println("[" + ls + "]", ls.len())
+    println("[" + gs + "]", gs.len())
+    gs = gs + "x"
+    println(gs)
+}

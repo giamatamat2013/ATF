@@ -1,0 +1,9 @@
+// hello.atf - the smallest complete program.
+// Shows: fn main, println, string interpolation.
+// Run:   python run_atf.py run examples/hello.atf
+
+fn main() {
+    println("Hello, ATF!")
+    let name = "world"
+    println("Hello, {name}! 1 + 2 = {1 + 2}")
+}

@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: cannot apply '+' to bool and int
+  --> cerr_bool_arith.atf:2:18
+ 2 |     println(true + 1)
+   |                  ^

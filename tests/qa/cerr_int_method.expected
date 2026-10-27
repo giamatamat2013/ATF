@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: int has no method 'foo'
+  --> cerr_int_method.atf:2:15
+ 2 |     println(5.foo())
+   |               ^
+  hint: available: abs, clamp, is_even, is_odd, max, min, popcount, pow, sign, to_bin, to_float, to_hex, to_str

@@ -1,0 +1,4 @@
+fn id<T>(x: T) -> T { return x }
+fn main() {
+    println(id::<int, str>(1))
+}

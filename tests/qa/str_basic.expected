@@ -1,0 +1,32 @@
+[] 0 true     []
+0 -1 0 true true true 0
+[""] [] [] [] [] []
+ []   []
+0 3 -1 -1 1 0
+5 -1 2
+["a", "b", "", "c", ""] ["", ""] ["", ""] ["a", "b", "c"] ["a", "b", "c"]
+["a", "b", "c"] ["a", ":b"] ["", "", "a", "", "b", "", ""]
+["a", "b", "c"] ["x", "y", "", "z"] ["x", "y"] [""] ["", ""]
+heo bb abc  aaaaaa
+3 2 2 0
+x y [x ] [  x]
+HELLO WORLD 123 hello world 123 Hello HELLO 1abc
+false false true true
+true false false false
+h o  hello llo he   ell 
+ell  101 ["h", "e", "l", "l", "o"] [104, 101, 108, 108, 111]
+17 HéLLO WöRLD ☺ 17 8 true ["héllo", "wörld", "☺"]
+2 λ 206 [206, 187] 4 true
+A  [194, 128] [223, 191] [224, 160, 128] [239, 191, 191] [240, 144, 128, 128]
+65 65 65 25 10 92 39
+true false true false true true true true
+true false -1 1 0 0
+apple pear ["", "a", "ab", "b", "c"]
+0123456789! 11 true12992.5
+xxx  ab cd
+tab	here quote"q back\slash brace{x} nul?AB HI
+raw\n{x}\t triple "quoted" 2
+["line1", "line2"] 11
+[   ab] [ab   ] [ ab  ] [-007] [abc]
+[   ] [+005] [toolong]
+true false

@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: int cannot be indexed with [ ]
+  --> cerr_index_int.atf:3:14
+ 3 |     println(x[0])
+   |              ^
+  hint: indexing works on arrays, strings and maps

@@ -1,0 +1,105 @@
+// inventory.atf - a small shop inventory: a map of structs.
+// Shows: {str: Item} maps, structs as shared references, updating values in place,
+//        Result for failing operations, items(), sorting, summing with reduce.
+// Run:   python run_atf.py run examples/inventory.atf
+
+struct Item {
+    name: str,
+    price: int,        // cents
+    qty: int
+}
+
+struct Inventory {
+    items: {str: Item}
+}
+
+fn money(cents: int) -> str {
+    return "{cents / 100}.{pad_zero(str(cents % 100), 2)}"
+}
+
+impl Inventory {
+    fn new() -> Inventory {
+        return Inventory{ items: {} }
+    }
+
+    fn add(self, name: str, price: int, qty: int) {
+        if name in self.items {
+            // Item is a struct: the map holds a reference, so this changes the stored item
+            let it = self.items[name]
+            it.qty += qty
+            it.price = price
+        } else {
+            self.items[name] = Item(name, price, qty)
+        }
+    }
+
+    fn remove(self, name: str, qty: int) -> Result<int, str> {
+        let found = self.items.try_get(name)
+        if found == nil { return Result.Err("no such item: {name}") }
+        let it = found!
+        if it.qty < qty { return Result.Err("only {it.qty} {name} in stock, cannot remove {qty}") }
+        it.qty -= qty
+        if it.qty == 0 { self.items.remove(name) }
+        return Result.Ok(it.qty)
+    }
+
+    fn total_value(self) -> int {
+        var total = 0
+        for name, it in self.items { total += it.price * it.qty }
+        return total
+    }
+
+    fn report(self) {
+        println("{pad_right("item", 10)} {pad_left("price", 8)} {pad_left("qty", 5)} {pad_left("value", 9)}")
+        var list = self.items.values()
+        list.sort_by(|a, b| str_cmp(a.name, b.name))
+        for it in list {
+            println("{pad_right(it.name, 10)} {pad_left(money(it.price), 8)} {pad_left(str(it.qty), 5)} {pad_left(money(it.price * it.qty), 9)}")
+        }
+        println("{pad_right("total", 10)} {pad_left("", 8)} {pad_left("", 5)} {pad_left(money(self.total_value()), 9)}")
+    }
+}
+
+fn try_remove(inv: Inventory, name: str, qty: int) {
+    match inv.remove(name, qty) {
+        Result.Ok(left) => println("removed {qty} {name}, {left} left")
+        Result.Err(e) => println("cannot remove: {e}")
+    }
+}
+
+fn main() {
+    let inv = Inventory.new()
+    inv.add("apple", 50, 100)
+    inv.add("banana", 25, 150)
+    inv.add("cherry", 1200, 10)
+    inv.add("durian", 2599, 2)
+    inv.report()
+
+    println()
+    inv.add("apple", 55, 20)      // restock at a new price
+    try_remove(inv, "banana", 50)
+    try_remove(inv, "cherry", 11)
+    try_remove(inv, "durian", 2)
+    try_remove(inv, "elderberry", 1)
+    println()
+    inv.report()
+
+    println()
+    println("names in insertion order:", inv.items.keys())
+    var cheap: [str] = []
+    for name, it in inv.items {
+        if it.price < 100 { cheap.push(name) }
+    }
+    println("cheap items:", cheap)
+
+    // the most valuable line item
+    var best = ""
+    var best_value = -1
+    for name, it in inv.items {
+        if it.price * it.qty > best_value {
+            best_value = it.price * it.qty
+            best = name
+        }
+    }
+    println("most valuable stock: {best} ({money(best_value)})")
+}

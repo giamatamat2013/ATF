@@ -1,0 +1,7 @@
+// a global 'var NAME: [int]' without a value must start as [] (locals do); actual: null pointer -> crash
+var ga: [int]
+fn main() {
+    println(ga.len())
+    ga.push(3)
+    println(ga)
+}

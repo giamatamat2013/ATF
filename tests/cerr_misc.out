@@ -1,0 +1,47 @@
+COMPILE ERROR
+error: P has no field 'y'
+  --> cerr_misc.atf:5:22
+ 5 |     let p = P{ x: 1, y: 2 }
+   |                      ^
+  hint: fields: x
+
+error: missing argument 'b' in call to 'f'
+  --> cerr_misc.atf:6:6
+ 6 |     f(1)
+   |      ^
+  hint: signature: f(a: int, b: int)
+
+error: 'f' takes 2 argument(s) but 3 given
+  --> cerr_misc.atf:7:6
+ 7 |     f(1, 2, 3)
+   |      ^
+  hint: signature: f(a: int, b: int)
+
+error: cannot assign to 'q' because it was declared with 'let'
+  --> cerr_misc.atf:10:5
+ 10 |     q = 6
+    |     ^
+  hint: declare it with 'var q = ...' to allow changes
+
+error: type mismatch: expected bool but found int
+  --> cerr_misc.atf:11:8
+ 11 |     if q { }
+    |        ^
+  hint: conditions must be true/false, e.g.  x != 0
+
+error: cannot loop over a value of type float
+  --> cerr_misc.atf:12:5
+ 12 |     for i in 3.5 { }
+    |     ^
+  hint: you can loop over ranges (0..10), arrays, text and maps
+
+error: 'break' can only be used inside a loop
+  --> cerr_misc.atf:13:5
+ 13 |     break
+    |     ^
+
+error: function 'g' must return a value of type int on every path
+  --> cerr_misc.atf:3:15
+ 3 | fn g() -> int { }
+   |               ^
+  hint: add a 'return' at the end of the function

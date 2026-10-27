@@ -1,0 +1,77 @@
+// catch_panic: nested, re-entrant, panics deep inside recursion, state after a caught panic
+var depth_reached = 0
+
+fn dive(n: int) -> int {
+    depth_reached = n
+    if n == 0 { panic("bottom reached") }
+    return dive(n - 1) + 1
+}
+
+fn safe_div(a: int, b: int) -> str {
+    var out = ""
+    let m = catch_panic(|| { out = str(a / b) })
+    if m != nil { return "error: " + m! }
+    return out
+}
+
+fn main() {
+    // nested: inner catches, outer sees no panic
+    var log: [str] = []
+    let outer = catch_panic(|| {
+        let inner = catch_panic(|| { panic("inner boom") })
+        log.push("inner got: " + (inner ?? "nil"))
+        log.push("outer continues")
+    })
+    println(outer, log)
+    // nested: inner does not panic, outer body panics after it
+    log = []
+    let outer2 = catch_panic(|| {
+        let inner = catch_panic(|| { log.push("inner ok") })
+        log.push("inner result: " + (inner ?? "nil"))
+        panic("outer boom")
+    })
+    println(outer2, log)
+    // a panic in the inner handler's continuation goes to the outer catch
+    let outer3 = catch_panic(|| {
+        let inner = catch_panic(|| { panic("first") })
+        panic("second after " + inner!)
+    })
+    println(outer3)
+    // three levels
+    let l3 = catch_panic(|| {
+        let l2 = catch_panic(|| {
+            let l1 = catch_panic(|| { panic("L1") })
+            panic("L2 saw " + l1!)
+        })
+        panic("L3 saw " + l2!)
+    })
+    println(l3)
+    // deep recursion panic is caught and the stack is usable afterwards
+    let deep = catch_panic(|| { println(dive(50000)) })
+    println(deep, depth_reached)
+    println(dive_ok(1000))
+    // many catches in a loop (no leak of handler state)
+    var caught = 0
+    for i in 0..10000 {
+        let r = catch_panic(|| {
+            if i % 3 == 0 { panic("p{i}") }
+        })
+        if r != nil { caught += 1 }
+    }
+    println("caught", caught)
+    println(safe_div(10, 2), safe_div(1, 0), safe_div(-9, 4))
+    // after all that, an uncaught-panic-free program continues normally
+    let arr = [1, 2, 3]
+    var idx = 3
+    let m = catch_panic(|| { println(arr[idx]) })
+    idx = 2
+    println(m, arr[idx])
+    // the message of a panic with interpolated data
+    let name = "widget"
+    println(catch_panic(|| { panic("missing {name} #{42}") }))
+}
+
+fn dive_ok(n: int) -> int {
+    if n == 0 { return 0 }
+    return dive_ok(n - 1) + 1
+}

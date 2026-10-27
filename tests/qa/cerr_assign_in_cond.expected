@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: expected '{' but found '='
+  --> cerr_assign_in_cond.atf:3:10
+ 3 |     if x = 2 { println(x) }
+   |          ^
+  hint: to compare two values use ==

@@ -1,0 +1,12 @@
+input:      [38, 27, 43, 3, 9, 82, 10, 3, -5, 0]
+bubble:     [-5, 0, 3, 3, 9, 10, 27, 38, 43, 82]
+insertion:  [-5, 0, 3, 3, 9, 10, 27, 38, 43, 82]
+quick:      [-5, 0, 3, 3, 9, 10, 27, 38, 43, 82]
+merge:      [-5, 0, 3, 3, 9, 10, 27, 38, 43, 82]
+built-in:   [-5, 0, 3, 3, 9, 10, 27, 38, 43, 82]
+descending: [82, 43, 38, 27, 10, 9, 3, 3, 0, -5]
+input unchanged: [38, 27, 43, 3, 9, 82, 10, 3, -5, 0]
+by last digit: [-5, 0, 10, 82, 3, 3, 43, 27, 38, 9]
+2000 random numbers: quick ok = true, bubble ok = true, merge ok = true
+sorted? true false
+min 0 max 998 median 494

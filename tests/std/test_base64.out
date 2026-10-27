@@ -1,0 +1,51 @@
+ok   encode "": ""
+ok   decode "": ""
+ok   encode "f": "Zg=="
+ok   decode "Zg==": "f"
+ok   encode "fo": "Zm8="
+ok   decode "Zm8=": "fo"
+ok   encode "foo": "Zm9v"
+ok   decode "Zm9v": "foo"
+ok   encode "foob": "Zm9vYg=="
+ok   decode "Zm9vYg==": "foob"
+ok   encode "fooba": "Zm9vYmE="
+ok   decode "Zm9vYmE=": "fooba"
+ok   encode "foobar": "Zm9vYmFy"
+ok   decode "Zm9vYmFy": "foobar"
+ok   decode unpadded Zm9vYg: "foob"
+ok   decode unpadded Zm8: "fo"
+ok   decode with newlines: "foobar"
+ok   decode with spaces: "foobar"
+ok   encode lorem: "TWFuIGlzIGRpc3Rpbmd1aXNoZWQsIG5vdCBvbmx5IGJ5IGhpcyByZWFzb24sIGJ1dCBieSB0aGlzIHNpbmd1bGFyIHBhc3Npb24gZnJvbSBvdGhlciBhbmltYWxzLg=="
+ok   decode lorem: "Man is distinguished, not only by his reason, but by this singular passion from other animals."
+ok   encode utf8: "16nXnNeV150g4pi6"
+ok   decode utf8: "שלום ☺"
+all bytes encoded length: 344
+all bytes encoded prefix: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwd
+all bytes encoded suffix: 5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/w==
+all bytes round trip: true
+round trip lengths 0..39: true
+ok   std encode of fb ff bf: "+/+/"
+ok   url encode of fb ff bf: "-_-_"
+ok   url encode no pad: "-_8"
+ok   url encode pad: "-_8="
+url decode matches: true
+url chars rejected by std decoder: Err(invalid base64 character '-' at position 0)
+std chars rejected by url decoder: Err(invalid base64 character '+' at position 0)
+ok   encode bytes: "AAH+/w=="
+decode bytes: [0, 1, 254, 255]
+decode bytes error: "invalid base64 length: 1 data characters (a group cannot have just one character)"
+ok   encode empty bytes: ""
+decode empty bytes: []
+bad char: Err(invalid base64 character '!' at position 4)
+bad byte: Err(invalid base64 character byte 0x01 at position 4)
+one char: Err(invalid base64 length: 1 data characters (a group cannot have just one character))
+five chars: Err(invalid base64 length: 5 data characters (a group cannot have just one character))
+padding in middle: Err(unexpected padding '=' at position 2 (padding may only appear at the end))
+too much padding: Err(wrong amount of padding: 3 '=' after 2 data characters)
+wrong padding: Err(wrong amount of padding: 2 '=' after 3 data characters)
+non-canonical bits: Err(invalid base64: the last character has non-zero unused bits)
+only padding: Err(wrong amount of padding: 4 '=' after 0 data characters)
+valid: true false true false
+big: 400000 YWJjYWJj true
+failures: 0

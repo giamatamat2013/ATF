@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: cannot assign to the constant 'LIMIT'
+  --> cerr_assign_const.atf:3:5
+ 3 |     LIMIT = 11
+   |     ^

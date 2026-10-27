@@ -1,0 +1,44 @@
+A vast hall. Doors lead north (library), east (kitchen) and west (garden).
+> look
+A vast hall. Doors lead north (library), east (kitchen) and west (garden).
+> north
+You walk to the Library.
+Dusty books everywhere. A lamp lies on a table. The hall is to the south.
+> take lamp
+You take the lamp.
+> take lamp
+You already have the lamp.
+> south
+You walk to the Great Hall.
+A vast hall. Doors lead north (library), east (kitchen) and west (garden).
+> east
+You walk to the Kitchen.
+A cold kitchen. There is a locked trapdoor in the floor. West is the hall.
+> down
+You cannot go that way.
+> open
+The trapdoor is locked.
+> west
+You walk to the Great Hall.
+A vast hall. Doors lead north (library), east (kitchen) and west (garden).
+> west
+You walk to the Garden.
+An overgrown garden. A rusty key hangs on a branch. East is the hall.
+> take key
+You take the key.
+> dance
+I do not understand 'dance'.
+> east
+You walk to the Great Hall.
+A vast hall. Doors lead north (library), east (kitchen) and west (garden).
+> east
+You walk to the Kitchen.
+A cold kitchen. There is a locked trapdoor in the floor. West is the hall.
+> open
+The key turns. The trapdoor opens!
+> down
+You walk to the Cellar.
+A dark cellar. Something glitters in the corner. Stairs lead up.
+> take treasure
+You take the treasure.
+*** You found the treasure in 17 moves! ***

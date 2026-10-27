@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: unknown name 'totl'
+  --> cerr_undefined_var.atf:3:13
+ 3 |     println(totl + 1)
+   |             ^
+  hint: did you mean 'total'?

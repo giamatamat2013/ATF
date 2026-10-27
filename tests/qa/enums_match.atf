@@ -1,0 +1,163 @@
+// enums with payloads: nested patterns, guards, or-patterns, bindings, match on tuples/strings/ranges
+enum Expr {
+    Num(int),
+    Neg(Expr),
+    Add(Expr, Expr),
+    Mul(Expr, Expr),
+    Var(str)
+}
+
+enum Shape { Circle(float), Rect(float, float), Dot }
+enum Light { Red, Yellow, Green }
+enum Opt2 { Has(int?), Empty }
+enum Level { Low = 1, Mid = 5, High = 10 }
+
+impl Light {
+    fn next(self) -> Light {
+        return match self {
+            Light.Red => Light.Green
+            Light.Green => Light.Yellow
+            Light.Yellow => Light.Red
+        }
+    }
+}
+
+fn eval(e: Expr, env: {str: int}) -> int {
+    return match e {
+        Expr.Num(n) => n
+        Expr.Neg(inner) => -eval(inner, env)
+        Expr.Add(a, b) => eval(a, env) + eval(b, env)
+        Expr.Mul(a, b) => eval(a, env) * eval(b, env)
+        Expr.Var(name) => env.get(name, 0)
+    }
+}
+
+fn simplify(e: Expr) -> Expr {
+    return match e {
+        Expr.Add(Expr.Num(0), x) => simplify(x)
+        Expr.Add(x, Expr.Num(0)) => simplify(x)
+        Expr.Mul(Expr.Num(1), x) => simplify(x)
+        Expr.Mul(x, Expr.Num(1)) => simplify(x)
+        Expr.Mul(Expr.Num(0), _) | Expr.Mul(_, Expr.Num(0)) => Expr.Num(0)
+        Expr.Neg(Expr.Neg(x)) => simplify(x)
+        Expr.Add(a, b) => Expr.Add(simplify(a), simplify(b))
+        Expr.Mul(a, b) => Expr.Mul(simplify(a), simplify(b))
+        other => other
+    }
+}
+
+fn show(e: Expr) -> str {
+    return match e {
+        Expr.Num(n) if n < 0 => "({n})"
+        Expr.Num(n) => "{n}"
+        Expr.Neg(x) => "-" + show(x)
+        Expr.Add(a, b) => "(" + show(a) + " + " + show(b) + ")"
+        Expr.Mul(a, b) => show(a) + "*" + show(b)
+        Expr.Var(v) => v
+    }
+}
+
+fn area(s: Shape) -> float {
+    return match s {
+        Shape.Circle(r) => 3.0 * r * r
+        Shape.Rect(w, h) if w == h => w * w
+        Shape.Rect(w, h) => w * h
+        Shape.Dot => 0.0
+    }
+}
+
+fn classify(n: int) -> str {
+    return match n {
+        0 => "zero"
+        1 | 2 | 3 => "small"
+        4..=9 => "medium"
+        -9..=-1 => "small negative"
+        x if x < 0 => "negative {x}"
+        x if x % 2 == 0 => "big even"
+        _ => "big odd"
+    }
+}
+
+fn word(s: str) -> int {
+    return match s {
+        "" => 0
+        "one" | "uno" => 1
+        "two" => 2
+        _ => -1
+    }
+}
+
+fn pair(t: (int, str)) -> str {
+    return match t {
+        (0, "zero") => "exact"
+        (0, s) => "zero with {s}"
+        (n, "x") if n > 10 => "big x"
+        (_, s) if s.len() > 3 => "long"
+        _ => "other"
+    }
+}
+
+fn opt_match(o: int?) -> str {
+    return match o {
+        nil => "nothing"
+        x => "got {x!}"
+    }
+}
+
+fn bools(a: bool, b: bool) -> str {
+    return match (a, b) {
+        (true, true) => "both"
+        (true, false) | (false, true) => "one"
+        _ => "none"
+    }
+}
+
+fn main() {
+    let env = {"x": 5, "y": -2}
+    let e = Expr.Add(Expr.Mul(Expr.Num(3), Expr.Var("x")), Expr.Neg(Expr.Var("y")))
+    println(eval(e, env), show(e))
+    let messy = Expr.Add(Expr.Num(0), Expr.Mul(Expr.Num(1), Expr.Neg(Expr.Neg(Expr.Mul(Expr.Var("q"), Expr.Num(0))))))
+    println(show(messy), "=>", show(simplify(messy)))
+    println(show(simplify(Expr.Mul(Expr.Var("a"), Expr.Num(1)))), show(Expr.Num(-4)))
+    println(e)
+    println([Shape.Circle(1.0), Shape.Rect(2.0, 2.0), Shape.Rect(2.0, 3.0), Shape.Dot].map(|s| area(s)))
+    println([0, 2, 7, -3, -50, 100, 101].map(|n| classify(n)))
+    println(word(""), word("uno"), word("two"), word("three"))
+    println(pair((0, "zero")), pair((0, "a")), pair((11, "x")), pair((1, "abcd")), pair((1, "a")))
+    println(opt_match(nil), opt_match(5), opt_match(6))
+    println(bools(true, true), bools(false, true), bools(false, false))
+    var l = Light.Red
+    var seq: [Light] = []
+    for i in 0..4 {
+        seq.push(l)
+        l = l.next()
+    }
+    println(seq, Light.Red == Light.Red, Light.Red != Light.Green, Light.Red < Light.Green)
+    println(int(Level.Low), int(Level.Mid), int(Level.High), Level.Mid, [Level.High, Level.Low].sorted())
+    let o = Opt2.Has(nil)
+    let o2 = Opt2.Has(3)
+    println(o, o2, Opt2.Empty, o == Opt2.Has(nil), o2 == Opt2.Has(3), o2 == o)
+    // match used as a statement with blocks
+    for s in [Shape.Dot, Shape.Circle(2.0)] {
+        match s {
+            Shape.Circle(r) => {
+                let d = r * 2.0
+                println("circle with diameter", d)
+            }
+            _ => println("not a circle")
+        }
+    }
+    // enum equality with payloads and enums in collections
+    println(Expr.Num(1) == Expr.Num(1), Expr.Num(1) == Expr.Num(2), Expr.Var("a") == Expr.Num(1))
+    println(Shape.Rect(1.0, 2.0) == Shape.Rect(1.0, 2.0), [Shape.Dot, Shape.Circle(1.0)].contains(Shape.Circle(1.0)))
+    // if let with enum patterns
+    let sh = Shape.Rect(4.0, 5.0)
+    if let Shape.Rect(w, h) = sh {
+        println("rect", w, h)
+    }
+    if let Shape.Circle(r) = sh {
+        println("circle", r)
+    } else {
+        println("not circle")
+    }
+}

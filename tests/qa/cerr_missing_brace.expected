@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: this '{' is never closed
+  --> cerr_missing_brace.atf:1:11
+ 1 | fn main() {
+   |           ^
+  hint: the file ends before the matching bracket

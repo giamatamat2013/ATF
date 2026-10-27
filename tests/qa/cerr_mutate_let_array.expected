@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: cannot assign to 'a' because it was declared with 'let'
+  --> cerr_mutate_let_array.atf:3:5
+ 3 |     a = [2]
+   |     ^
+  hint: declare it with 'var a = ...' to allow changes

@@ -1,0 +1,987 @@
+// std/collections - generic container types.
+//
+//   import "std/collections"
+//
+//   Stack<T>            last in, first out              stack_new::<int>()
+//   Deque<T>            double-ended queue (ring buffer) deque_new::<str>()
+//   PriorityQueue<T>    binary heap; smallest first      pq_new::<int>(), pq_new_max::<int>(), pq_with(cmp)
+//   LinkedList<T>       doubly linked list               linked_list_new::<int>()
+//   SortedMap<K, V>     ordered map (AVL tree)           sorted_map_new::<str, int>(), sorted_map_with(cmp)
+//   SortedSet<T>        ordered set (AVL tree)           sorted_set_new::<int>(), sorted_set_with(cmp)
+//   Counter<T>          counts how often values occur    counter_new::<str>(), counter_from(items)
+//
+// Conventions: operations that may find nothing (pop on an empty container, a missing key...) return an
+// optional (T?) instead of stopping the program. to_array() / items() return new arrays that you may change
+// freely. A comparator is a function cmp(a, b) returning a negative number when a comes first, 0 when a and b
+// are equal and a positive number when b comes first; the default is the natural order of < (numbers, text,
+// tuples, structs with a cmp method). println() prints every container in a readable form.
+// Loop over a container with  for x in c.to_array() { ... }  or  c.for_each(|x| ...).
+
+// the natural order of < as a comparator
+fn coll_natural_cmp<T>(a: T, b: T) -> int {
+    if a < b { return -1 }
+    if b < a { return 1 }
+    return 0
+}
+
+// the reverse natural order (largest first)
+fn coll_reverse_cmp<T>(a: T, b: T) -> int {
+    if a < b { return 1 }
+    if b < a { return -1 }
+    return 0
+}
+
+fn coll_join<T>(prefix: str, items: [T]) -> str {
+    var sb = str_builder()
+    sb.add(prefix)
+    sb.add_byte('[')
+    for i in 0..items.len() {
+        if i > 0 { sb.add(", ") }
+        sb.add(__debug(items[i]))
+    }
+    sb.add_byte(']')
+    return sb.finish()
+}
+
+// ================================================================ Stack
+struct Stack<T> {
+    items: [T]
+}
+
+fn stack_new<T>() -> Stack<T> {
+    let items: [T] = []
+    return Stack{ items: items }
+}
+
+impl<T> Stack<T> {
+    fn push(self, x: T) { self.items.push(x) }
+    // removes and returns the top element (nil if the stack is empty)
+    fn pop(self) -> T? {
+        if self.items.len() == 0 { return nil }
+        return self.items.pop()
+    }
+    // the top element without removing it
+    fn peek(self) -> T? {
+        if self.items.len() == 0 { return nil }
+        return self.items.last()
+    }
+    fn len(self) -> int { return self.items.len() }
+    fn is_empty(self) -> bool { return self.items.len() == 0 }
+    fn clear(self) { self.items.clear() }
+    // bottom to top
+    fn to_array(self) -> [T] { return self.items.copy() }
+    fn contains(self, x: T) -> bool { return self.items.contains(x) }
+    fn to_str(self) -> str { return coll_join("Stack", self.items) }
+}
+
+// ================================================================ Deque
+// A ring buffer: push and pop at both ends and indexing are all O(1).
+struct Deque<T> {
+    buf: [T],
+    head: int,
+    count: int,
+    blank: [T]         // one zero value, written into freed slots
+}
+
+fn deque_new<T>() -> Deque<T> {
+    return Deque{ buf: array_make::<T>(8), head: 0, count: 0, blank: array_make::<T>(1) }
+}
+
+fn deque_from<T>(items: [T]) -> Deque<T> {
+    let d = deque_new::<T>()
+    for x in items { d.push_back(x) }
+    return d
+}
+
+impl<T> Deque<T> {
+    fn grow(self) {
+        let cap = self.buf.len()
+        let nb = array_make::<T>(cap * 2)
+        for i in 0..self.count { nb[i] = self.buf[(self.head + i) & (cap - 1)] }
+        self.buf = nb
+        self.head = 0
+    }
+    fn push_back(self, x: T) {
+        if self.count == self.buf.len() { self.grow() }
+        self.buf[(self.head + self.count) & (self.buf.len() - 1)] = x
+        self.count += 1
+    }
+    fn push_front(self, x: T) {
+        if self.count == self.buf.len() { self.grow() }
+        self.head = (self.head - 1) & (self.buf.len() - 1)
+        self.buf[self.head] = x
+        self.count += 1
+    }
+    fn pop_front(self) -> T? {
+        if self.count == 0 { return nil }
+        let x = self.buf[self.head]
+        self.buf[self.head] = self.blank[0]     // drop the reference for the garbage collector
+        self.head = (self.head + 1) & (self.buf.len() - 1)
+        self.count -= 1
+        return x
+    }
+    fn pop_back(self) -> T? {
+        if self.count == 0 { return nil }
+        let i = (self.head + self.count - 1) & (self.buf.len() - 1)
+        let x = self.buf[i]
+        self.buf[i] = self.blank[0]
+        self.count -= 1
+        return x
+    }
+    fn peek_front(self) -> T? {
+        if self.count == 0 { return nil }
+        return self.buf[self.head]
+    }
+    fn peek_back(self) -> T? {
+        if self.count == 0 { return nil }
+        return self.buf[(self.head + self.count - 1) & (self.buf.len() - 1)]
+    }
+    // element i counted from the front (negative i counts from the back); panics when out of range
+    fn get(self, i: int) -> T {
+        var k = i
+        if k < 0 { k += self.count }
+        if k < 0 or k >= self.count { panic("deque index {i} is out of range (length {self.count})") }
+        return self.buf[(self.head + k) & (self.buf.len() - 1)]
+    }
+    fn set(self, i: int, x: T) {
+        var k = i
+        if k < 0 { k += self.count }
+        if k < 0 or k >= self.count { panic("deque index {i} is out of range (length {self.count})") }
+        self.buf[(self.head + k) & (self.buf.len() - 1)] = x
+    }
+    fn op_index(self, i: int) -> T { return self.get(i) }
+    fn op_set_index(self, i: int, x: T) { self.set(i, x) }
+    // moves the first n elements to the back (negative n: the last -n elements to the front)
+    fn rotate(self, n: int) {
+        if self.count < 2 { return }
+        var k = coll_mod(n, self.count)
+        while k > 0 {
+            self.push_back(self.pop_front()!)
+            k -= 1
+        }
+    }
+    fn len(self) -> int { return self.count }
+    fn is_empty(self) -> bool { return self.count == 0 }
+    fn clear(self) {
+        self.buf = array_make::<T>(8)
+        self.head = 0
+        self.count = 0
+    }
+    fn contains(self, x: T) -> bool {
+        for i in 0..self.count {
+            if self.buf[(self.head + i) & (self.buf.len() - 1)] == x { return true }
+        }
+        return false
+    }
+    // front to back
+    fn to_array(self) -> [T] {
+        let r = array_with_cap::<T>(self.count)
+        for i in 0..self.count { r.push(self.buf[(self.head + i) & (self.buf.len() - 1)]) }
+        return r
+    }
+    fn for_each(self, f: fn(T)) {
+        for i in 0..self.count { f(self.buf[(self.head + i) & (self.buf.len() - 1)]) }
+    }
+    fn eq(self, o: Deque<T>) -> bool { return self.to_array() == o.to_array() }
+    fn to_str(self) -> str { return coll_join("Deque", self.to_array()) }
+}
+
+fn coll_mod(a: int, b: int) -> int {
+    let r = a % b
+    if r < 0 { return r + b }
+    return r
+}
+
+// ================================================================ PriorityQueue
+// A binary heap. pop() returns the element that comes first by the comparator: the smallest for pq_new,
+// the largest for pq_new_max. Equal elements come out in no particular order.
+struct PriorityQueue<T> {
+    heap: [T],
+    cmp: fn(T, T) -> int
+}
+
+// smallest element first (natural order)
+fn pq_new<T>() -> PriorityQueue<T> {
+    let h: [T] = []
+    return PriorityQueue{ heap: h, cmp: coll_natural_cmp }
+}
+
+// largest element first
+fn pq_new_max<T>() -> PriorityQueue<T> {
+    let h: [T] = []
+    return PriorityQueue{ heap: h, cmp: coll_reverse_cmp }
+}
+
+// custom order: the element x for which cmp(x, y) < 0 against all others comes first
+fn pq_with<T>(cmp: fn(T, T) -> int) -> PriorityQueue<T> {
+    let h: [T] = []
+    return PriorityQueue{ heap: h, cmp: cmp }
+}
+
+// builds a queue from an array in O(n)
+fn pq_from<T>(items: [T], cmp: fn(T, T) -> int) -> PriorityQueue<T> {
+    let q = PriorityQueue{ heap: items.copy(), cmp: cmp }
+    var i = q.heap.len() / 2 - 1
+    while i >= 0 {
+        q.sift_down(i)
+        i -= 1
+    }
+    return q
+}
+
+impl<T> PriorityQueue<T> {
+    fn sift_up(self, start: int) {
+        var i = start
+        let h = self.heap
+        let x = h[i]
+        while i > 0 {
+            let parent = (i - 1) / 2
+            if self.cmp(x, h[parent]) >= 0 { break }
+            h[i] = h[parent]
+            i = parent
+        }
+        h[i] = x
+    }
+    fn sift_down(self, start: int) {
+        let h = self.heap
+        let n = h.len()
+        var i = start
+        let x = h[i]
+        loop {
+            var c = 2 * i + 1
+            if c >= n { break }
+            if c + 1 < n and self.cmp(h[c + 1], h[c]) < 0 { c += 1 }
+            if self.cmp(h[c], x) >= 0 { break }
+            h[i] = h[c]
+            i = c
+        }
+        h[i] = x
+    }
+    fn push(self, x: T) {
+        self.heap.push(x)
+        self.sift_up(self.heap.len() - 1)
+    }
+    // removes and returns the first element (nil when empty)
+    fn pop(self) -> T? {
+        let n = self.heap.len()
+        if n == 0 { return nil }
+        let top = self.heap[0]
+        let last = self.heap.pop()
+        if n > 1 {
+            self.heap[0] = last
+            self.sift_down(0)
+        }
+        return top
+    }
+    // the first element without removing it
+    fn peek(self) -> T? {
+        if self.heap.len() == 0 { return nil }
+        return self.heap[0]
+    }
+    // push then pop, faster than the two calls
+    fn push_pop(self, x: T) -> T {
+        if self.heap.len() == 0 or self.cmp(x, self.heap[0]) <= 0 { return x }
+        let top = self.heap[0]
+        self.heap[0] = x
+        self.sift_down(0)
+        return top
+    }
+    fn len(self) -> int { return self.heap.len() }
+    fn is_empty(self) -> bool { return self.heap.len() == 0 }
+    fn clear(self) { self.heap.clear() }
+    // all elements in pop order (the queue is not changed)
+    fn to_sorted_array(self) -> [T] {
+        let r = self.heap.copy()
+        r.sort_by(self.cmp)
+        return r
+    }
+    // removes everything, returning the elements in pop order
+    fn drain(self) -> [T] {
+        var r: [T] = []
+        while self.heap.len() > 0 { r.push(self.pop()!) }
+        return r
+    }
+    fn to_str(self) -> str { return coll_join("PriorityQueue", self.to_sorted_array()) }
+}
+
+// ================================================================ LinkedList
+struct LinkedListNode<T> {
+    value: T,
+    prev: LinkedListNode<T>?,
+    next: LinkedListNode<T>?
+}
+
+impl<T> LinkedListNode<T> {
+    fn to_str(self) -> str { return "LinkedListNode(" + __debug(self.value) + ")" }
+    fn eq(self, o: LinkedListNode<T>) -> bool { return same(self, o) }
+}
+
+// A doubly linked list: O(1) insertion and removal at both ends.
+struct LinkedList<T> {
+    head: LinkedListNode<T>?,
+    tail: LinkedListNode<T>?,
+    count: int
+}
+
+fn linked_list_new<T>() -> LinkedList<T> {
+    return LinkedList{ head: nil, tail: nil, count: 0 }
+}
+
+fn linked_list_from<T>(items: [T]) -> LinkedList<T> {
+    let l = linked_list_new::<T>()
+    for x in items { l.push_back(x) }
+    return l
+}
+
+impl<T> LinkedList<T> {
+    fn len(self) -> int { return self.count }
+    fn is_empty(self) -> bool { return self.count == 0 }
+    fn push_front(self, x: T) {
+        let node = LinkedListNode{ value: x, prev: nil, next: self.head }
+        if let h = self.head { h.prev = node } else { self.tail = node }
+        self.head = node
+        self.count += 1
+    }
+    fn push_back(self, x: T) {
+        let node = LinkedListNode{ value: x, prev: self.tail, next: nil }
+        if let t = self.tail { t.next = node } else { self.head = node }
+        self.tail = node
+        self.count += 1
+    }
+    fn unlink(self, node: LinkedListNode<T>) {
+        if let p = node.prev { p.next = node.next } else { self.head = node.next }
+        if let nx = node.next { nx.prev = node.prev } else { self.tail = node.prev }
+        node.prev = nil
+        node.next = nil
+        self.count -= 1
+    }
+    fn pop_front(self) -> T? {
+        if let h = self.head {
+            self.unlink(h)
+            return h.value
+        }
+        return nil
+    }
+    fn pop_back(self) -> T? {
+        if let t = self.tail {
+            self.unlink(t)
+            return t.value
+        }
+        return nil
+    }
+    fn front(self) -> T? {
+        if let h = self.head { return h.value }
+        return nil
+    }
+    fn back(self) -> T? {
+        if let t = self.tail { return t.value }
+        return nil
+    }
+    // the node at index i (walks from the nearer end); nil when out of range
+    fn node_at(self, i: int) -> LinkedListNode<T>? {
+        if i < 0 or i >= self.count { return nil }
+        if i < self.count / 2 {
+            var cur = self.head
+            for k in 0..i { cur = cur!.next }
+            return cur
+        }
+        var cur = self.tail
+        for k in 0..(self.count - 1 - i) { cur = cur!.prev }
+        return cur
+    }
+    // element i (nil when out of range)
+    fn get(self, i: int) -> T? {
+        if let n = self.node_at(i) { return n.value }
+        return nil
+    }
+    // replaces element i; false when out of range
+    fn set(self, i: int, x: T) -> bool {
+        if let n = self.node_at(i) {
+            n.value = x
+            return true
+        }
+        return false
+    }
+    // inserts x before index i (i == len() appends); panics when i is out of range
+    fn insert(self, i: int, x: T) {
+        if i < 0 or i > self.count { panic("linked list insert index {i} is out of range (length {self.count})") }
+        if i == 0 {
+            self.push_front(x)
+            return
+        }
+        if i == self.count {
+            self.push_back(x)
+            return
+        }
+        let after = self.node_at(i)!
+        let before = after.prev!
+        let node = LinkedListNode{ value: x, prev: before, next: after }
+        before.next = node
+        after.prev = node
+        self.count += 1
+    }
+    // removes and returns element i (nil when out of range)
+    fn remove_at(self, i: int) -> T? {
+        if let n = self.node_at(i) {
+            self.unlink(n)
+            return n.value
+        }
+        return nil
+    }
+    // removes the first element equal to x; true if one was found
+    fn remove(self, x: T) -> bool {
+        var cur = self.head
+        while let n = cur {
+            if n.value == x {
+                self.unlink(n)
+                return true
+            }
+            cur = n.next
+        }
+        return false
+    }
+    // removes every element for which keep(x) is false; returns how many were removed
+    fn retain(self, keep: fn(T) -> bool) -> int {
+        var removed = 0
+        var cur = self.head
+        while let n = cur {
+            let nx = n.next
+            if not keep(n.value) {
+                self.unlink(n)
+                removed += 1
+            }
+            cur = nx
+        }
+        return removed
+    }
+    fn index_of(self, x: T) -> int {
+        var i = 0
+        var cur = self.head
+        while let n = cur {
+            if n.value == x { return i }
+            cur = n.next
+            i += 1
+        }
+        return -1
+    }
+    fn contains(self, x: T) -> bool { return self.index_of(x) >= 0 }
+    // reverses the list in place
+    fn reverse(self) {
+        var cur = self.head
+        while let n = cur {
+            let nx = n.next
+            n.next = n.prev
+            n.prev = nx
+            cur = nx
+        }
+        let h = self.head
+        self.head = self.tail
+        self.tail = h
+    }
+    // appends all elements of another list (the other list is not changed)
+    fn extend(self, o: LinkedList<T>) {
+        for x in o.to_array() { self.push_back(x) }
+    }
+    fn clear(self) {
+        self.head = nil
+        self.tail = nil
+        self.count = 0
+    }
+    fn to_array(self) -> [T] {
+        let r = array_with_cap::<T>(self.count)
+        var cur = self.head
+        while let n = cur {
+            r.push(n.value)
+            cur = n.next
+        }
+        return r
+    }
+    fn for_each(self, f: fn(T)) {
+        var cur = self.head
+        while let n = cur {
+            f(n.value)
+            cur = n.next
+        }
+    }
+    fn map<U>(self, f: fn(T) -> U) -> LinkedList<U> {
+        let r = linked_list_new::<U>()
+        var cur = self.head
+        while let n = cur {
+            r.push_back(f(n.value))
+            cur = n.next
+        }
+        return r
+    }
+    fn eq(self, o: LinkedList<T>) -> bool { return self.count == o.count and self.to_array() == o.to_array() }
+    fn to_str(self) -> str { return coll_join("LinkedList", self.to_array()) }
+}
+
+// ================================================================ SortedMap (AVL tree)
+struct SortedMapNode<K, V> {
+    key: K,
+    val: V,
+    left: SortedMapNode<K, V>?,
+    right: SortedMapNode<K, V>?,
+    height: int
+}
+
+impl<K, V> SortedMapNode<K, V> {
+    fn to_str(self) -> str { return "SortedMapNode(" + __debug(self.key) + ": " + __debug(self.val) + ")" }
+}
+
+// A map that keeps its keys sorted. set / get / remove are O(log n).
+struct SortedMap<K, V> {
+    root: SortedMapNode<K, V>?,
+    count: int,
+    cmp: fn(K, K) -> int
+}
+
+fn sorted_map_new<K, V>() -> SortedMap<K, V> {
+    return SortedMap{ root: nil, count: 0, cmp: coll_natural_cmp }
+}
+
+fn sorted_map_with<K, V>(cmp: fn(K, K) -> int) -> SortedMap<K, V> {
+    return SortedMap{ root: nil, count: 0, cmp: cmp }
+}
+
+fn sm_height<K, V>(n: SortedMapNode<K, V>?) -> int {
+    if let x = n { return x.height }
+    return 0
+}
+
+fn sm_fix<K, V>(n: SortedMapNode<K, V>) {
+    let hl = sm_height(n.left)
+    let hr = sm_height(n.right)
+    n.height = if hl > hr { hl + 1 } else { hr + 1 }
+}
+
+fn sm_rot_right<K, V>(n: SortedMapNode<K, V>) -> SortedMapNode<K, V> {
+    let l = n.left!
+    n.left = l.right
+    l.right = n
+    sm_fix(n)
+    sm_fix(l)
+    return l
+}
+
+fn sm_rot_left<K, V>(n: SortedMapNode<K, V>) -> SortedMapNode<K, V> {
+    let r = n.right!
+    n.right = r.left
+    r.left = n
+    sm_fix(n)
+    sm_fix(r)
+    return r
+}
+
+fn sm_balance<K, V>(n: SortedMapNode<K, V>) -> SortedMapNode<K, V> {
+    sm_fix(n)
+    let bf = sm_height(n.left) - sm_height(n.right)
+    if bf > 1 {
+        let l = n.left!
+        if sm_height(l.left) < sm_height(l.right) { n.left = sm_rot_left(l) }
+        return sm_rot_right(n)
+    }
+    if bf < -1 {
+        let r = n.right!
+        if sm_height(r.right) < sm_height(r.left) { n.right = sm_rot_right(r) }
+        return sm_rot_left(n)
+    }
+    return n
+}
+
+// removes the smallest node of a subtree; returns (new subtree root, removed node)
+fn sm_take_min<K, V>(n: SortedMapNode<K, V>) -> (SortedMapNode<K, V>?, SortedMapNode<K, V>) {
+    if let l = n.left {
+        let (nl, m) = sm_take_min(l)
+        n.left = nl
+        return (sm_balance(n), m)
+    }
+    return (n.right, n)
+}
+
+fn sm_collect<K, V>(n: SortedMapNode<K, V>?, out: [(K, V)]) {
+    if let x = n {
+        sm_collect(x.left, out)
+        out.push((x.key, x.val))
+        sm_collect(x.right, out)
+    }
+}
+
+impl<K, V> SortedMap<K, V> {
+    fn len(self) -> int { return self.count }
+    fn is_empty(self) -> bool { return self.count == 0 }
+    fn clear(self) {
+        self.root = nil
+        self.count = 0
+    }
+    fn find(self, key: K) -> SortedMapNode<K, V>? {
+        var cur = self.root
+        while let n = cur {
+            let c = self.cmp(key, n.key)
+            if c == 0 { return n }
+            cur = if c < 0 { n.left } else { n.right }
+        }
+        return nil
+    }
+    fn insert_at(self, node: SortedMapNode<K, V>?, key: K, val: V) -> SortedMapNode<K, V> {
+        if let n = node {
+            let c = self.cmp(key, n.key)
+            if c == 0 {
+                n.val = val
+                return n
+            }
+            if c < 0 { n.left = self.insert_at(n.left, key, val) } else { n.right = self.insert_at(n.right, key, val) }
+            return sm_balance(n)
+        }
+        self.count += 1
+        return SortedMapNode{ key: key, val: val, left: nil, right: nil, height: 1 }
+    }
+    // adds or replaces the value for key
+    fn set(self, key: K, val: V) { self.root = self.insert_at(self.root, key, val) }
+    fn op_set_index(self, key: K, val: V) { self.set(key, val) }
+    // the value for key, or nil
+    fn get(self, key: K) -> V? {
+        if let n = self.find(key) { return n.val }
+        return nil
+    }
+    fn get_or(self, key: K, default: V) -> V {
+        if let n = self.find(key) { return n.val }
+        return default
+    }
+    // m[key] panics when the key is missing
+    fn op_index(self, key: K) -> V {
+        if let n = self.find(key) { return n.val }
+        panic("key not found: " + __debug(key))
+    }
+    fn has(self, key: K) -> bool { return self.find(key) != nil }
+    fn op_contains(self, key: K) -> bool { return self.find(key) != nil }
+    fn remove_at(self, node: SortedMapNode<K, V>?, key: K) -> SortedMapNode<K, V>? {
+        if let n = node {
+            let c = self.cmp(key, n.key)
+            if c < 0 {
+                n.left = self.remove_at(n.left, key)
+                return sm_balance(n)
+            }
+            if c > 0 {
+                n.right = self.remove_at(n.right, key)
+                return sm_balance(n)
+            }
+            self.count -= 1
+            if n.left == nil { return n.right }
+            if n.right == nil { return n.left }
+            let (nr, m) = sm_take_min(n.right!)
+            m.right = nr
+            m.left = n.left
+            return sm_balance(m)
+        }
+        return nil
+    }
+    // removes key; true if it was present
+    fn remove(self, key: K) -> bool {
+        let before = self.count
+        self.root = self.remove_at(self.root, key)
+        return self.count < before
+    }
+    // all (key, value) pairs in key order
+    fn items(self) -> [(K, V)] {
+        var out: [(K, V)] = []
+        sm_collect(self.root, out)
+        return out
+    }
+    fn keys(self) -> [K] { return self.items().map(|p| p.0) }
+    fn values(self) -> [V] { return self.items().map(|p| p.1) }
+    fn for_each(self, f: fn(K, V)) {
+        for p in self.items() { f(p.0, p.1) }
+    }
+    // smallest / largest key
+    fn min_key(self) -> K? {
+        var cur = self.root
+        if cur == nil { return nil }
+        while cur!.left != nil { cur = cur!.left }
+        return cur!.key
+    }
+    fn max_key(self) -> K? {
+        var cur = self.root
+        if cur == nil { return nil }
+        while cur!.right != nil { cur = cur!.right }
+        return cur!.key
+    }
+    // the largest key <= key
+    fn floor_key(self, key: K) -> K? {
+        var best: SortedMapNode<K, V>? = nil
+        var cur = self.root
+        while let n = cur {
+            let c = self.cmp(key, n.key)
+            if c == 0 { return n.key }
+            if c < 0 {
+                cur = n.left
+            } else {
+                best = n
+                cur = n.right
+            }
+        }
+        if let b = best { return b.key }
+        return nil
+    }
+    // the smallest key >= key
+    fn ceiling_key(self, key: K) -> K? {
+        var best: SortedMapNode<K, V>? = nil
+        var cur = self.root
+        while let n = cur {
+            let c = self.cmp(key, n.key)
+            if c == 0 { return n.key }
+            if c > 0 {
+                cur = n.right
+            } else {
+                best = n
+                cur = n.left
+            }
+        }
+        if let b = best { return b.key }
+        return nil
+    }
+    // the largest key < key / the smallest key > key
+    fn lower_key(self, key: K) -> K? {
+        var best: SortedMapNode<K, V>? = nil
+        var cur = self.root
+        while let n = cur {
+            if self.cmp(key, n.key) <= 0 {
+                cur = n.left
+            } else {
+                best = n
+                cur = n.right
+            }
+        }
+        if let b = best { return b.key }
+        return nil
+    }
+    fn higher_key(self, key: K) -> K? {
+        var best: SortedMapNode<K, V>? = nil
+        var cur = self.root
+        while let n = cur {
+            if self.cmp(key, n.key) >= 0 {
+                cur = n.right
+            } else {
+                best = n
+                cur = n.left
+            }
+        }
+        if let b = best { return b.key }
+        return nil
+    }
+    fn range_at(self, node: SortedMapNode<K, V>?, lo: K, hi: K, out: [(K, V)]) {
+        if let n = node {
+            let clo = self.cmp(n.key, lo)
+            let chi = self.cmp(n.key, hi)
+            if clo > 0 { self.range_at(n.left, lo, hi, out) }
+            if clo >= 0 and chi < 0 { out.push((n.key, n.val)) }
+            if chi < 0 { self.range_at(n.right, lo, hi, out) }
+        }
+    }
+    // pairs with lo <= key < hi, in key order
+    fn range(self, lo: K, hi: K) -> [(K, V)] {
+        var out: [(K, V)] = []
+        self.range_at(self.root, lo, hi, out)
+        return out
+    }
+    // removes and returns the pair with the smallest / largest key
+    fn pop_min(self) -> (K, V)? {
+        let k = self.min_key()
+        if k == nil { return nil }
+        let v = self.get(k!)!
+        self.remove(k!)
+        return (k!, v)
+    }
+    fn pop_max(self) -> (K, V)? {
+        let k = self.max_key()
+        if k == nil { return nil }
+        let v = self.get(k!)!
+        self.remove(k!)
+        return (k!, v)
+    }
+    // height of the tree (for tests: at most about 1.44 * log2(n))
+    fn depth(self) -> int { return sm_height(self.root) }
+    fn eq(self, o: SortedMap<K, V>) -> bool { return self.items() == o.items() }
+    fn to_str(self) -> str {
+        var sb = str_builder()
+        sb.add("SortedMap\{")
+        let its = self.items()
+        for i in 0..its.len() {
+            if i > 0 { sb.add(", ") }
+            sb.add(__debug(its[i].0))
+            sb.add(": ")
+            sb.add(__debug(its[i].1))
+        }
+        sb.add("}")
+        return sb.finish()
+    }
+}
+
+// ================================================================ SortedSet
+// A set that keeps its elements sorted (an AVL tree).
+struct SortedSet<T> {
+    map: SortedMap<T, bool>
+}
+
+fn sorted_set_new<T>() -> SortedSet<T> {
+    return SortedSet{ map: sorted_map_new::<T, bool>() }
+}
+
+fn sorted_set_with<T>(cmp: fn(T, T) -> int) -> SortedSet<T> {
+    return SortedSet{ map: sorted_map_with::<T, bool>(cmp) }
+}
+
+fn sorted_set_from<T>(items: [T]) -> SortedSet<T> {
+    let s = sorted_set_new::<T>()
+    for x in items { s.add(x) }
+    return s
+}
+
+impl<T> SortedSet<T> {
+    // adds x; true if it was not there before
+    fn add(self, x: T) -> bool {
+        let before = self.map.count
+        self.map.set(x, true)
+        return self.map.count > before
+    }
+    fn has(self, x: T) -> bool { return self.map.has(x) }
+    fn contains(self, x: T) -> bool { return self.map.has(x) }
+    fn op_contains(self, x: T) -> bool { return self.map.has(x) }
+    fn remove(self, x: T) -> bool { return self.map.remove(x) }
+    fn len(self) -> int { return self.map.count }
+    fn is_empty(self) -> bool { return self.map.count == 0 }
+    fn clear(self) { self.map.clear() }
+    // the elements in order
+    fn items(self) -> [T] { return self.map.keys() }
+    fn to_array(self) -> [T] { return self.map.keys() }
+    fn for_each(self, f: fn(T)) {
+        for x in self.map.keys() { f(x) }
+    }
+    fn min(self) -> T? { return self.map.min_key() }
+    fn max(self) -> T? { return self.map.max_key() }
+    fn floor(self, x: T) -> T? { return self.map.floor_key(x) }
+    fn ceiling(self, x: T) -> T? { return self.map.ceiling_key(x) }
+    fn lower(self, x: T) -> T? { return self.map.lower_key(x) }
+    fn higher(self, x: T) -> T? { return self.map.higher_key(x) }
+    // elements with lo <= x < hi
+    fn range(self, lo: T, hi: T) -> [T] { return self.map.range(lo, hi).map(|p| p.0) }
+    fn pop_min(self) -> T? {
+        if let p = self.map.pop_min() { return p.0 }
+        return nil
+    }
+    fn pop_max(self) -> T? {
+        if let p = self.map.pop_max() { return p.0 }
+        return nil
+    }
+    // new sets (with this set's order)
+    fn union(self, o: SortedSet<T>) -> SortedSet<T> {
+        let r = sorted_set_with::<T>(self.map.cmp)
+        for x in self.items() { r.add(x) }
+        for x in o.items() { r.add(x) }
+        return r
+    }
+    fn intersection(self, o: SortedSet<T>) -> SortedSet<T> {
+        let r = sorted_set_with::<T>(self.map.cmp)
+        for x in self.items() {
+            if o.has(x) { r.add(x) }
+        }
+        return r
+    }
+    fn difference(self, o: SortedSet<T>) -> SortedSet<T> {
+        let r = sorted_set_with::<T>(self.map.cmp)
+        for x in self.items() {
+            if not o.has(x) { r.add(x) }
+        }
+        return r
+    }
+    fn is_subset(self, o: SortedSet<T>) -> bool {
+        for x in self.items() {
+            if not o.has(x) { return false }
+        }
+        return true
+    }
+    fn eq(self, o: SortedSet<T>) -> bool { return self.items() == o.items() }
+    fn to_str(self) -> str { return coll_join("SortedSet", self.items()) }
+}
+
+// ================================================================ Counter
+// Counts how many times each value was added. Keys keep the order in which they were first seen.
+struct Counter<T> {
+    counts: {T: int},
+    total_count: int
+}
+
+fn counter_new<T>() -> Counter<T> {
+    let m: {T: int} = {}
+    return Counter{ counts: m, total_count: 0 }
+}
+
+// a counter of the elements of an array
+fn counter_from<T>(items: [T]) -> Counter<T> {
+    let c = counter_new::<T>()
+    for x in items { c.add(x) }
+    return c
+}
+
+impl<T> Counter<T> {
+    fn add(self, x: T) { self.add_n(x, 1) }
+    // adds n (may be negative); a count that reaches 0 or less removes the key
+    fn add_n(self, x: T, n: int) {
+        let c = self.counts.get(x, 0) + n
+        let before = self.counts.get(x, 0)
+        if c <= 0 {
+            if self.counts.has(x) { self.counts.remove(x) }
+            self.total_count -= before
+        } else {
+            self.counts[x] = c
+            self.total_count += n
+        }
+    }
+    // how often x was counted (0 if never)
+    fn get(self, x: T) -> int { return self.counts.get(x, 0) }
+    fn op_index(self, x: T) -> int { return self.counts.get(x, 0) }
+    fn has(self, x: T) -> bool { return self.counts.has(x) }
+    // forgets x completely; returns its old count
+    fn remove(self, x: T) -> int {
+        let c = self.counts.get(x, 0)
+        if self.counts.remove(x) { self.total_count -= c }
+        return c
+    }
+    // number of distinct values
+    fn len(self) -> int { return self.counts.len() }
+    fn is_empty(self) -> bool { return self.counts.len() == 0 }
+    // sum of all counts
+    fn total(self) -> int { return self.total_count }
+    fn keys(self) -> [T] { return self.counts.keys() }
+    // (value, count) pairs in first-seen order
+    fn items(self) -> [(T, int)] { return self.counts.items() }
+    // the n most frequent values, most frequent first (ties keep first-seen order); n < 0 means all
+    fn most_common(self, n: int = -1) -> [(T, int)] {
+        var its = self.counts.items()
+        its.sort_by(|a, b| b.1 - a.1)
+        if n >= 0 and n < its.len() { return its[0..n] }
+        return its
+    }
+    // adds all counts of another counter
+    fn merge(self, o: Counter<T>) {
+        for p in o.counts.items() { self.add_n(p.0, p.1) }
+    }
+    fn clear(self) {
+        self.counts.clear()
+        self.total_count = 0
+    }
+    fn eq(self, o: Counter<T>) -> bool { return self.counts == o.counts }
+    fn to_str(self) -> str {
+        var sb = str_builder()
+        sb.add("Counter\{")
+        let its = self.most_common()
+        for i in 0..its.len() {
+            if i > 0 { sb.add(", ") }
+            sb.add(__debug(its[i].0))
+            sb.add(": ")
+            sb.add(int_to_str(its[i].1))
+        }
+        sb.add("}")
+        return sb.finish()
+    }
+}

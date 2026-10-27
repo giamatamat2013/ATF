@@ -1,0 +1,62 @@
+// number_words.atf - spell numbers out in English: 1234 -> "one thousand two hundred thirty-four".
+// Shows: lookup tables as arrays, recursion, integer division, string building, match with ranges.
+// Run:   python run_atf.py run examples/number_words.atf
+
+let ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+            "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+            "seventeen", "eighteen", "nineteen"]
+let TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+let SCALES = [(1000000000, "billion"), (1000000, "million"), (1000, "thousand")]
+
+fn below_hundred(n: int) -> str {
+    if n < 20 { return ONES[n] }
+    let t = TENS[n / 10]
+    if n % 10 == 0 { return t }
+    return t + "-" + ONES[n % 10]
+}
+
+fn below_thousand(n: int) -> str {
+    if n < 100 { return below_hundred(n) }
+    let h = ONES[n / 100] + " hundred"
+    if n % 100 == 0 { return h }
+    return h + " " + below_hundred(n % 100)
+}
+
+fn words(n: int) -> str {
+    if n == 0 { return "zero" }
+    if n < 0 { return "minus " + words(-n) }
+    var parts: [str] = []
+    var rest = n
+    for scale in SCALES {
+        let (size, name) = scale
+        if rest >= size {
+            parts.push(below_thousand(rest / size) + " " + name)
+            rest = rest % size
+        }
+    }
+    if rest > 0 { parts.push(below_thousand(rest)) }
+    return " ".join(parts)
+}
+
+fn ordinal_suffix(n: int) -> str {
+    return match n % 100 {
+        11..=13 => "th"
+        _ => match n % 10 {
+            1 => "st"
+            2 => "nd"
+            3 => "rd"
+            _ => "th"
+        }
+    }
+}
+
+fn main() {
+    for n in [0, 7, 13, 20, 42, 99, 100, 101, 342, 1000, 1234, 90210, 1000000, 2147483647, -15] {
+        println("{n:>11}: {words(n)}")
+    }
+    var list: [str] = []
+    for n in [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112] {
+        list.push("{n}{ordinal_suffix(n)}")
+    }
+    println(" ".join(list))
+}

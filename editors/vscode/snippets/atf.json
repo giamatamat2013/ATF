@@ -1,0 +1,302 @@
+{
+  "Function": {
+    "prefix": "fn",
+    "description": "Function with parameters and a result type",
+    "body": [
+      "fn ${1:name}(${2:x: int}) -> ${3:int} {",
+      "\t${0:return x}",
+      "}"
+    ]
+  },
+  "Function without result": {
+    "prefix": "fnv",
+    "description": "Function that returns nothing",
+    "body": [
+      "fn ${1:name}(${2}) {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Short function": {
+    "prefix": "fne",
+    "description": "One-expression function: fn f(x: int) -> int => ...",
+    "body": [
+      "fn ${1:name}(${2:x: int}) -> ${3:int} => ${0:x}"
+    ]
+  },
+  "Generic function": {
+    "prefix": "fng",
+    "description": "Generic function with a type parameter",
+    "body": [
+      "fn ${1:name}<${2:T}>(${3:x}: $2) -> $2 {",
+      "\t${0:return $3}",
+      "}"
+    ]
+  },
+  "Main": {
+    "prefix": "main",
+    "description": "Program entry point",
+    "body": [
+      "fn main() {",
+      "\t${0:println(\"Hello, world!\")}",
+      "}"
+    ]
+  },
+  "Main with arguments": {
+    "prefix": "mainargs",
+    "description": "Entry point that receives the command line arguments and returns the exit code",
+    "body": [
+      "fn main(args: [str]) -> int {",
+      "\tif args.len() < ${1:1} {",
+      "\t\teprintln(\"usage: ${2:program} ${3:<file>}\")",
+      "\t\treturn 1",
+      "\t}",
+      "\t$0",
+      "\treturn 0",
+      "}"
+    ]
+  },
+  "Struct": {
+    "prefix": "struct",
+    "description": "Struct declaration",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field}: ${3:int}$0",
+      "}"
+    ]
+  },
+  "Enum": {
+    "prefix": "enum",
+    "description": "Enum declaration (variants may carry data)",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:First},",
+      "\t${3:Second(int)}$0",
+      "}"
+    ]
+  },
+  "Impl": {
+    "prefix": "impl",
+    "description": "Methods for a type",
+    "body": [
+      "impl ${1:Name} {",
+      "\tfn ${2:method}(self${3}) -> ${4:str} {",
+      "\t\t${0:return \"\"}",
+      "\t}",
+      "}"
+    ]
+  },
+  "Struct with impl": {
+    "prefix": "structimpl",
+    "description": "Struct with a constructor and a to_str method",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:value}: ${3:int}",
+      "}",
+      "",
+      "impl $1 {",
+      "\tfn new($2: $3) -> $1 {",
+      "\t\treturn $1($2)",
+      "\t}",
+      "",
+      "\tfn to_str(self) -> str {",
+      "\t\treturn \"$1({self.$2})\"",
+      "\t}",
+      "}$0"
+    ]
+  },
+  "Interface": {
+    "prefix": "interface",
+    "description": "Interface declaration",
+    "body": [
+      "interface ${1:Name} {",
+      "\tfn ${2:method}(self) -> ${3:str}$0",
+      "}"
+    ]
+  },
+  "Match": {
+    "prefix": "match",
+    "description": "match with a catch-all arm",
+    "body": [
+      "match ${1:value} {",
+      "\t${2:0} => ${3:println(\"zero\")}",
+      "\t_ => ${0:println(\"other\")}",
+      "}"
+    ]
+  },
+  "For in": {
+    "prefix": "for",
+    "description": "Loop over the items of an array, string, map or set",
+    "body": [
+      "for ${1:item} in ${2:items} {",
+      "\t${0:println($1)}",
+      "}"
+    ]
+  },
+  "For range": {
+    "prefix": "forr",
+    "description": "Loop over a range of numbers",
+    "body": [
+      "for ${1:i} in ${2:0}..${3:n} {",
+      "\t${0:println($1)}",
+      "}"
+    ]
+  },
+  "For index and value": {
+    "prefix": "fori",
+    "description": "Loop with the index and the value",
+    "body": [
+      "for ${1:i}, ${2:item} in ${3:items} {",
+      "\t${0:println($1, $2)}",
+      "}"
+    ]
+  },
+  "While": {
+    "prefix": "while",
+    "description": "while loop",
+    "body": [
+      "while ${1:condition} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "While let": {
+    "prefix": "whilelet",
+    "description": "Repeat while an optional has a value",
+    "body": [
+      "while let ${1:value} = ${2:optional} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Loop": {
+    "prefix": "loop",
+    "description": "Endless loop (leave it with break)",
+    "body": [
+      "loop {",
+      "\t$0",
+      "\tbreak",
+      "}"
+    ]
+  },
+  "If": {
+    "prefix": "if",
+    "description": "if statement",
+    "body": [
+      "if ${1:condition} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "If else": {
+    "prefix": "ifelse",
+    "description": "if / else statement",
+    "body": [
+      "if ${1:condition} {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "If let": {
+    "prefix": "iflet",
+    "description": "Run a block only when an optional has a value",
+    "body": [
+      "if let ${1:value} = ${2:optional} {",
+      "\t$3",
+      "} else {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Let": {
+    "prefix": "let",
+    "description": "Immutable variable",
+    "body": [
+      "let ${1:name} = ${0:value}"
+    ]
+  },
+  "Var": {
+    "prefix": "var",
+    "description": "Mutable variable",
+    "body": [
+      "var ${1:name} = ${0:value}"
+    ]
+  },
+  "Const": {
+    "prefix": "const",
+    "description": "Compile-time constant (outside functions)",
+    "body": [
+      "const ${1:NAME} = ${0:value}"
+    ]
+  },
+  "Lambda": {
+    "prefix": "lambda",
+    "description": "Anonymous function |x| expression",
+    "body": [
+      "|${1:x}| ${0:$1 * 2}"
+    ]
+  },
+  "Lambda block": {
+    "prefix": "lambdab",
+    "description": "Anonymous function with a block body",
+    "body": [
+      "|${1:x}| {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "Test": {
+    "prefix": "test",
+    "description": "A test function that checks a condition with assert",
+    "body": [
+      "fn test_${1:name}() {",
+      "\tassert(${2:1 + 1 == 2}, \"${3:$1 failed}\")$0",
+      "}"
+    ]
+  },
+  "Catch panic": {
+    "prefix": "catch",
+    "description": "Run code and recover from a panic",
+    "body": [
+      "let ${1:err} = catch_panic(|| {",
+      "\t$0",
+      "})",
+      "if $1 != nil {",
+      "\teprintln(\"failed: {$1!}\")",
+      "}"
+    ]
+  },
+  "Result function": {
+    "prefix": "fnres",
+    "description": "Function that returns a Result",
+    "body": [
+      "fn ${1:name}(${2:s: str}) -> Result<${3:int}, str> {",
+      "\t$0",
+      "\treturn Result.Ok(${4:0})",
+      "}"
+    ]
+  },
+  "Println": {
+    "prefix": "pl",
+    "description": "println with interpolation",
+    "body": [
+      "println(\"${1:value} = {${2:$1}}\")$0"
+    ]
+  },
+  "Import": {
+    "prefix": "import",
+    "description": "Import another file (path relative to this file, without .atf)",
+    "body": [
+      "import \"${1:lib/module}\""
+    ]
+  },
+  "Defer": {
+    "prefix": "defer",
+    "description": "Run a statement when the function ends",
+    "body": [
+      "defer ${0:println(\"done\")}"
+    ]
+  }
+}

@@ -1,0 +1,109 @@
+// arrays: edges of insert/remove/pop, sort stability, sort_by, nested arrays, arrays of many element types
+struct P { name: str, age: int }
+enum Col { Red, Green, Blue(int) }
+
+fn main() {
+    var a: [int] = []
+    a.insert(0, 5)
+    a.insert(0, 4)
+    a.insert(2, 6)
+    a.insert(1, 9)
+    println(a, a.len())
+    println(a.remove(0), a.remove(a.len() - 1), a)
+    println(a.pop(), a.pop(), a, a.is_empty())
+    for i in 0..100 { a.push(i) }
+    var removed = 0
+    while a.len() > 3 { removed += a.remove(a.len() / 2) }
+    println(a, removed)
+    a.clear()
+    println(a, a.len())
+    a.push(1)
+    println(a)
+    // insert at every position of a growing array
+    var b: [int] = []
+    for i in 0..10 { b.insert(i / 2, i) }
+    println(b)
+    // copy semantics: arrays are references
+    let c = b
+    c[0] = 100
+    let d = b.copy()
+    d[1] = 200
+    println(b[0], b[1], same(b, c), same(b, d), b == c, b == d.copy())
+    // sort stability with sort_by
+    var ps = [P("a", 3), P("b", 1), P("c", 3), P("d", 2), P("e", 1), P("f", 3), P("g", 2), P("h", 1),
+              P("i", 3), P("j", 2), P("k", 1), P("l", 3), P("m", 2), P("n", 1), P("o", 3), P("p", 2)]
+    ps.sort_by(|x, y| x.age - y.age)
+    var names = ""
+    for p in ps { names += p.name }
+    println(names)
+    ps.sort_by(|x, y| y.age - x.age)
+    names = ""
+    for p in ps { names += p.name }
+    println(names)
+    // big stable sort: sort 1000 pairs by key only and check the order of equal keys
+    var pairs: [(int, int)] = []
+    for i in 0..1000 { pairs.push(((i * 7919) % 13, i)) }
+    pairs.sort_by(|x, y| x.0 - y.0)
+    var stable = true
+    for i in 1..pairs.len() {
+        if pairs[i - 1].0 == pairs[i].0 and pairs[i - 1].1 > pairs[i].1 { stable = false }
+        if pairs[i - 1].0 > pairs[i].0 { stable = false }
+    }
+    println("stable:", stable, pairs[0], pairs[999])
+    // sorting of different element types
+    println([3, -1, 2, -10, 0].sorted(), [2.5, -1.0, 0.0, 10.0, -0.5].sorted(), ["b", "B", "a", "aa", ""].sorted())
+    println([true, false, true, false].sorted(), [(2, "b"), (1, "z"), (2, "a"), (1, "a")].sorted())
+    println(['c', 'a', 'b'].sorted())
+    var big: [int] = []
+    for i in 0..5000 { big.push((i * 2654435761) % 10007) }
+    big.sort()
+    var sorted_ok = true
+    for i in 1..big.len() { if big[i - 1] > big[i] { sorted_ok = false } }
+    println("big sorted:", sorted_ok, big[0], big[4999], big.len())
+    big.reverse()
+    println(big[0], big[4999])
+    // nested arrays
+    var grid: [[int]] = []
+    for y in 0..3 { grid.push(array_make::<int>(3)) }
+    grid[1][1] = 5
+    grid[2].push(7)
+    println(grid, grid[2].len())
+    let row = grid[0]
+    row[0] = 9
+    println(grid[0])
+    var g3: [[[str]]] = [[["a"]], [["b", "c"], []]]
+    g3[1][1].push("d")
+    println(g3, g3[1][0][1])
+    // arrays of optionals, closures, floats, bools, bytes, enums, tuples, structs
+    let opts: [int?] = [1, nil, 3]
+    println(opts, opts[1] == nil, opts[0]! + opts[2]!)
+    let sopts: [str?] = ["x", nil]
+    println(sopts)
+    var fs: [fn(int) -> int] = []
+    for k in 1..=3 { fs.push(|x| x * k) }
+    println(fs.map(|f| f(10)))
+    let fl = [1.5, 2.25, -0.0]
+    println(fl, fl.sum(), [true, false], ['a', 'b'], "hi".bytes(), [Col.Red, Col.Blue(3), Col.Green])
+    println([(1, "a"), (2, "b")], [P("x", 1)], [[1.5], [2.5]])
+    // methods
+    let n = [5, 3, 8, 1, 9, 2]
+    println(n.index_of(8), n.index_of(7), n.contains(9), n.count(5), n.min(), n.max(), n.sum(), sum([1.5, 2.5]))
+    println(n.map(|x| x * 2), n.filter(|x| x % 2 == 1), n.reduce(0, |s, x| s + x), n.reduce("", |s, x| s + str(x)))
+    println(n.any(|x| x > 8), n.all(|x| x > 0), n.find(|x| x > 5), n.find(|x| x > 50), n.first(), n.last())
+    println(n.join("-"), ["a", "b"].join(""), n.reversed(), n, n.get(2, -1), n.get(20, -1), n.get(-1, -1))
+    println(n + ([] as [int]), ([] as [int]) + n, n[2..4] + n[..1], n.sorted().reversed())
+    var f = array_make::<int>(4)
+    f.fill(7)
+    println(f, array_make::<bool>(2), array_make::<float>(2), array_with_cap::<int>(10).len())
+    var ext = [1, 2]
+    ext.extend([3, 4])
+    ext.extend(ext)
+    println(ext)
+    var sw = [1, 2, 3]
+    sw.swap(0, 2)
+    println(sw, range(4), range(0), range_from(2, 5), range_from(5, 2), zip([1, 2, 3], ["a", "b"]))
+    // comprehension
+    println([x * x for x in 0..5], [s.upper() for s in ["a", "b"]], [x for x in [1, 2, 3, 4] if x % 2 == 0])
+    // equality
+    println([1, 2] == [1, 2], [1, 2] == [2, 1], [[1]] == [[1]], [P("a", 1)] == [P("a", 1)], ([] as [int]) == ([] as [int]))
+}

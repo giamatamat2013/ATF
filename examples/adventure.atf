@@ -1,0 +1,150 @@
+// adventure.atf - a tiny text adventure driven by a state machine.
+// Shows: enums as states and directions, match on tuples, maps of structs, a game loop,
+//        optional inventory handling, a scripted list of commands (so the output is fixed).
+// Run:   python run_atf.py run examples/adventure.atf
+
+enum Room { Hall, Library, Kitchen, Cellar, Garden }
+
+enum Dir { North, South, East, West, Down, Up }
+
+struct Game {
+    room: Room,
+    inventory: [str],
+    has_light: bool,
+    door_open: bool,
+    moves: int,
+    won: bool
+}
+
+fn room_name(r: Room) -> str {
+    return match r {
+        Room.Hall => "the Great Hall"
+        Room.Library => "the Library"
+        Room.Kitchen => "the Kitchen"
+        Room.Cellar => "the Cellar"
+        Room.Garden => "the Garden"
+    }
+}
+
+fn describe(g: Game) -> str {
+    return match g.room {
+        Room.Hall => "A vast hall. Doors lead north (library), east (kitchen) and west (garden)."
+        Room.Library => "Dusty books everywhere. A lamp lies on a table. The hall is to the south."
+        Room.Kitchen => if g.door_open { "A cold kitchen. A trapdoor in the floor is open; stairs lead down. West is the hall." } else { "A cold kitchen. There is a locked trapdoor in the floor. West is the hall." }
+        Room.Cellar => "A dark cellar. Something glitters in the corner. Stairs lead up."
+        Room.Garden => "An overgrown garden. A rusty key hangs on a branch. East is the hall."
+    }
+}
+
+// the state machine: current room + direction -> next room (or nil if blocked)
+fn go(g: Game, d: Dir) -> Room? {
+    return match (g.room, d) {
+        (Room.Hall, Dir.North) => Room.Library
+        (Room.Hall, Dir.East) => Room.Kitchen
+        (Room.Hall, Dir.West) => Room.Garden
+        (Room.Library, Dir.South) => Room.Hall
+        (Room.Kitchen, Dir.West) => Room.Hall
+        (Room.Kitchen, Dir.Down) => if g.door_open { Room.Cellar } else { nil }
+        (Room.Cellar, Dir.Up) => Room.Kitchen
+        (Room.Garden, Dir.East) => Room.Hall
+        _ => nil
+    }
+}
+
+fn parse_dir(word: str) -> Dir? {
+    return match word {
+        "north" | "n" => Dir.North
+        "south" | "s" => Dir.South
+        "east" | "e" => Dir.East
+        "west" | "w" => Dir.West
+        "down" | "d" => Dir.Down
+        "up" | "u" => Dir.Up
+        _ => nil
+    }
+}
+
+fn take(g: Game, what: str) {
+    let here = match g.room {
+        Room.Library => "lamp"
+        Room.Garden => "key"
+        Room.Cellar => "treasure"
+        _ => ""
+    }
+    if what != here or what == "" {
+        println("There is no {what} here.")
+        return
+    }
+    if g.inventory.contains(what) {
+        println("You already have the {what}.")
+        return
+    }
+    if what == "treasure" and not g.has_light {
+        println("It is too dark to find anything.")
+        return
+    }
+    g.inventory.push(what)
+    if what == "lamp" { g.has_light = true }
+    if what == "treasure" { g.won = true }
+    println("You take the {what}.")
+}
+
+fn execute(g: Game, line: str) {
+    let words = line.split_whitespace()
+    println("> {line}")
+    if words.len() == 0 { return }
+    g.moves += 1
+    let verb = words[0]
+    match verb {
+        "look" => println(describe(g))
+        "inventory" | "i" => println("You carry: {g.inventory}")
+        "take" => {
+            if words.len() < 2 { println("Take what?") } else { take(g, words[1]) }
+        }
+        "open" => {
+            if g.room == Room.Kitchen and g.inventory.contains("key") {
+                g.door_open = true
+                println("The key turns. The trapdoor opens!")
+            } else if g.room == Room.Kitchen {
+                println("The trapdoor is locked.")
+            } else {
+                println("There is nothing to open here.")
+            }
+        }
+        _ => {
+            let d = parse_dir(verb)
+            if d == nil {
+                println("I do not understand '{verb}'.")
+            } else {
+                let next = go(g, d!)
+                if next == nil {
+                    println("You cannot go that way.")
+                } else if next! == Room.Cellar and not g.has_light {
+                    println("It is pitch dark down there. You need a light.")
+                } else {
+                    g.room = next!
+                    println("You walk to {room_name(g.room)}.")
+                    println(describe(g))
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    let g = Game{ room: Room.Hall, inventory: [], has_light: false, door_open: false, moves: 0, won: false }
+    println(describe(g))
+    let script = [
+        "look", "north", "take lamp", "take lamp", "south", "east", "down", "open",
+        "west", "west", "take key", "dance", "east", "east", "open", "down",
+        "take treasure", "inventory"
+    ]
+    for line in script {
+        execute(g, line)
+        if g.won { break }
+    }
+    if g.won {
+        println("*** You found the treasure in {g.moves} moves! ***")
+    } else {
+        println("The adventure ends without treasure.")
+    }
+}

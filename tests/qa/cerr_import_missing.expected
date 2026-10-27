@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: cannot find module 'does_not_exist'
+  --> cerr_import_missing.atf:1:1
+ 1 | import "does_not_exist"
+   | ^
+  hint: imports are relative to this file, or  import "std/name"  for the standard library

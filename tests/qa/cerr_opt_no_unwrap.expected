@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected int but found int?
+  --> cerr_opt_no_unwrap.atf:4:18
+ 4 |     let y: int = x
+   |                  ^
+  hint: this value may be nil: use  x!  to unwrap it, or  x ?? default

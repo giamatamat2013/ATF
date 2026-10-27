@@ -1,0 +1,4 @@
+fn main() {
+    /* never closed
+    println(1)
+}

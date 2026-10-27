@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: unknown name 'later'
+  --> cerr_use_before_decl.atf:2:13
+ 2 |     println(later)
+   |             ^

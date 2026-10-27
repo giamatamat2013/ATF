@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: main can be  fn main()  or  fn main(args: [str])
+  --> cerr_wrong_main_sig.atf:1:1
+ 1 | fn main(x: int) {
+   | ^

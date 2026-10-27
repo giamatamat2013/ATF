@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: this function does not return a value
+  --> cerr_return_in_void.atf:2:5
+ 2 |     return 5
+   |     ^
+  hint: remove the value, or declare a return type:  fn name() -> int

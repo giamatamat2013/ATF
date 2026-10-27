@@ -1,0 +1,59 @@
+// pascal.atf - Pascal's triangle and binomial coefficients.
+// Shows: arrays of arrays, building rows from the previous row, centered text, tuples.
+// Run:   python run_atf.py run examples/pascal.atf
+
+fn next_row(prev: [int]) -> [int] {
+    var row = [1]
+    for i in 1..prev.len() {
+        row.push(prev[i - 1] + prev[i])
+    }
+    row.push(1)
+    return row
+}
+
+// n choose k computed with the multiplicative formula (exact in integers)
+fn choose(n: int, k: int) -> int {
+    if k < 0 or k > n { return 0 }
+    var r = 1
+    for i in 1..=min(k, n - k) {
+        r = r * (n - i + 1) / i
+    }
+    return r
+}
+
+fn main() {
+    var rows: [[int]] = [[1]]
+    for i in 1..10 {
+        rows.push(next_row(rows[i - 1]))
+    }
+    let width = 4 * 10 + 1
+    for row in rows {
+        let cells = row.map(|x| pad_center(str(x), 4))
+        println(pad_center("".join(cells), width).trim_end())
+    }
+
+    println()
+    println("row 10:", next_row(rows[9]))
+    println("choose(10, 3) = {choose(10, 3)}, choose(52, 5) = {choose(52, 5)}, choose(60, 30) = {choose(60, 30)}")
+
+    // the sum of row n is 2^n
+    var ok = true
+    for n in 0..10 {
+        if rows[n].sum() != 2 ** n { ok = false }
+    }
+    println("every row n sums to 2^n:", ok)
+
+    // choose() agrees with the triangle
+    var agree = true
+    for n in 0..10 {
+        for k in 0..=n {
+            if choose(n, k) != rows[n][k] { agree = false }
+        }
+    }
+    println("choose() agrees with the triangle:", agree)
+
+    // Catalan numbers C(n) = choose(2n, n) / (n + 1)
+    var catalan: [int] = []
+    for n in 0..12 { catalan.push(choose(2 * n, n) / (n + 1)) }
+    println("Catalan numbers:", catalan)
+}

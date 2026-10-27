@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: cannot call a value of type int
+  --> cerr_call_non_fn.atf:3:14
+ 3 |     println(x(1))
+   |              ^

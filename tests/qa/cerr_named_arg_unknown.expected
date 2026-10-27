@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: function 'f' has no parameter named 'c'
+  --> cerr_named_arg_unknown.atf:3:18
+ 3 |     println(f(1, c: 3))
+   |                  ^
+  hint: parameters: a, b

@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: '?' on a Result needs the function to return a Result too, but it returns void
+  --> cerr_question_in_void.atf:3:23
+ 3 |     let v = parse("1")?
+   |                       ^

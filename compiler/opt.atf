@@ -1,0 +1,407 @@
+// Optimizations on the typed IR, run after checking and before code generation.
+//  * if/return chains that only select a value become one expression:  if c { return a } return b  ->  return c ? a : b
+//  * small functions whose body is a single `return expr` are inlined at their call sites
+import "util"
+import "types"
+import "tir"
+import "tirutil"
+
+const INLINE_MAX_NODES = 24
+
+// ---- normalization -------------------------------------------------------------
+// [If(c, [Ret(a)], []), ..., Ret(b)]  ->  [Ret(Cond(c, a, ...b))]
+fn fold_return_chain(stmts: [TStmt], ret: Type) -> TExpr? {
+    if stmts.len() == 0 { return nil }
+    match stmts[stmts.len() - 1].k {
+        SK.Ret(v) => {
+            if v == nil { return nil }
+            var acc = v!
+            var i = stmts.len() - 2
+            while i >= 0 {
+                match stmts[i].k {
+                    SK.If(c, then, els) => {
+                        if els.len() != 0 or then.len() != 1 { return nil }
+                        match then[0].k {
+                            SK.Ret(tv) => {
+                                if tv == nil { return nil }
+                                acc = texpr(TK.Cond(c, tv!, acc), ret, tv!.pos)
+                            }
+                            _ => return nil
+                        }
+                    }
+                    _ => return nil
+                }
+                i -= 1
+            }
+            return acc
+        }
+        _ => return nil
+    }
+}
+
+// ---- inlinability -----------------------------------------------------------------
+struct Inliner {
+    candidates: {int: TExpr},        // FnInst uid -> body expression
+    param_index: {int: int},         // param Var uid -> index (for the instance being inlined)
+    nodes: int,
+    ok: bool,
+    self_uid: int
+}
+
+fn intr_is_pure(name: str) -> bool {
+    return match name {
+        "setjmp" => false
+        "longjmp" => false
+        "sp" => false
+        "fp" => false
+        "save_regs" => false
+        "memcpy" => false
+        "memset" => false
+        "trap" => false
+        _ => true
+    }
+}
+
+impl Inliner {
+    // can this expression be copied into another function?
+    fn scan(self, e: TExpr, params: {int: bool}) {
+        if not self.ok { return }
+        self.nodes += 1
+        if self.nodes > INLINE_MAX_NODES {
+            self.ok = false
+            return
+        }
+        match e.k {
+            TK.Const(k, iv, fv, sv) => {}
+            TK.VarRef(v) => {
+                if not (v.uid in params) { self.ok = false }
+            }
+            TK.GlobalRef(g) => {}
+            TK.Un(op, x) => self.scan(x, params)
+            TK.Bin(op, l, r) => {
+                self.scan(l, params)
+                self.scan(r, params)
+            }
+            TK.And(l, r) => {
+                self.scan(l, params)
+                self.scan(r, params)
+            }
+            TK.Or(l, r) => {
+                self.scan(l, params)
+                self.scan(r, params)
+            }
+            TK.Cvt(k, x) => self.scan(x, params)
+            TK.Call(inst, args) => {
+                if inst.uid == self.self_uid { self.ok = false }
+                for a in args { self.scan(a, params) }
+            }
+            TK.CallExt(ext, args) => {
+                for a in args { self.scan(a, params) }
+            }
+            TK.Load(o, i) => self.scan(o, params)
+            TK.PtrIdx(b, i, s) => {
+                self.scan(b, params)
+                self.scan(i, params)
+            }
+            TK.ArrIdx(a, i, s) => {
+                self.scan(a, params)
+                self.scan(i, params)
+            }
+            TK.NewObj(vals) => {
+                for v in vals { self.scan(v, params) }
+            }
+            TK.Intr(name, args) => {
+                if not intr_is_pure(name) { self.ok = false }
+                for a in args { self.scan(a, params) }
+            }
+            TK.Cond(c, a, b) => {
+                self.scan(c, params)
+                self.scan(a, params)
+                self.scan(b, params)
+            }
+            _ => self.ok = false
+        }
+    }
+}
+
+fn inline_body(f: FnInst) -> TExpr? {
+    if f.is_lambda or f.body == nil { return nil }
+    if f.name == "__entry" { return nil }
+    let body = f.body!
+    var e: TExpr? = nil
+    if body.len() == 1 {
+        match body[0].k {
+            SK.Ret(v) => e = v
+            _ => {}
+        }
+    }
+    if e == nil { e = fold_return_chain(body, f.ret) }
+    if e == nil { return nil }
+    var params: {int: bool} = {}
+    for p in f.params {
+        if p.boxed() or p.root_var().assigned or p.root_var().captured { return nil }
+        params[p.uid] = true
+    }
+    let sc = Inliner({}, {}, 0, true, f.uid)
+    sc.scan(e!, params)
+    if not sc.ok { return nil }
+    return e
+}
+
+// ---- substitution -----------------------------------------------------------------
+struct Subst {
+    map: {int: TExpr},           // param uid -> replacement
+    pos: Pos
+}
+
+fn subst_all_e(s: Subst, xs: [TExpr]) -> [TExpr] {
+    var out: [TExpr] = []
+    for x in xs { out.push(subst_e(s, x)) }
+    return out
+}
+
+fn subst_e(s: Subst, e: TExpr) -> TExpr {
+    let p = s.pos
+    return match e.k {
+        TK.Const(k, iv, fv, sv) => TExpr(TK.Const(k, iv, fv, sv), e.ty, p)
+        TK.VarRef(v) => {
+            let r = s.map[v.uid]
+            r
+        }
+        TK.GlobalRef(g) => TExpr(TK.GlobalRef(g), e.ty, p)
+        TK.Un(op, x) => TExpr(TK.Un(op, subst_e(s, x)), e.ty, p)
+        TK.Bin(op, l, r) => TExpr(TK.Bin(op, subst_e(s, l), subst_e(s, r)), e.ty, p)
+        TK.And(l, r) => TExpr(TK.And(subst_e(s, l), subst_e(s, r)), e.ty, p)
+        TK.Or(l, r) => TExpr(TK.Or(subst_e(s, l), subst_e(s, r)), e.ty, p)
+        TK.Cvt(k, x) => TExpr(TK.Cvt(k, subst_e(s, x)), e.ty, p)
+        TK.Call(inst, args) => TExpr(TK.Call(inst, subst_all_e(s, args)), e.ty, p)
+        TK.CallExt(ext, args) => TExpr(TK.CallExt(ext, subst_all_e(s, args)), e.ty, p)
+        TK.Load(o, i) => TExpr(TK.Load(subst_e(s, o), i), e.ty, p)
+        TK.PtrIdx(b, i, sz) => TExpr(TK.PtrIdx(subst_e(s, b), subst_e(s, i), sz), e.ty, p)
+        TK.ArrIdx(a, i, sz) => TExpr(TK.ArrIdx(subst_e(s, a), subst_e(s, i), sz), e.ty, p)
+        TK.NewObj(vals) => TExpr(TK.NewObj(subst_all_e(s, vals)), e.ty, p)
+        TK.Intr(name, args) => TExpr(TK.Intr(name, subst_all_e(s, args)), e.ty, p)
+        TK.Cond(c, a, b) => TExpr(TK.Cond(subst_e(s, c), subst_e(s, a), subst_e(s, b)), e.ty, p)
+        _ => e
+    }
+}
+
+// an argument that can be used directly (it cannot change while the inlined body runs)
+fn arg_is_stable(e: TExpr) -> bool {
+    return match e.k {
+        TK.Const(k, iv, fv, sv) => true
+        TK.VarRef(v) => not v.boxed()
+        _ => false
+    }
+}
+
+// ---- the pass -----------------------------------------------------------------------
+struct InlinePass {
+    bodies: {int: TExpr},
+    insts: {int: FnInst},
+    cur: FnInst?,
+    count: int
+}
+
+impl InlinePass {
+    fn try_inline(self, inst: FnInst, args: [TExpr], e: TExpr) -> TExpr? {
+        let body = self.bodies.try_get(inst.uid)
+        if body == nil or self.cur!.uid == inst.uid { return nil }
+        var stmts: [TStmt] = []
+        var map: {int: TExpr} = {}
+        for i in 0..inst.params.len() {
+            let a = args[i]
+            if arg_is_stable(a) {
+                map[inst.params[i].uid] = a
+            } else {
+                let v = new_var("$in", a.ty, false, e.pos)
+                v.is_temp = true
+                self.cur!.vars.push(v)
+                stmts.push(tstmt(SK.Decl(v, a), e.pos))
+                map[inst.params[i].uid] = texpr(TK.VarRef(v), a.ty, e.pos)
+            }
+        }
+        let r = subst_e(Subst(map, e.pos), body!)
+        for c in inst.callees.values() { self.cur!.callees[c.uid] = c }
+        self.count += 1
+        if stmts.len() == 0 { return TExpr(r.k, e.ty, e.pos) }
+        return texpr(TK.Seq(stmts, TExpr(r.k, e.ty, e.pos)), e.ty, e.pos)
+    }
+
+    fn exprs(self, xs: [TExpr]) -> [TExpr] {
+        var out: [TExpr] = []
+        for x in xs { out.push(self.expr(x)) }
+        return out
+    }
+
+    fn expr(self, e: TExpr) -> TExpr {
+        let k = match e.k {
+            TK.Un(op, x) => TK.Un(op, self.expr(x))
+            TK.Bin(op, l, r) => TK.Bin(op, self.expr(l), self.expr(r))
+            TK.And(l, r) => TK.And(self.expr(l), self.expr(r))
+            TK.Or(l, r) => TK.Or(self.expr(l), self.expr(r))
+            TK.Cvt(c, x) => TK.Cvt(c, self.expr(x))
+            TK.Call(inst, args) => {
+                let na = self.exprs(args)
+                let r = self.try_inline(inst, na, e)
+                if r != nil { return r! }
+                TK.Call(inst, na)
+            }
+            TK.CallExt(ext, args) => TK.CallExt(ext, self.exprs(args))
+            TK.CallInd(f, args) => TK.CallInd(self.expr(f), self.exprs(args))
+            TK.Load(o, i) => TK.Load(self.expr(o), i)
+            TK.PtrIdx(b, i, s) => TK.PtrIdx(self.expr(b), self.expr(i), s)
+            TK.ArrIdx(a, i, s) => TK.ArrIdx(self.expr(a), self.expr(i), s)
+            TK.NewObj(vals) => TK.NewObj(self.exprs(vals))
+            TK.Intr(n, args) => TK.Intr(n, self.exprs(args))
+            TK.Cond(c, a, b) => TK.Cond(self.expr(c), self.expr(a), self.expr(b))
+            TK.Seq(ss, x) => TK.Seq(self.stmts(ss), self.expr(x))
+            _ => e.k
+        }
+        return TExpr(k, e.ty, e.pos)
+    }
+
+    fn stmts(self, ss: [TStmt]) -> [TStmt] {
+        var out: [TStmt] = []
+        for s in ss { out.push(self.stmt(s)) }
+        return out
+    }
+
+    fn stmt(self, s: TStmt) -> TStmt {
+        let k = match s.k {
+            SK.Decl(v, init) => {
+                if init == nil { SK.Decl(v, nil) } else { SK.Decl(v, self.expr(init!)) }
+            }
+            SK.Set(t, v) => SK.Set(self.expr(t), self.expr(v))
+            SK.ExprS(e) => SK.ExprS(self.expr(e))
+            SK.If(c, a, b) => SK.If(self.expr(c), self.stmts(a), self.stmts(b))
+            SK.While(c, b, st) => SK.While(self.expr(c), self.stmts(b), self.stmts(st))
+            SK.Ret(e) => {
+                if e == nil { SK.Ret(nil) } else { SK.Ret(self.expr(e!)) }
+            }
+            SK.Blk(ss) => SK.Blk(self.stmts(ss))
+            _ => s.k
+        }
+        return TStmt(k, s.pos)
+    }
+}
+
+fn optimize_program(prog: Program) {
+    // two rounds: functions whose bodies became small after the first round are inlined in the second
+    for round in 0..2 {
+        let pass = InlinePass({}, {}, nil, 0)
+        for f in prog.funcs {
+            let b = inline_body(f)
+            if b != nil { pass.bodies[f.uid] = b! }
+        }
+        for f in prog.funcs {
+            if f.body == nil { continue }
+            pass.cur = f
+            f.body = pass.stmts(f.body!)
+        }
+        if pass.count == 0 { break }
+    }
+    // drop functions that are no longer called
+    var reach: {int: bool} = {}
+    var stack: [FnInst] = [prog.entry!, prog.alloc!]
+    for f in prog.rt.values() { stack.push(f) }
+    while stack.len() > 0 {
+        let f = stack.pop()
+        if f.uid in reach { continue }
+        reach[f.uid] = true
+        if f.body != nil { collect_calls(f.body!, stack) }
+    }
+    var kept: [FnInst] = []
+    for f in prog.funcs {
+        if f.uid in reach { kept.push(f) }
+    }
+    prog.funcs = kept
+}
+
+// functions referenced by an IR tree (calls, function values, closures)
+fn collect_calls(ss: [TStmt], out: [FnInst]) {
+    for s in ss { collect_stmt(s, out) }
+}
+
+fn collect_stmt(s: TStmt, out: [FnInst]) {
+    match s.k {
+        SK.Decl(v, init) => {
+            if init != nil { collect_expr(init!, out) }
+        }
+        SK.Set(t, v) => {
+            collect_expr(t, out)
+            collect_expr(v, out)
+        }
+        SK.ExprS(e) => collect_expr(e, out)
+        SK.If(c, a, b) => {
+            collect_expr(c, out)
+            collect_calls(a, out)
+            collect_calls(b, out)
+        }
+        SK.While(c, b, st) => {
+            collect_expr(c, out)
+            collect_calls(b, out)
+            collect_calls(st, out)
+        }
+        SK.Ret(e) => {
+            if e != nil { collect_expr(e!, out) }
+        }
+        SK.Blk(ss) => collect_calls(ss, out)
+        _ => {}
+    }
+}
+
+fn collect_exprs(xs: [TExpr], out: [FnInst]) {
+    for x in xs { collect_expr(x, out) }
+}
+
+fn collect_expr(e: TExpr, out: [FnInst]) {
+    match e.k {
+        TK.FnRef(inst) => out.push(inst)
+        TK.MkClosure(inst, caps) => out.push(inst)
+        TK.Un(op, x) => collect_expr(x, out)
+        TK.Bin(op, l, r) => {
+            collect_expr(l, out)
+            collect_expr(r, out)
+        }
+        TK.And(l, r) => {
+            collect_expr(l, out)
+            collect_expr(r, out)
+        }
+        TK.Or(l, r) => {
+            collect_expr(l, out)
+            collect_expr(r, out)
+        }
+        TK.Cvt(c, x) => collect_expr(x, out)
+        TK.Call(inst, args) => {
+            out.push(inst)
+            collect_exprs(args, out)
+        }
+        TK.CallExt(ext, args) => collect_exprs(args, out)
+        TK.CallInd(f, args) => {
+            collect_expr(f, out)
+            collect_exprs(args, out)
+        }
+        TK.Load(o, i) => collect_expr(o, out)
+        TK.PtrIdx(b, i, s) => {
+            collect_expr(b, out)
+            collect_expr(i, out)
+        }
+        TK.ArrIdx(a, i, s) => {
+            collect_expr(a, out)
+            collect_expr(i, out)
+        }
+        TK.NewObj(vals) => collect_exprs(vals, out)
+        TK.Intr(n, args) => collect_exprs(args, out)
+        TK.Cond(c, a, b) => {
+            collect_expr(c, out)
+            collect_expr(a, out)
+            collect_expr(b, out)
+        }
+        TK.Seq(ss, x) => {
+            collect_calls(ss, out)
+            collect_expr(x, out)
+        }
+        _ => {}
+    }
+}

@@ -1,0 +1,73 @@
+// every kind of runtime error, caught with catch_panic, must give a clear message
+struct Box { v: int }
+enum Sh { A, B(int) }
+
+fn show(what: str, m: str?) {
+    println(what + ":", m ?? "<no panic>")
+}
+
+fn get_opt(b: bool) -> int? {
+    if b { return 5 }
+    return nil
+}
+
+fn fail_res() -> Result<int, str> { return Result.Err("bad thing") }
+
+fn classify(s: Sh) -> int {
+    return match s {
+        Sh.A => 1
+        Sh.B(x) if x > 0 => x
+        Sh.B(x) => -x
+    }
+}
+
+fn main() {
+    let a = [1, 2, 3]
+    let empty: [int] = []
+    var i = 5
+    var z = 0
+    let s = "hello"
+    let m = {"k": 1}
+    show("index", catch_panic(|| { println(a[i]) }))
+    show("negative index", catch_panic(|| { println(a[-1]) }))
+    show("index assign", catch_panic(|| { a[3] = 1 }))
+    show("str index", catch_panic(|| { println(s[i]) }))
+    show("str negative index", catch_panic(|| { println(s[-1]) }))
+    show("byte_at", catch_panic(|| { println(s.byte_at(99)) }))
+    show("div", catch_panic(|| { println(10 / z) }))
+    show("mod", catch_panic(|| { println(10 % z) }))
+    show("div assign", catch_panic(|| { var q = 4; q /= z; println(q) }))
+    show("float div is fine", catch_panic(|| { println(1.0 / float(z)) }))
+    show("key", catch_panic(|| { println(m["nope"]) }))
+    show("int key", catch_panic(|| { let mi = {1: "x"}; println(mi[2]) }))
+    show("unwrap", catch_panic(|| { println(get_opt(false)!) }))
+    show("unwrap ok", catch_panic(|| { println(get_opt(true)!) }))
+    show("pop", catch_panic(|| { println(empty.pop()) }))
+    show("first", catch_panic(|| { println(empty.first()) }))
+    show("last", catch_panic(|| { println(empty.last()) }))
+    show("min", catch_panic(|| { println(empty.min()) }))
+    show("max", catch_panic(|| { println(empty.max()) }))
+    show("insert", catch_panic(|| { a.insert(9, 1) }))
+    show("insert neg", catch_panic(|| { a.insert(-1, 1) }))
+    show("remove", catch_panic(|| { println(a.remove(3)) }))
+    show("swap", catch_panic(|| { a.swap(0, 7) }))
+    show("panic", catch_panic(|| { panic("custom {i}") }))
+    show("assert", catch_panic(|| { assert(i == 0, "i should be zero") }))
+    show("assert no msg", catch_panic(|| { assert(i == 0) }))
+    show("assert ok", catch_panic(|| { assert(i == 5, "fine") }))
+    show("to_int", catch_panic(|| { println("12x".to_int()) }))
+    show("int()", catch_panic(|| { println(int("x")) }))
+    show("to_float", catch_panic(|| { println("1.2.3".to_float()) }))
+    show("parse_int_base", catch_panic(|| { println("12g".parse_int_base(16)) }))
+    show("ord", catch_panic(|| { println(ord("")) }))
+    show("int pow", catch_panic(|| { println(2 ** (z - 1)) }))
+    show("unwrap result", catch_panic(|| { println(fail_res().unwrap()) }))
+    show("expect", catch_panic(|| { println(fail_res().expect("needed it")) }))
+    show("rand_int", catch_panic(|| { println(rand_int(5, 1)) }))
+    show("rand_choice", catch_panic(|| { println(rand_choice(empty)) }))
+    show("match guard", catch_panic(|| { println(classify(Sh.B(-3)), classify(Sh.A)) }))
+    show("nested arr", catch_panic(|| { let g = [[1], [2, 3]]; println(g[1][2]) }))
+    show("struct field arr", catch_panic(|| { let bs = [Box(1)]; println(bs[1].v) }))
+    show("unreachable", catch_panic(|| { unreachable() }))
+    println("still running")
+}

@@ -1,0 +1,93 @@
+// closures.atf - closures, higher-order functions and function composition.
+// Shows: lambdas |x| ..., captured variables, returning functions, generic compose,
+//        map / filter / reduce / sort_by / any / all, function values stored in arrays and maps.
+// Run:   python run_atf.py run examples/closures.atf
+
+// a closure that remembers and changes its own private counter
+fn make_counter(start: int, by: int) -> fn() -> int {
+    var n = start
+    return || {
+        let current = n
+        n += by
+        return current
+    }
+}
+
+fn make_adder(k: int) -> fn(int) -> int {
+    return |x| x + k
+}
+
+// compose(f, g)(x) == g(f(x)); works for any types A, B, C
+fn compose<A, B, C>(f: fn(A) -> B, g: fn(B) -> C) -> fn(A) -> C {
+    return |x| g(f(x))
+}
+
+fn twice(f: fn(int) -> int) -> fn(int) -> int {
+    return compose(f, f)
+}
+
+fn apply_all(fs: [fn(int) -> int], x: int) -> [int] {
+    var out: [int] = []
+    for f in fs { out.push(f(x)) }
+    return out
+}
+
+fn square(x: int) -> int { return x * x }
+
+fn main() {
+    let c = make_counter(10, 5)
+    let d = make_counter(0, 1)
+    println("counter c:", c(), c(), c(), " counter d:", d(), d())
+
+    let add3 = make_adder(3)
+    let add10 = make_adder(10)
+    println("add3(4) =", add3(4), " add10(4) =", add10(4))
+
+    // named functions are values too
+    let sq_then_add3 = compose(square, add3)
+    println("square then add3 of 5:", sq_then_add3(5))
+    println("twice(add3)(0):", twice(add3)(0))
+    println("twice(square)(3):", twice(square)(3))
+
+    // compose can change types: int -> str -> int
+    let digits = compose(|n: int| str(n), |s: str| s.len())
+    println("number of digits of 12345:", digits(12345), " of 7:", digits(7))
+
+    // functions in an array
+    println(apply_all([square, add3, |x| x * 100, twice(add10)], 7))
+
+    // functions in a map
+    var ops: {str: fn(int, int) -> int} = {}
+    ops["add"] = |a, b| a + b
+    ops["mul"] = |a, b| a * b
+    ops["max"] = |a, b| max(a, b)
+    for name, f in ops {
+        println("{name}(6, 7) = {f(6, 7)}")
+    }
+
+    // closures capture variables, not copies of their values
+    var total = 0
+    let add_to_total = |x: int| { total += x }
+    for i in 1..=10 { add_to_total(i) }
+    println("total after the loop:", total)
+
+    // higher-order array methods
+    let nums = [5, 3, 8, 1, 9, 2, 7]
+    println("doubled:  ", nums.map(|x| x * 2))
+    println("odd only: ", nums.filter(|x| x % 2 == 1))
+    println("sum:      ", nums.reduce(0, |acc, x| acc + x))
+    println("product:  ", nums.reduce(1, |acc, x| acc * x))
+    println("any > 8?  ", nums.any(|x| x > 8), " all > 0?", nums.all(|x| x > 0))
+    println("first > 6:", nums.find(|x| x > 6), " first > 100:", nums.find(|x| x > 100))
+    println("longest as text:", nums.map(|x| str(x * x)).reduce("", |a, s| if s.len() > a.len() { s } else { a }))
+
+    var people = [("Zoe", 31), ("Adam", 25), ("Mia", 31), ("Bob", 19)]
+    people.sort_by(|a, b| if a.1 != b.1 { b.1 - a.1 } else { str_cmp(a.0, b.0) })
+    println("by age desc, then name:", people)
+
+    // list comprehensions are another way to map and filter
+    println([x * x for x in nums if x > 4])
+    let words = ["apple", "fig", "banana", "kiwi"]
+    println([w.upper() for w in words if w.len() > 3])
+    println(["{i}:{w}" for i, w in words])
+}

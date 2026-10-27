@@ -1,0 +1,4 @@
+[exit 1]
+[stderr] panic: n too big: 3
+  at check (err_panic.atf:2)
+  at main (err_panic.atf:7)

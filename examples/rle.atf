@@ -1,0 +1,63 @@
+// rle.atf - run-length encoding and decoding of text.
+// Shows: string iteration, building strings, parsing digits, round trip testing,
+//        a Result return type for malformed input.
+// Run:   python run_atf.py run examples/rle.atf
+
+// "aaabcc" -> "3a1b2c"
+fn encode(s: str) -> str {
+    if s.len() == 0 { return "" }
+    var sb = str_builder()
+    var run = 1
+    for i in 1..s.len() {
+        if s[i] == s[i - 1] {
+            run += 1
+        } else {
+            sb.add(str(run))
+            sb.add(s[i - 1])
+            run = 1
+        }
+    }
+    sb.add(str(run))
+    sb.add(s[s.len() - 1])
+    return sb.finish()
+}
+
+fn decode(s: str) -> Result<str, str> {
+    var sb = str_builder()
+    var count = 0
+    var have_count = false
+    for i in 0..s.len() {
+        let b = s.byte_at(i)
+        if b.is_digit() {
+            count = count * 10 + int(b - '0')
+            have_count = true
+        } else {
+            if not have_count { return Result.Err("letter '{s[i]}' at {i} has no count") }
+            sb.add(s[i].repeat(count))
+            count = 0
+            have_count = false
+        }
+    }
+    if have_count { return Result.Err("count at the end has no letter") }
+    return Result.Ok(sb.finish())
+}
+
+fn main() {
+    for text in ["aaabcc", "abc", "zzzzzzzzzzzz", "", "aabbbaa"] {
+        let e = encode(text)
+        println("'{text}' -> '{e}'")
+    }
+
+    // round trip
+    let original = "WWWWWWWWWWWWBWWWWWWWWWWWWBBBWWWWWWWWWWWWWWWWWWWWWWWWBWWWWWWWWWWWWWW"
+    let packed = encode(original)
+    println("{original.len()} characters packed into {packed.len()}: {packed}")
+    println("round trip ok:", decode(packed).unwrap() == original)
+
+    for bad in ["3a2", "abc", "12"] {
+        match decode(bad) {
+            Result.Ok(v) => println("'{bad}' decodes to '{v}'")
+            Result.Err(e) => println("'{bad}' is invalid: {e}")
+        }
+    }
+}

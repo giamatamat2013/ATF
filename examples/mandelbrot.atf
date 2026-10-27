@@ -1,0 +1,47 @@
+// mandelbrot.atf - the Mandelbrot set drawn with ASCII characters.
+// Shows: float math, nested loops, indexing into a string, tuples.
+// Run:   python run_atf.py run examples/mandelbrot.atf
+
+let PALETTE = " .:-=+*#%@"
+
+// number of iterations before z = z*z + c escapes (up to max_iter)
+fn escape_time(cr: float, ci: float, max_iter: int) -> int {
+    var zr = 0.0
+    var zi = 0.0
+    var i = 0
+    while i < max_iter and zr * zr + zi * zi <= 4.0 {
+        let t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        i += 1
+    }
+    return i
+}
+
+fn main() {
+    let width = 64
+    let height = 24
+    let max_iter = 50
+    var inside = 0
+    for row in 0..height {
+        var line = ""
+        for col in 0..width {
+            let cr = -2.2 + 3.2 * float(col) / float(width)
+            let ci = -1.2 + 2.4 * float(row) / float(height)
+            let n = escape_time(cr, ci, max_iter)
+            if n == max_iter {
+                line = line + "@"
+                inside += 1
+            } else {
+                line = line + PALETTE[n * 8 / max_iter]
+            }
+        }
+        println(line)
+    }
+    println("{inside} of {width * height} points are inside the set")
+
+    // a few single points
+    for p in [(0.0, 0.0), (1.0, 1.0), (-1.0, 0.0), (0.3, 0.5), (-0.75, 0.1)] {
+        println("c = ({p.0}, {p.1}) -> {escape_time(p.0, p.1, 1000)} iterations")
+    }
+}

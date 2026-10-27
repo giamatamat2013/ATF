@@ -1,0 +1,8 @@
+enum Shape { Rect(int, int), Dot }
+fn area(s: Shape) -> int {
+    return match s {
+        Shape.Rect(w) => w
+        Shape.Dot => 0
+    }
+}
+fn main() { println(area(Shape.Dot)) }

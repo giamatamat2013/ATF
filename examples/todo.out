@@ -1,0 +1,18 @@
+all tasks:
+  [ ] #1 write the report       HIGH    ["work"]
+  [ ] #2 buy milk               low     ["home", "shopping"]
+  [ ] #3 call the dentist       medium  ["health"]
+  [ ] #4 fix the bike           medium  ["home"]
+  [ ] #5 book flights           HIGH    ["travel", "work"]
+complete #1 and #4: true true
+complete #99: false
+milk is done in the list too: true  same object: true
+pending, most important first:
+  [ ] #5 book flights           HIGH    ["travel", "work"]
+  [ ] #3 call the dentist       medium  ["health"]
+tagged 'work': ["write the report", "book flights"]
+tagged 'home': ["buy milk", "fix the bike"]
+3 of 5 done
+priorities as numbers: [3, 1, 2, 2, 3]
+high priority titles: ["write the report", "book flights"]
+equal contents: true  same object: false

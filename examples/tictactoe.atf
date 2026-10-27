@@ -1,0 +1,134 @@
+// tictactoe.atf - evaluating tic-tac-toe boards and playing perfect moves with minimax.
+// Shows: enums used as cell values, arrays of enums, match, recursion (minimax),
+//        a const table of winning lines, early return.
+// Run:   python run_atf.py run examples/tictactoe.atf
+
+enum Cell { Empty, X, O }
+
+let LINES = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],      // rows
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],      // columns
+    [0, 4, 8], [2, 4, 6]                  // diagonals
+]
+
+fn symbol(c: Cell) -> str {
+    return match c {
+        Cell.Empty => "."
+        Cell.X => "X"
+        Cell.O => "O"
+    }
+}
+
+fn parse_board(text: str) -> [Cell] {
+    var b: [Cell] = []
+    for c in text {
+        b.push(match c {
+            "X" => Cell.X
+            "O" => Cell.O
+            _ => Cell.Empty
+        })
+    }
+    return b
+}
+
+fn show(b: [Cell]) {
+    for r in 0..3 {
+        println(symbol(b[r * 3]), symbol(b[r * 3 + 1]), symbol(b[r * 3 + 2]))
+    }
+}
+
+// the winner (X or O) or Empty if nobody has won
+fn winner(b: [Cell]) -> Cell {
+    for line in LINES {
+        let c = b[line[0]]
+        if c != Cell.Empty and c == b[line[1]] and c == b[line[2]] {
+            return c
+        }
+    }
+    return Cell.Empty
+}
+
+fn is_full(b: [Cell]) -> bool {
+    for c in b {
+        if c == Cell.Empty { return false }
+    }
+    return true
+}
+
+fn status(b: [Cell]) -> str {
+    let w = winner(b)
+    if w != Cell.Empty { return "{symbol(w)} wins" }
+    if is_full(b) { return "draw" }
+    return "game continues"
+}
+
+fn other(p: Cell) -> Cell {
+    if p == Cell.X { return Cell.O }
+    return Cell.X
+}
+
+// score from X's point of view: +1 X wins, -1 O wins, 0 draw. `player` is to move.
+fn minimax(b: [Cell], player: Cell) -> int {
+    let w = winner(b)
+    if w == Cell.X { return 1 }
+    if w == Cell.O { return -1 }
+    if is_full(b) { return 0 }
+    var best = if player == Cell.X { -2 } else { 2 }
+    for i in 0..9 {
+        if b[i] != Cell.Empty { continue }
+        b[i] = player
+        let score = minimax(b, other(player))
+        b[i] = Cell.Empty
+        if player == Cell.X { best = max(best, score) } else { best = min(best, score) }
+    }
+    return best
+}
+
+// the index of the best move for `player`
+fn best_move(b: [Cell], player: Cell) -> int {
+    var best_i = -1
+    var best_score = if player == Cell.X { -2 } else { 2 }
+    for i in 0..9 {
+        if b[i] != Cell.Empty { continue }
+        b[i] = player
+        let score = minimax(b, other(player))
+        b[i] = Cell.Empty
+        if (player == Cell.X and score > best_score) or (player == Cell.O and score < best_score) {
+            best_score = score
+            best_i = i
+        }
+    }
+    return best_i
+}
+
+fn main() {
+    for text in ["XXXOO....", "XOXOXOOXO", "XOXXOOOXX", "X.O.X.O..", "........."] {
+        let b = parse_board(text)
+        show(b)
+        println("=> {status(b)}")
+        println()
+    }
+
+    // value of the empty board with perfect play
+    let empty = parse_board(".........")
+    println("empty board with perfect play: score {minimax(empty, Cell.X)} (0 means a draw)")
+
+    // X to move; there is a winning move at once
+    let b = parse_board("XX.OO....")
+    println("X to move, best move: {best_move(b, Cell.X)}")
+    println("O to move, best move: {best_move(b, Cell.O)}")
+
+    // let the computer play against itself
+    let game = parse_board(".........")
+    var player = Cell.X
+    var moves: [int] = []
+    while winner(game) == Cell.Empty and not is_full(game) {
+        let m = best_move(game, player)
+        game[m] = player
+        moves.push(m)
+        player = other(player)
+    }
+    println("self-play moves: {moves}")
+    show(game)
+    println("=> {status(game)}")
+}

@@ -1,0 +1,6 @@
+// a deferred statement must not be able to use a variable that is declared after it
+fn main() {
+    defer println("later " + str(y))
+    let y = 5
+    println("body")
+}

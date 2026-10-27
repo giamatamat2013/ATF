@@ -1,0 +1,32 @@
+// reading stdin: input() with prompt, read_line() with CRLF, empty lines, very long lines,
+// a CRLF split across the 64 KB read buffer, unicode, last line without newline, read_all_stdin
+fn main() {
+    let name = input("name? ")
+    println("[{name}]")
+    let l1 = read_line()
+    println(l1, l1!.len())
+    let empty = read_line()
+    println("empty:", empty, empty!.len())
+    let long = read_line()!
+    println("long:", long.len(), long[0..3], long.count("a"), long.ends_with("z"))
+    let after = read_line()
+    println("after:", after!.len(), after!.count("b"), after!.contains("\r"))
+    let uni = read_line()!
+    println("unicode:", uni, uni.len())
+    var nums = 0
+    var total = 0
+    loop {
+        let l = read_line()
+        if l == nil { break }
+        let t = l!.trim()
+        if t == "END" { break }
+        if let n = t.parse_int() {
+            nums += 1
+            total += n
+        }
+    }
+    println("numbers:", nums, total)
+    let rest = read_all_stdin()
+    println("rest:", rest.lines(), rest.len())
+    println("eof:", read_line(), "[" + input() + "]")
+}

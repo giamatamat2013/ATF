@@ -1,0 +1,5 @@
+struct P { name: str, age: int }
+fn main() {
+    let p = P("a", 1)
+    println(p.nmae)
+}

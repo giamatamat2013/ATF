@@ -1,0 +1,72 @@
+// nqueens.atf - place N queens on an N x N board so that none attack each other.
+// Shows: backtracking with recursion, arrays used as sets of columns / diagonals,
+//        counting all solutions, printing the first one.
+// Run:   python run_atf.py run examples/nqueens.atf
+
+struct Solver {
+    n: int,
+    cols: [bool],       // column in use?
+    diag1: [bool],      // "/" diagonals in use?
+    diag2: [bool],      // "\" diagonals in use?
+    queens: [int],      // queens[row] = column of the queen in that row
+    count: int,
+    first: [int]
+}
+
+impl Solver {
+    fn new(n: int) -> Solver {
+        return Solver{
+            n: n,
+            cols: array_make::<bool>(n),
+            diag1: array_make::<bool>(2 * n),
+            diag2: array_make::<bool>(2 * n),
+            queens: array_make::<int>(n),
+            count: 0,
+            first: []
+        }
+    }
+
+    fn place(self, row: int) {
+        if row == self.n {
+            self.count += 1
+            if self.first.len() == 0 { self.first = self.queens.copy() }
+            return
+        }
+        for c in 0..self.n {
+            let d1 = row + c
+            let d2 = row - c + self.n
+            if self.cols[c] or self.diag1[d1] or self.diag2[d2] { continue }
+            self.cols[c] = true
+            self.diag1[d1] = true
+            self.diag2[d2] = true
+            self.queens[row] = c
+            self.place(row + 1)
+            self.cols[c] = false
+            self.diag1[d1] = false
+            self.diag2[d2] = false
+        }
+    }
+}
+
+fn show(n: int, queens: [int]) {
+    for row in 0..n {
+        var cells: [str] = []
+        for c in 0..n {
+            cells.push(if queens[row] == c { "Q" } else { "." })
+        }
+        println(" ".join(cells))
+    }
+}
+
+fn main() {
+    for n in 1..=9 {
+        let s = Solver.new(n)
+        s.place(0)
+        println("{n} queens: {s.count} solutions")
+    }
+
+    let s = Solver.new(8)
+    s.place(0)
+    println("first solution for 8 queens: {s.first}")
+    show(8, s.first)
+}

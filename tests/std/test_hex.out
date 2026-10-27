@@ -1,0 +1,51 @@
+ok   encode upper "": ""
+ok   encode lower "": ""
+ok   decode "": ""
+ok   decode lower "": ""
+ok   encode upper "f": "66"
+ok   encode lower "f": "66"
+ok   decode "66": "f"
+ok   decode lower "66": "f"
+ok   encode upper "fo": "666F"
+ok   encode lower "fo": "666f"
+ok   decode "666F": "fo"
+ok   decode lower "666f": "fo"
+ok   encode upper "foo": "666F6F"
+ok   encode lower "foo": "666f6f"
+ok   decode "666F6F": "foo"
+ok   decode lower "666f6f": "foo"
+ok   encode upper "foob": "666F6F62"
+ok   encode lower "foob": "666f6f62"
+ok   decode "666F6F62": "foob"
+ok   decode lower "666f6f62": "foob"
+ok   encode upper "fooba": "666F6F6261"
+ok   encode lower "fooba": "666f6f6261"
+ok   decode "666F6F6261": "fooba"
+ok   decode lower "666f6f6261": "fooba"
+ok   encode upper "foobar": "666F6F626172"
+ok   encode lower "foobar": "666f6f626172"
+ok   decode "666F6F626172": "foobar"
+ok   decode lower "666f6f626172": "foobar"
+ok   encode binary: "00017f80feff"
+ok   encode binary upper: "00017F80FEFF"
+ok   decode mixed case: "deadbeef"
+ok   decode 0x prefix: "cafe"
+ok   decode spaces: "deadbeef"
+ok   encode utf8: "c3a9e298ba"
+all bytes: 512 00010203040506070809 f6f7f8f9fafbfcfdfeff true
+ok   encode bytes: "01abcdef"
+ok   encode bytes upper: "01ABCDEF"
+decode bytes: [1, 171, 205, 239]
+decode bytes error: "invalid hex digit 'g' at position 1"
+odd length: Err(odd number of hex digits (the last digit at position 2 has no partner))
+bad digit: Err(invalid hex digit 'z' at position 2)
+bad byte: Err(invalid hex digit byte 0x01 at position 2)
+space inside byte: Err(whitespace inside a byte at position 1 (hex digits come in pairs))
+only prefix: Ok()
+empty: Ok()
+00000000  48 65 6c 6c 6f 2c 20 68  65 78 20 64 75 6d 70 21  |Hello, hex dump!|
+00000010  0a 00 01 02 ff 20 41 54  46                       |..... ATF|
+00000000  65 78 61 63 74 6c 79 20  73 69 78 74 65 65 6e 21  |exactly sixteen!|
+00000000  73 68 6f 72 74                                    |short|
+(end of dumps)
+failures: 0

@@ -1,0 +1,42 @@
+// fizzbuzz.atf - the classic interview question, three ways.
+// Shows: for with ranges, if / else if, match on a tuple, step.
+// Run:   python run_atf.py run examples/fizzbuzz.atf
+
+fn fizzbuzz(n: int) -> str {
+    if n % 15 == 0 { return "FizzBuzz" }
+    if n % 3 == 0 { return "Fizz" }
+    if n % 5 == 0 { return "Buzz" }
+    return str(n)
+}
+
+// the same with match on a tuple of remainders
+fn fizzbuzz_match(n: int) -> str {
+    return match (n % 3, n % 5) {
+        (0, 0) => "FizzBuzz"
+        (0, _) => "Fizz"
+        (_, 0) => "Buzz"
+        _ => str(n)
+    }
+}
+
+fn main() {
+    var line: [str] = []
+    for i in 1..=20 {
+        line.push(fizzbuzz(i))
+    }
+    println(", ".join(line))
+
+    // both versions must agree for the first 100 numbers
+    var same_count = 0
+    for i in 1..=100 {
+        if fizzbuzz(i) == fizzbuzz_match(i) { same_count += 1 }
+    }
+    println("versions agree on {same_count} of 100 numbers")
+
+    // a comprehension, and step
+    let multiples = [i for i in 0..=30 step 5]
+    println(multiples)
+    for i in 100..=105 {
+        println("{i:>3}: {fizzbuzz_match(i)}")
+    }
+}

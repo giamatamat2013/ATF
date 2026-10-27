@@ -1,0 +1,10 @@
+// array_make::<str>(n) must give n empty strings (the tutorial says "zeros, or false, or empty text")
+// actual: the elements are null pointers and any use of them crashes the program (access violation)
+fn main() {
+    let a = array_make::<str>(2)
+    println(a.len())
+    println(a[0].len(), "[" + a[1] + "]")
+    println(a)
+    let b = array_make::<[int]>(1)
+    println(b[0].len(), b)
+}

@@ -1,0 +1,14 @@
+evens: [0, 2, 4, 6, 8, 10]  threes: [0, 3, 6, 9]
+union:        [0, 2, 3, 4, 6, 8, 9, 10]
+intersection: [0, 6]
+difference:   [2, 4, 8, 10]
+has 6? true  has 7? false  size 6
+remove 6: true  remove 7: false  now [0, 2, 4, 8, 10]
+["to", "be", "or", "not", "that", "is", "the", "question"]
+min 4, max 42, average 18.00
+(1, "one", 1.0) 1 one 1.0
+[(1, "a"), (2, "b"), (3, "c")]
+(2, 3) holds treasure
+(5, 5) holds nothing
+keys: [(0, 0), (2, 3), (-1, 4)]
+has (0, 0)? true  has (1, 1)? false

@@ -1,0 +1,35 @@
+// geometry.atf - a small module imported by examples/modules.atf.
+// Everything declared here lives in the same global namespace as the importing program,
+// so the names are prefixed to avoid clashes.
+
+const GEO_ORIGIN_NAME = "origin"
+
+struct Vec {
+    x: float,
+    y: float
+}
+
+impl Vec {
+    fn op_add(self, o: Vec) -> Vec { return Vec(self.x + o.x, self.y + o.y) }
+    fn op_sub(self, o: Vec) -> Vec { return Vec(self.x - o.x, self.y - o.y) }
+    fn op_mul(self, k: float) -> Vec { return Vec(self.x * k, self.y * k) }
+    fn op_neg(self) -> Vec { return Vec(-self.x, -self.y) }
+    fn length(self) -> float { return sqrt(self.x * self.x + self.y * self.y) }
+    fn dot(self, o: Vec) -> float { return self.x * o.x + self.y * o.y }
+    fn to_str(self) -> str { return "<{self.x}, {self.y}>" }
+}
+
+fn geo_distance(a: Vec, b: Vec) -> float {
+    return (a - b).length()
+}
+
+// area of a polygon given by its corners (shoelace formula)
+fn geo_polygon_area(points: [Vec]) -> float {
+    var sum = 0.0
+    for i in 0..points.len() {
+        let p = points[i]
+        let q = points[(i + 1) % points.len()]
+        sum += p.x * q.y - q.x * p.y
+    }
+    return fabs(sum) / 2.0
+}

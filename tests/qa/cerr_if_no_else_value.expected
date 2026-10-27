@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: an 'if' used as a value needs an 'else' branch
+  --> cerr_if_no_else_value.atf:2:13
+ 2 |     let x = if true { 1 }
+   |             ^

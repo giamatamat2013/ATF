@@ -1,0 +1,6 @@
+fn a() -> Result<int, str> { return Result.Ok(1) }
+fn b() -> Result<int, int> {
+    let x = a()?
+    return Result.Ok(x)
+}
+fn main() { println(b()) }

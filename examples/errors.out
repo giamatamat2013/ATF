@@ -1,0 +1,21 @@
+index of 15: 2  index of 99: nil
+with default: -1
+found 23 at 4
+30 + 12 = 42
+30 + abc failed: 'abc' is not a number
+200 + 1 failed: 200 is not a believable age
+42 0 true
+risky(0) -> "index 5 is out of range (length 3)"
+risky(1) -> "division by zero"
+risky(2) -> "tried to unwrap a nil value (use  x ?? default  or  if let v = x )"
+risky(3) -> "custom failure #3"
+risky(4) -> "key not found: \"zzz\""
+risky(5) -> "checked_div: divisor must not be zero"
+risky(6) -> "called unwrap() on an Err: \"'x' is not a number\""
+fine
+risky(7) -> nil
+defer:
+  working
+  cleanup 2 (runs first)
+  cleanup 1 (runs last)
+caught: "boom" - still running

@@ -1,0 +1,4 @@
+fn twice(x: int) -> int { return x * 2 }
+fn main() {
+    println(twice("4"))
+}

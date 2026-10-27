@@ -1,0 +1,31 @@
+struct Node { left: Node?, right: Node?, v: int }
+
+fn build(d: int) -> Node? {
+    if d == 0 { return nil }
+    return Node{ left: build(d - 1), right: build(d - 1), v: d }
+}
+
+fn count(n: Node?) -> int {
+    if n == nil { return 0 }
+    return 1 + count(n!.left) + count(n!.right)
+}
+
+fn main() {
+    let t = clock()
+    let keep = build(16)
+    var total = 0
+    for i in 0..200 {
+        let tmp = build(14)
+        total += count(tmp)
+    }
+    println(total, count(keep))
+    var s = ""
+    for i in 0..50000 { s = s + "ab" }
+    println(s.len())
+    var words: [str] = []
+    for i in 0..300000 { words.push("w{i}") }
+    var m: {str: int} = {}
+    for w in words { m[w] = w.len() }
+    println(m.len(), gc_runs() > 0)
+    println("time", clock() - t, gc_live_bytes() / 1024 / 1024, "MB live")
+}

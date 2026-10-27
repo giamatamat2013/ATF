@@ -1,0 +1,93 @@
+// optionals of every kind: int?, float?, bool?, str?, struct?, [T]?, {K: V}?, fn?, nested in structs
+struct Person { name: str, age: int?, boss: Person?, tags: [str]? }
+
+fn find_idx(xs: [int], x: int) -> int? {
+    for i, v in xs { if v == x { return i } }
+    return nil
+}
+
+fn maybe_str(b: bool) -> str? { if b { return "yes" } return nil }
+fn maybe_float(b: bool) -> float? { if b { return 0.0 } return nil }
+fn maybe_bool(b: int) -> bool? {
+    if b == 0 { return false }
+    if b == 1 { return true }
+    return nil
+}
+fn maybe_arr(n: int) -> [int]? {
+    if n < 0 { return nil }
+    return range(n)
+}
+fn boss_name(p: Person) -> str? {
+    let b = p.boss?
+    return b.name
+}
+fn boss_boss_age(p: Person) -> int? {
+    let b = p.boss?
+    let bb = b.boss?
+    let a = bb.age?
+    return a + 1000
+}
+
+fn main() {
+    // zero values must be distinguishable from nil
+    let z = find_idx([5, 6], 5)
+    println(z, z == nil, z == 0, z ?? -1, find_idx([5], 9) ?? -1)
+    println(maybe_float(true), maybe_float(false), maybe_float(true) == 0.0, maybe_float(true) ?? 9.5)
+    println(maybe_bool(0), maybe_bool(1), maybe_bool(2), maybe_bool(0) == false, maybe_bool(2) == nil)
+    println(maybe_str(true), maybe_str(false), maybe_str(true)!.len(), maybe_str(false) ?? "default")
+    println(maybe_arr(3), maybe_arr(-1), maybe_arr(0), maybe_arr(0) == nil, maybe_arr(2)!.len())
+    // optional struct chains
+    let ceo = Person("Ceo", nil, nil, nil)
+    let mgr = Person("Mgr", 50, ceo, ["a"])
+    let dev = Person("Dev", 30, mgr, nil)
+    println(boss_name(dev), boss_name(ceo), boss_boss_age(dev), boss_boss_age(mgr))
+    ceo.age = 70
+    println(boss_boss_age(dev), dev.boss!.boss!.age!, dev.tags == nil, mgr.tags!)
+    println(dev.boss!.name, mgr.boss!.boss == nil)
+    // if let / while let
+    if let a = dev.age { println("age", a) }
+    if let a = ceo.boss { println("unexpected", a.name) } else { println("ceo has no boss") }
+    var cur: Person? = dev
+    var chain: [str] = []
+    while let p = cur {
+        chain.push(p.name)
+        cur = p.boss
+    }
+    println(chain)
+    // assigning nil and values
+    var o: int? = nil
+    println(o)
+    o = 5
+    println(o, o! * 2)
+    o = nil
+    println(o ?? 0)
+    var so: str? = "x"
+    so = nil
+    println(so, so == nil)
+    // ?? chains and ?? with expressions
+    let n1: int? = nil
+    let n2: int? = nil
+    let n3: int? = 3
+    println(n1 ?? n2 ?? n3 ?? 0, n1 ?? 7 + 1, (n1 ?? 7) + 1)
+    // optional in collections
+    var arr: [Person?] = [dev, nil, ceo]
+    var names: [str] = []
+    for p in arr { names.push(if p == nil { "-" } else { p!.name }) }
+    println(names)
+    let m: {str: int?} = {"a": nil, "b": 0}
+    println(m["a"], m["b"], m.try_get("c"), m.get("a", 5))
+    // optional function values
+    var cb: (fn(int) -> int)? = nil
+    println(cb == nil)
+    cb = |x| x + 1
+    if let f = cb { println(f(1)) }
+    // optional comparison
+    let p1: int? = 4
+    let p2: int? = 4
+    let p3: int? = nil
+    println(p1 == p2, p1 == p3, p3 == nil, p1 != nil, p1 == 4, p3 != 4)
+    let s1: str? = "ab"
+    println(s1 == "ab", s1 == "a" + "b", s1 != nil)
+    // interpolation of optionals
+    println("p1={p1} p3={p3} s1={s1}")
+}

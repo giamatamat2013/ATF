@@ -1,0 +1,18 @@
+Result.Ok(6) Result.Err("not a number: x") Result.Err("negative: -3")
+true true 7 -1
+8 nil "not a number: x" nil
+4
+Result.Ok(3) Result.Err(MyErr.NotFound("zz")) Result.Err(MyErr.Invalid(-5)) Result.Ok(0)
+missing key nope
+Result.Ok("ok 42") Result.Err("not a number: q")
+65 nil nil
+Result.Ok([1, 2]) 2
+Result.Err(["e1", "e2"]) 2
+true
+10 ["d2", "d1"]
+20 ["body", "d3", "d2", "d1"]
+30 ["body", "d3", "d2", "d1"]
+200 ["x at exit = 2"]
+["iter 0", "loop end 0", "loop end 1", "iter 2", "loop end 2", "loop end 3", "after loop"]
+["main body", "block a", "block b"]
+Result.Ok(12) Result.Err("not a number: bad") ["parsed 12", "cleanup 12", "cleanup bad"]

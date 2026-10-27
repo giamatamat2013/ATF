@@ -1,0 +1,103 @@
+// string_utils.atf - a toolbox of small string functions.
+// Shows: string methods (slicing, find, split, replace, upper/lower), bytes and chars,
+//        loops over text, chr / ord, building strings with a StrBuilder.
+// Run:   python run_atf.py run examples/string_utils.atf
+
+fn is_palindrome(s: str) -> bool {
+    // keep only letters and digits, lower-cased
+    var cleaned = ""
+    for c in s.lower() {
+        let b = c.byte_at(0)
+        if b.is_alpha() or b.is_digit() { cleaned = cleaned + c }
+    }
+    return cleaned == cleaned.reverse()
+}
+
+fn count_vowels(s: str) -> int {
+    var n = 0
+    for c in s.lower() {
+        if c in "aeiou" { n += 1 }
+    }
+    return n
+}
+
+fn title_case(s: str) -> str {
+    var words: [str] = []
+    for w in s.split(" ") {
+        words.push(w.capitalize())
+    }
+    return " ".join(words)
+}
+
+fn caesar(s: str, shift: int) -> str {
+    var sb = str_builder()
+    for c in s {
+        let b = c.byte_at(0)
+        if b >= 'a' and b <= 'z' {
+            sb.add(chr((b - 'a' + shift + 26) % 26 + 'a'))
+        } else if b >= 'A' and b <= 'Z' {
+            sb.add(chr((b - 'A' + shift + 26) % 26 + 'A'))
+        } else {
+            sb.add(c)
+        }
+    }
+    return sb.finish()
+}
+
+fn is_anagram(a: str, b: str) -> bool {
+    let x = a.lower().chars()
+    let y = b.lower().chars()
+    x.sort()
+    y.sort()
+    return x == y
+}
+
+// squeeze runs of spaces into one space
+fn squeeze(s: str) -> str {
+    return " ".join(s.split_whitespace())
+}
+
+fn truncate(s: str, n: int) -> str {
+    if s.len() <= n { return s }
+    return s[..n - 3] + "..."
+}
+
+fn main() {
+    let s = "  Hello,   World!  "
+    println("[{s}]")
+    println("[{s.trim()}] trim")
+    println("[{squeeze(s)}] squeeze")
+    println(s.trim().upper(), s.trim().lower(), s.trim().len())
+
+    let t = "the quick brown fox"
+    println(title_case(t))
+    println("vowels in '{t}': {count_vowels(t)}")
+    println("words:", t.split(" "), "count:", t.split(" ").len())
+    println("find 'quick':", t.find("quick"), " find 'cat':", t.find("cat"), " rfind 'o':", t.rfind("o"))
+    println("slices:", t[4..9], t[..3], t[16..], t[4..9].upper())
+    println("starts with 'the'?", t.starts_with("the"), " ends with 'dog'?", t.ends_with("dog"))
+    println("replace:", t.replace("quick", "slow").replace(" ", "_"))
+    println("count of 'o':", t.count("o"), " reversed:", t.reverse())
+    println("repeat:", "ab".repeat(4), "-=" * 5)
+    println("pad:", "[" + "7".pad_left(3) + "]", "[" + "7".pad_right(3) + "]", "[" + pad_zero("7", 3) + "]")
+
+    for p in ["A man, a plan, a canal: Panama", "Hello", "Was it a car or a cat I saw?"] {
+        println("palindrome? {truncate(p, 20):<20} -> {is_palindrome(p)}")
+    }
+
+    let secret = caesar("Attack at Dawn!", 3)
+    println(secret, "->", caesar(secret, -3))
+    println("anagrams:", is_anagram("Listen", "Silent"), is_anagram("apple", "papel"), is_anagram("abc", "abd"))
+
+    // characters and codes
+    println("ord('A') =", ord("A"), " chr(97) =", chr(97), " chr(955) =", chr(955))
+    var codes: [int] = []
+    for c in "Hi!" { codes.push(ord(c)) }
+    println("codes of 'Hi!':", codes)
+
+    // numbers <-> text
+    println("12" + "34", int("12") + int("34"), "3.5".to_float() * 2.0)
+    println("12x".parse_int(), "-17".parse_int(), " 42 ".parse_int(), "0xff".parse_int())
+    println("1,2,3".split(",").map(|x| x.to_int()).sum())
+    println(255.to_hex(), 255.to_bin(), "ff".parse_int_base(16))
+}

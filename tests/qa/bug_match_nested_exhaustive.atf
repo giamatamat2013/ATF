@@ -1,0 +1,34 @@
+// nested enum patterns that together cover every case are reported as non-exhaustive
+enum Inner { A, B(int) }
+enum Outer { X(Inner), Y }
+
+fn f(o: Outer) -> int {
+    return match o {
+        Outer.X(Inner.A) => 1
+        Outer.X(Inner.B(n)) => n
+        Outer.Y => 0
+    }
+}
+
+fn g(r: Result<int, Inner>) -> str {
+    return match r {
+        Result.Ok(v) => "ok {v}"
+        Result.Err(Inner.A) => "a"
+        Result.Err(Inner.B(n)) => "b {n}"
+    }
+}
+
+fn h(p: (bool, bool)) -> int {
+    return match p {
+        (true, true) => 3
+        (true, false) => 2
+        (false, true) => 1
+        (false, false) => 0
+    }
+}
+
+fn main() {
+    println(f(Outer.X(Inner.A)), f(Outer.X(Inner.B(7))), f(Outer.Y))
+    println(g(Result.Ok(1)), g(Result.Err(Inner.A)), g(Result.Err(Inner.B(2))))
+    println(h((true, false)), h((false, false)))
+}

@@ -1,0 +1,24 @@
+// args_demo.atf - command line arguments, environment variables and the exit code.
+// Shows: fn main(args: [str]) -> int, getenv (str?), exit codes, eprintln for errors.
+// Run:   python run_atf.py run examples/args_demo.atf
+//        python run_atf.py run examples/args_demo.atf 3 4 5      (sums the numbers)
+
+fn main(args: [str]) -> int {
+    println("got {args.len()} argument(s)")
+    if args.len() == 0 {
+        println("usage: args_demo number...   (try: python run_atf.py run examples/args_demo.atf 3 4 5)")
+        return 0
+    }
+    var total = 0
+    for i in 0..args.len() {
+        let n = args[i].parse_int()
+        if n == nil {
+            eprintln("error: '{args[i]}' is not a number")
+            return 2
+        }
+        println("  arg {i}: {n!}")
+        total += n!
+    }
+    println("sum = {total}")
+    return 0
+}

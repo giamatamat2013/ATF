@@ -1,0 +1,1001 @@
+// Expression checking (port of atf/check_expr.py, first half)
+import "util"
+import "ast"
+import "types"
+import "tir"
+import "tirutil"
+import "checker"
+import "lexer"
+
+const END_SENTINEL = 0x7FFFFFFFFFFFFFFF
+
+fn int_bin_name(op: str) -> str? {
+    return match op {
+        "+" => "add"
+        "-" => "sub"
+        "*" => "mul"
+        "/" => "div"
+        "%" => "mod"
+        "&" => "and"
+        "|" => "or"
+        "^" => "xor"
+        "<<" => "shl"
+        ">>" => "shr"
+        ">>>" => "ushr"
+        _ => nil
+    }
+}
+
+fn flt_bin_name(op: str) -> str? {
+    return match op {
+        "+" => "fadd"
+        "-" => "fsub"
+        "*" => "fmul"
+        "/" => "fdiv"
+        _ => nil
+    }
+}
+
+fn cmp_name(op: str) -> str? {
+    return match op {
+        "<" => "lt"
+        "<=" => "le"
+        ">" => "gt"
+        ">=" => "ge"
+        "==" => "eq"
+        "!=" => "ne"
+        _ => nil
+    }
+}
+
+fn arith_method(op: str) -> str? {
+    return match op {
+        ">>>" => "op_ushr"
+        "+" => "op_add"
+        "-" => "op_sub"
+        "*" => "op_mul"
+        "/" => "op_div"
+        "%" => "op_mod"
+        "**" => "op_pow"
+        "&" => "op_and"
+        "|" => "op_or"
+        "^" => "op_xor"
+        "<<" => "op_shl"
+        ">>" => "op_shr"
+        _ => nil
+    }
+}
+
+fn is_int_or_byte(t: Type) -> bool { return t == TInt or t == TByte }
+fn is_numeric_t(t: Type) -> bool { return t == TInt or t == TFloat or t == TByte }
+
+// is `t` (an optional type expression) equal to k?
+fn ty_is(t: Type?, k: Type) -> bool {
+    if t == nil { return false }
+    return t!.eq(k)
+}
+
+fn opt_inner(t: Type) -> Type {
+    return match t {
+        Type.Opt(i) => i
+        _ => panic("opt_inner of a non-optional type")
+    }
+}
+
+fn ptr_elem(t: Type) -> Type {
+    return match t {
+        Type.Ptr(e) => e
+        _ => panic("ptr_elem of a non-pointer type")
+    }
+}
+
+fn fn_params(t: Type) -> [Type] {
+    return match t {
+        Type.Func(ps, r) => ps
+        _ => panic("fn_params of a non-function type")
+    }
+}
+
+fn fn_ret(t: Type) -> Type {
+    return match t {
+        Type.Func(ps, r) => r
+        _ => panic("fn_ret of a non-function type")
+    }
+}
+
+fn is_func(t: Type) -> bool {
+    return match t {
+        Type.Func(ps, r) => true
+        _ => false
+    }
+}
+
+fn is_iface(t: Type) -> bool {
+    return match t {
+        Type.Iface(i) => true
+        _ => false
+    }
+}
+
+fn is_tuple(t: Type) -> bool {
+    return match t {
+        Type.Tuple(es) => true
+        _ => false
+    }
+}
+
+fn tuple_elems(t: Type) -> [Type] {
+    return match t {
+        Type.Tuple(es) => es
+        _ => panic("tuple_elems of a non-tuple type")
+    }
+}
+
+fn is_struct_t(t: Type) -> bool {
+    return match t {
+        Type.Struct(i, a) => true
+        _ => false
+    }
+}
+
+fn is_enum_t(t: Type) -> bool {
+    return match t {
+        Type.Enum(i, a) => true
+        _ => false
+    }
+}
+
+fn is_simple_enum(t: Type) -> bool {
+    return match t {
+        Type.Enum(i, a) => i.simple
+        _ => false
+    }
+}
+
+fn type_args(t: Type) -> [Type] {
+    return match t {
+        Type.Struct(i, a) => a
+        Type.Enum(i, a) => a
+        _ => []
+    }
+}
+
+fn wrap_nil_const(ty: Type, pos: Pos) -> TExpr { return c_nil(ty, pos) }
+
+impl Checker {
+    // ------------------------------------------------------------------ dispatch
+    fn ce(self, e: Expr, expected: Type? = nil) -> TExpr {
+        match e.k {
+            ExprK.IntLit(v) => return self.x_IntLit(e, v, expected)
+            ExprK.FloatLit(v) => return c_float(v, e.pos)
+            ExprK.StrLit(parts) => return self.x_StrLit(e, parts)
+            ExprK.CharLit(v) => {
+                if v < 256 { return c_int(v, TByte, e.pos) }
+                return c_int(v, TInt, e.pos)
+            }
+            ExprK.BoolLit(v) => return c_bool(v, e.pos)
+            ExprK.NilLit => {
+                if expected != nil and (is_opt(expected!) or is_ptr(expected!)) { return c_nil(expected!, e.pos) }
+                return c_nil(TNil, e.pos)
+            }
+            ExprK.Ident(name, targs) => return self.x_Ident(e, name, expected)
+            ExprK.Unary(op, x) => return self.x_Unary(e, op, x, expected)
+            ExprK.Binary(op, l, r) => return self.x_Binary(e, op, l, r, expected)
+            ExprK.Call(callee, args) => return self.x_Call(e, callee, args, expected)
+            ExprK.Field(obj, name) => return self.x_Field(e, obj, name, expected)
+            ExprK.TupleField(obj, idx) => {
+                let o = self.ce_value(obj)
+                return self.tuple_field_of(o, idx, e.pos)
+            }
+            ExprK.Index(obj, idx) => return self.x_Index(e, obj, idx, expected)
+            ExprK.Range(lo, hi, inclusive, stp) => {
+                fail(e.pos, "a range like a..b can only be used in a 'for' loop, a slice  x[a..b]  or a test  x in a..b")
+            }
+            ExprK.ArrayLit(elems) => return self.x_ArrayLit(e, elems, expected)
+            ExprK.MapLit(pairs) => return self.x_MapLit(e, pairs, expected)
+            ExprK.TupleLit(elems) => return self.x_TupleLit(e, elems, expected)
+            ExprK.StructLit(name, fields) => return self.x_StructLit(e, name, fields, expected)
+            ExprK.Lambda(params, ret, body) => return self.x_Lambda(e, params, ret, body, expected)
+            ExprK.IfExpr(cond, then, els) => return self.x_IfExpr(e, cond, then, els, expected)
+            ExprK.MatchExpr(subject, arms) => return self.x_MatchExpr(e, subject, arms, expected)
+            ExprK.BlockExpr(block) => return self.x_BlockExpr(e, block, expected)
+            ExprK.Cast(x, ty) => return self.x_Cast(e, x, ty, expected)
+            ExprK.Unwrap(x) => return self.x_Unwrap(e, x)
+            ExprK.Try(x) => return self.x_Try(e, x)
+            ExprK.Coalesce(l, r) => return self.x_Coalesce(e, l, r)
+        }
+    }
+
+    fn ce_as(self, e: Expr, ty: Type) -> TExpr {
+        let te = self.ce(e, ty)
+        return self.coerce(te, ty, e.pos)
+    }
+
+    fn ce_value(self, e: Expr, expected: Type? = nil) -> TExpr {
+        let te = self.ce(e, expected)
+        if te.ty == TVoid { fail(e.pos, "this expression does not produce a value") }
+        return te
+    }
+
+    // ------------------------------------------------------------------ coercion
+    fn mismatch(self, found: Type, expected: Type, pos: Pos, extra: str = "") -> never {
+        var hint = extra
+        if hint == "" {
+            if expected == TInt and found == TFloat {
+                hint = "use int(x) to convert a float to an int"
+            } else if expected == TStr and (found == TInt or found == TFloat or found == TBool or found == TByte) {
+                hint = "use str(x) to convert it to text"
+            } else if (expected == TInt or expected == TFloat) and found == TStr {
+                hint = "use int(s) or float(s) to convert text to a number"
+            } else if is_opt(found) and opt_inner(found) == expected {
+                hint = "this value may be nil: use  x!  to unwrap it, or  x ?? default"
+            } else if expected == TBool and (found == TInt or found == TByte) {
+                hint = "conditions must be true/false, e.g.  x != 0"
+            } else if found == TNil and not is_opt(expected) {
+                hint = "only optional types can hold nil: declare it as  {expected.to_str()}?"
+            } else {
+                match expected {
+                    Type.Iface(info) => hint = self.iface_problem(found, info)
+                    _ => {}
+                }
+            }
+        }
+        fail(pos, "type mismatch: expected {expected.to_str()} but found {found.to_str()}", hint)
+    }
+
+    fn try_coerce(self, e: TExpr, target: Type) -> TExpr? {
+        let t = e.ty
+        if t == target { return e }
+        if t == TNever { return e }
+        if target == TFloat and (t == TInt or t == TByte) {
+            if is_const_of(e, CK.Int) { return c_float(const_ival(e) as float, e.pos) }
+            return texpr(TK.Cvt("i2f", e), TFloat, e.pos)
+        }
+        if target == TInt and t == TByte {
+            if is_const(e) { return mk_const_like(e, TInt, e.pos) }
+            return texpr(TK.Cvt("nop", e), TInt, e.pos)
+        }
+        if target == TByte and t == TInt and is_const_of(e, CK.Int) and const_ival(e) >= 0 and const_ival(e) < 256 {
+            return mk_const_like(e, TByte, e.pos)
+        }
+        if is_opt(target) {
+            if t == TNil { return c_nil(target, e.pos) }
+            if is_opt(t) { return nil }
+            let inner = self.try_coerce(e, opt_inner(target))
+            if inner == nil { return nil }
+            return self.wrap_opt(inner!, target)
+        }
+        if is_ptr(target) and t == TNil { return c_nil(target, e.pos) }
+        if t == TNil and target == TNil { return e }
+        match target {
+            Type.Iface(info) => return self.to_iface(e, info)
+            _ => {}
+        }
+        return nil
+    }
+
+    // ------------------------------------------------------------------ interfaces
+    fn iface_methods(self, info: IfaceInfo) -> [IfaceMethod] {
+        if info.methods == nil {
+            var ms: [IfaceMethod] = []
+            for m in info.decl.methods {
+                var ps: [Type] = []
+                for i in 1..m.params.len() {
+                    if m.params[i].ty == nil { fail(m.params[i].pos, "interface method parameters need types") }
+                    ps.push(self.resolve_type(m.params[i].ty!, {}))
+                }
+                var r = TVoid
+                if m.ret != nil { r = self.resolve_type(m.ret!, {}) }
+                ms.push(IfaceMethod(m.name, ps, r))
+            }
+            info.methods = ms
+        }
+        return info.methods!
+    }
+
+    // the concrete method that implements interface method m for type t, or nil
+    fn iface_impl(self, t: Type, m: IfaceMethod) -> FnInst? {
+        for h in self.find_methods(t, m.name) {
+            if not h.fi.has_self or h.fi.own_tp.len() > 0 { continue }
+            var targs: [Type] = []
+            for tp in h.fi.tp_objs {
+                let b = h.binds.try_get(tp.key())
+                if b == nil { return nil }
+                targs.push(b!)
+            }
+            let sig = self.generic_sig(h.fi)
+            var bm: {str: Type} = {}
+            for i in 0..h.fi.tp_objs.len() { bm[h.fi.tp_objs[i].key()] = targs[i] }
+            let ps = sig.0
+            if ps.len() != m.params.len() + 1 { continue }
+            var ok = subst(sig.1, bm) == m.ret
+            for i in 0..m.params.len() {
+                if subst(ps[i + 1], bm) != m.params[i] { ok = false }
+            }
+            if ok { return self.get_inst(h.fi, targs) }
+        }
+        // every type can be turned into text, so  fn to_str(self) -> str  is always available
+        if m.name == "to_str" and m.params.len() == 0 and m.ret == TStr {
+            if t == TInt { return self.rt("int_to_str") }
+            if is_struct_t(t) and not self.is_array_t(t) and not self.is_map_t(t) or is_enum_t(t) or is_tuple(t) {
+                let me = self
+                return self.get_synth("str", t, TStr, 1, |i, ps| { return me.build_str(i, ps) })
+            }
+        }
+        return nil
+    }
+
+    // why type t does not implement the interface ("" if it does)
+    fn iface_problem(self, t: Type, info: IfaceInfo) -> str {
+        if t == TFloat { return "float values cannot be used as interface values" }
+        for m in self.iface_methods(info) {
+            if self.iface_impl(t, m) == nil {
+                var ps: [str] = ["self"]
+                for p in m.params { ps.push(p.to_str()) }
+                var r = ""
+                if m.ret != TVoid { r = " -> " + m.ret.to_str() }
+                return "{t.to_str()} does not have the method  fn {m.name}({ ", ".join(ps) }){r}  required by {info.name}"
+            }
+        }
+        return ""
+    }
+
+    // wrap a concrete value as an interface value: [data, method1, method2, ...]
+    fn to_iface(self, e: TExpr, info: IfaceInfo) -> TExpr? {
+        let t = e.ty
+        if t == TFloat or t == TVoid or t == TNil or t == TNever or is_opt(t) { return nil }
+        match t {
+            Type.Iface(other) => return nil
+            _ => {}
+        }
+        var vals: [TExpr] = [e]
+        for m in self.iface_methods(info) {
+            let inst = self.iface_impl(t, m)
+            if inst == nil { return nil }
+            self.ctx().inst.callees[inst!.uid] = inst!
+            var pts: [Type] = []
+            for p in inst!.params { pts.push(p.ty) }
+            vals.push(texpr(TK.FnRef(inst!), Type.Func(pts, inst!.ret), e.pos))
+        }
+        return texpr(TK.NewObj(vals), Type.Iface(info), e.pos)
+    }
+
+    // call of an interface method: the code pointer comes from the object, the data is passed as self
+    fn iface_call(self, recv: TExpr, info: IfaceInfo, name: str, args: [Arg], pos: Pos) -> TExpr? {
+        let ms = self.iface_methods(info)
+        for i in 0..ms.len() {
+            if ms[i].name != name { continue }
+            let m = ms[i]
+            if args.len() != m.params.len() {
+                fail(pos, "{info.name}.{name} takes {m.params.len()} argument(s) but {args.len()} given")
+            }
+            let stmts: [TStmt] = []
+            let r = self.bind_tmp(recv, stmts)
+            var pts: [Type] = [TInt]
+            for p in m.params { pts.push(p) }
+            let f = texpr(TK.Load(r, i + 1), Type.Func(pts, m.ret), pos)
+            var out: [TExpr] = [texpr(TK.Load(r, 0), TInt, pos)]
+            for k in 0..args.len() {
+                if args[k].name != "" { fail(args[k].pos, "named arguments cannot be used when calling an interface method") }
+                out.push(self.ce_as(args[k].expr, m.params[k]))
+            }
+            let call = texpr(TK.CallInd(f, out), m.ret, pos)
+            if stmts.len() > 0 { return texpr(TK.Seq(stmts, call), m.ret, pos) }
+            return call
+        }
+        return nil
+    }
+
+    fn coerce(self, e: TExpr, target: Type, pos: Pos? = nil, extra: str = "") -> TExpr {
+        let r = self.try_coerce(e, target)
+        if r == nil {
+            var p = e.pos
+            if pos != nil { p = pos! }
+            self.mismatch(e.ty, target, p, extra)
+        }
+        return r!
+    }
+
+    // common type of two typed expressions (for if/match branches)
+    fn join(self, a: TExpr, b: TExpr, pos: Pos) -> (TExpr, TExpr) {
+        if a.ty == TNever { return (a, b) }
+        if b.ty == TNever { return (a, b) }
+        if b.ty == TNil and not is_opt(a.ty) and a.ty != TNil and a.ty != TVoid {
+            let ot = Type.Opt(a.ty)
+            return (self.wrap_opt(a, ot), c_nil(ot, b.pos))
+        }
+        if a.ty == TNil and not is_opt(b.ty) and b.ty != TNil and b.ty != TVoid {
+            let ot = Type.Opt(b.ty)
+            return (c_nil(ot, a.pos), self.wrap_opt(b, ot))
+        }
+        let r = self.try_coerce(b, a.ty)
+        if r != nil { return (a, r!) }
+        let r2 = self.try_coerce(a, b.ty)
+        if r2 != nil { return (r2!, b) }
+        fail(pos, "the branches have different types: {a.ty.to_str()} and {b.ty.to_str()}")
+    }
+
+    fn wrap_opt(self, e: TExpr, opt: Type) -> TExpr {
+        if self.is_value_type(opt_inner(opt)) {
+            return texpr(TK.NewObj([e]), opt, e.pos)
+        }
+        return texpr(TK.Cvt("nop", e), opt, e.pos)
+    }
+
+    fn unwrap_opt(self, e: TExpr) -> TExpr {
+        let inner = opt_inner(e.ty)
+        if self.is_value_type(inner) {
+            return texpr(TK.Load(e, 0), inner, e.pos)
+        }
+        return texpr(TK.Cvt("nop", e), inner, e.pos)
+    }
+
+    fn is_simple(self, e: TExpr) -> bool {
+        return match e.k {
+            TK.Const(kind, iv, fv, sv) => true
+            TK.VarRef(v) => not v.boxed()
+            TK.GlobalRef(g) => true
+            _ => false
+        }
+    }
+
+    // returns a simple expression equal to e (adding a Decl to stmts if needed)
+    fn bind_tmp(self, e: TExpr, stmts: [TStmt], name: str = "$t") -> TExpr {
+        if self.is_simple(e) { return e }
+        let v = self.new_tmp(e.ty, name)
+        stmts.push(tstmt(SK.Decl(v, e), e.pos))
+        return texpr(TK.VarRef(v), e.ty, e.pos)
+    }
+
+    // ------------------------------------------------------------------ variables
+    fn lookup_var(self, name: str, ctx0: FnCtx? = nil) -> Var? {
+        var ctx = ctx0
+        if ctx == nil { ctx = self.cx }
+        let c = ctx!
+        var i = c.scopes.len() - 1
+        while i >= 0 {
+            let v = c.scopes[i].try_get(name)
+            if v != nil { return v }
+            i -= 1
+        }
+        if c.parent != nil {
+            let outer = self.lookup_var(name, c.parent)
+            if outer == nil { return nil }
+            var inner = c.inst.capture_inner.try_get(outer!.uid)
+            if inner == nil {
+                let nv = new_var(name, outer!.ty, outer!.mutable, outer!.pos)
+                nv.root = outer!.root_var()
+                outer!.root_var().captured = true
+                c.inst.captures.push(outer!)
+                c.inst.capture_inner[outer!.uid] = nv
+                c.inst.vars.push(nv)
+                inner = nv
+            }
+            return inner
+        }
+        return nil
+    }
+
+    fn declare_var(self, name: str, ty: Type, mutable: bool, pos: Pos) -> Var {
+        let v = new_var(name, ty, mutable, pos)
+        self.ctx().inst.vars.push(v)
+        let sc = self.ctx().scopes
+        sc[sc.len() - 1][name] = v
+        return v
+    }
+
+    fn visible_names(self) -> [str] {
+        var names: [str] = []
+        var c = self.cx
+        while c != nil {
+            for sc in c!.scopes {
+                for k in sc.keys() { names.push(k) }
+            }
+            c = c!.parent
+        }
+        for k in self.fns.keys() { names.push(k) }
+        for k in self.consts.keys() { names.push(k) }
+        for k in self.globals.keys() { names.push(k) }
+        return names
+    }
+
+    fn touch(self, v: Var) {
+        var depth = self.ctx().loop_scope_depth.len()
+        if depth > 5 { depth = 5 }
+        let r = v.root_var()
+        r.weight += int_pow(8, depth)
+    }
+
+    // ------------------------------------------------------------------ literals
+    fn x_IntLit(self, e: Expr, v: int, expected: Type?) -> TExpr {
+        if ty_is(expected, TFloat) { return c_float(v as float, e.pos) }
+        if ty_is(expected, TByte) and v >= 0 and v < 256 { return c_int(v, TByte, e.pos) }
+        return c_int(v, TInt, e.pos)
+    }
+
+    fn x_StrLit(self, e: Expr, items: [StrItem]) -> TExpr {
+        var parts: [TExpr] = []
+        for p in items {
+            match p {
+                StrItem.Lit(s) => {
+                    if s.len() > 0 {
+                        if parts.len() > 0 and is_const(parts[parts.len() - 1]) {
+                            parts[parts.len() - 1] = c_str(const_sval(parts[parts.len() - 1]) + s, e.pos)
+                        } else {
+                            parts.push(c_str(s, e.pos))
+                        }
+                    }
+                }
+                StrItem.Interp(ex, spec) => {
+                    let te = self.ce_value(ex)
+                    let s = self.format_value(te, spec, ex.pos)
+                    if is_const(s) and parts.len() > 0 and is_const(parts[parts.len() - 1]) {
+                        parts[parts.len() - 1] = c_str(const_sval(parts[parts.len() - 1]) + const_sval(s), e.pos)
+                    } else {
+                        parts.push(s)
+                    }
+                }
+            }
+        }
+        if parts.len() == 0 { return c_str("", e.pos) }
+        var r = parts[0]
+        for i in 1..parts.len() {
+            r = self.call_rt("str_concat", [r, parts[i]], [], e.pos)
+        }
+        return r
+    }
+
+    fn format_value(self, te: TExpr, spec: str, pos: Pos) -> TExpr {
+        if spec == "" { return self.str_of(te) }
+        // [<>^]? 0? width? (.prec)? [fdxXbsc]?
+        let n = spec.len()
+        var i = 0
+        var align = ""
+        if i < n and (spec.byte_at(i) == '<' or spec.byte_at(i) == '>' or spec.byte_at(i) == '^') {
+            align = spec[i..i + 1]
+            i += 1
+        }
+        var zero = false
+        if i < n and spec.byte_at(i) == '0' {
+            zero = true
+            i += 1
+        }
+        var width = ""
+        while i < n and is_digit(spec.byte_at(i)) {
+            width = width + spec[i..i + 1]
+            i += 1
+        }
+        var prec = ""
+        var has_prec = false
+        if i < n and spec.byte_at(i) == '.' {
+            var j = i + 1
+            while j < n and is_digit(spec.byte_at(j)) { j += 1 }
+            if j > i + 1 {
+                prec = spec[i + 1..j]
+                has_prec = true
+                i = j
+            }
+        }
+        var kind = ""
+        if i < n and is_spec_char(spec.byte_at(i)) {
+            kind = spec[i..i + 1]
+            i += 1
+        }
+        if i != n {
+            fail(pos, "bad format spec '\{...:{spec}\}'", "examples: \{x:.2f\}  \{n:5\}  \{s:<10\}  \{n:05\}  \{n:x\}")
+        }
+        var s = te
+        if kind == "f" or (has_prec and te.ty == TFloat) or (has_prec and kind == "") {
+            if not (te.ty == TFloat or te.ty == TInt or te.ty == TByte) {
+                fail(pos, "':.{prec}f' needs a number, found {te.ty.to_str()}")
+            }
+            let f = self.coerce(te, TFloat, pos)
+            var digits = 6
+            if prec != "" { digits = prec.to_int() }
+            s = self.call_rt("fmt_fixed", [f, self.ci(digits)])
+        } else if kind == "x" or kind == "X" or kind == "b" {
+            if not (te.ty == TInt or te.ty == TByte) {
+                fail(pos, "':{kind}' needs an int, found {te.ty.to_str()}")
+            }
+            let iv = self.coerce(te, TInt, pos)
+            var fname = "int_to_bin"
+            if kind == "x" { fname = "int_to_hex" } else if kind == "X" { fname = "int_to_HEX" }
+            s = self.call_rt(fname, [iv])
+        } else {
+            s = self.str_of(te)
+        }
+        if width != "" {
+            let w = self.ci(width.to_int())
+            if zero and align == "" and (te.ty == TInt or te.ty == TFloat or te.ty == TByte) {
+                s = self.call_rt("pad_zero", [s, w])
+            } else if align == "<" {
+                s = self.call_rt("pad_right", [s, w])
+            } else if align == "^" {
+                s = self.call_rt("pad_center", [s, w])
+            } else {
+                if align == "" and te.ty == TStr and kind != "s" {
+                    s = self.call_rt("pad_right", [s, w])
+                } else {
+                    s = self.call_rt("pad_left", [s, w])
+                }
+            }
+        }
+        return s
+    }
+
+    // ------------------------------------------------------------------ names
+    fn x_Ident(self, e: Expr, name: str, expected: Type?) -> TExpr {
+        let v = self.lookup_var(name)
+        if v != nil {
+            self.touch(v!)
+            return texpr(TK.VarRef(v!), v!.ty, e.pos)
+        }
+        let ci = self.find_const(name)
+        if ci != nil {
+            self.resolve_const(ci!)
+            let val = ci!.value!
+            if is_const(val) { return mk_const_like(val, val.ty, e.pos) }
+            return match val.k {
+                TK.GlobalRef(g) => texpr(TK.GlobalRef(g), val.ty, e.pos)
+                _ => val
+            }
+        }
+        let gi = self.find_global(name)
+        if gi != nil {
+            let g = self.resolve_global(gi!)
+            return texpr(TK.GlobalRef(g), g.ty, e.pos)
+        }
+        let fi = self.find_fn(name)
+        if fi != nil { return self.fn_value(fi!, e, expected) }
+        if name in self.structs or name in self.enums or prim_type(name) != nil {
+            var hint = ""
+            if name in self.structs { hint = "to create one use  {name}(...)  or  {name}\{ field: value \}" }
+            fail(e.pos, "'{name}' is a type, not a value", hint)
+        }
+        if name in self.failed_names { fail_silent() }
+        if name == "self" { fail(e.pos, "'self' only exists inside methods", "methods are functions written in an  impl Type \{ ... \}  block") }
+        fail(e.pos, "unknown name '{name}'", suggest(name, self.visible_names()))
+    }
+
+    // use of a top-level function as a value (closure object)
+    fn fn_value(self, fi: FnInfo, e: Expr, expected: Type?) -> TExpr {
+        var inst: FnInst? = nil
+        if fi.is_generic {
+            if expected != nil and is_func(expected!) {
+                let sig = self.generic_sig(fi)
+                let gp = sig.0
+                let gr = sig.1
+                var binds: {str: Type} = {}
+                let eps = fn_params(expected!)
+                var ok = gp.len() == eps.len()
+                if ok {
+                    for i in 0..gp.len() {
+                        if not unify(gp[i], eps[i], binds) {
+                            ok = false
+                            break
+                        }
+                    }
+                }
+                ok = ok and unify(gr, fn_ret(expected!), binds)
+                if ok {
+                    var all = true
+                    for tp in fi.tp_objs {
+                        if not (tp.key() in binds) { all = false }
+                    }
+                    ok = all
+                }
+                if ok {
+                    var targs: [Type] = []
+                    for tp in fi.tp_objs { targs.push(binds[tp.key()]) }
+                    inst = self.get_inst(fi, targs)
+                } else {
+                    fail(e.pos, "cannot infer the type parameters of '{fi.name}' here")
+                }
+            } else {
+                fail(e.pos, "generic function '{fi.name}' needs concrete types to be used as a value", "call it, or give it an expected function type")
+            }
+        } else {
+            inst = self.get_inst(fi, [])
+        }
+        let ins = inst!
+        self.ctx().inst.callees[ins.uid] = ins
+        var ptys: [Type] = []
+        for p in ins.params { ptys.push(p.ty) }
+        return texpr(TK.FnRef(ins), Type.Func(ptys, ins.ret), e.pos)
+    }
+
+    // ------------------------------------------------------------------ operators
+    fn x_Unary(self, e: Expr, op: str, ex: Expr, expected: Type?) -> TExpr {
+        var hint: Type? = nil
+        if op == "-" { hint = expected }
+        let x = self.ce_value(ex, hint)
+        let t = x.ty
+        if op == "-" {
+            if is_const_of(x, CK.Int) {
+                var rt = t
+                if t == TByte { rt = TInt }
+                return texpr(TK.Const(CK.Int, -const_ival(x), 0.0, ""), rt, e.pos)
+            }
+            if is_const_of(x, CK.Float) {
+                return texpr(TK.Const(CK.Float, 0, -const_fval(x), ""), t, e.pos)
+            }
+            if t == TFloat { return texpr(TK.Un("fneg", x), TFloat, e.pos) }
+            if t == TInt or t == TByte { return texpr(TK.Un("neg", self.coerce(x, TInt)), TInt, e.pos) }
+            return self.user_unary(x, "op_neg", e, op)
+        }
+        if op == "not" {
+            if t != TBool {
+                var hint2 = ""
+                if is_opt(t) { hint2 = "to test for nil use  x == nil" }
+                fail(e.pos, "'not' needs a true/false value, found {t.to_str()}", hint2)
+            }
+            if is_const(x) { return texpr(TK.Const(CK.Bool, 1 - const_ival(x), 0.0, ""), TBool, e.pos) }
+            return texpr(TK.Un("not", x), TBool, e.pos)
+        }
+        if op == "~" {
+            if not (t == TInt or t == TByte) { fail(e.pos, "'~' needs an int, found {t.to_str()}") }
+            return texpr(TK.Un("bnot", self.coerce(x, TInt)), TInt, e.pos)
+        }
+        fail(e.pos, "unknown operator " + op)
+    }
+
+    fn user_unary(self, x: TExpr, mname: str, e: Expr, op: str) -> TExpr {
+        let r = self.try_method(x, mname, [], e.pos)
+        if r == nil {
+            fail(e.pos, "cannot apply '{op}' to {x.ty.to_str()}", "define  fn {mname}(self) -> ...  in an impl block to support it")
+        }
+        return r!
+    }
+
+    fn num_unify(self, l: TExpr, r: TExpr) -> (TExpr, TExpr) {
+        let lt = l.ty
+        let rt = r.ty
+        if lt == rt and lt != TByte { return (l, r) }
+        if lt == TFloat or rt == TFloat { return (self.coerce(l, TFloat), self.coerce(r, TFloat)) }
+        return (self.coerce(l, TInt), self.coerce(r, TInt))
+    }
+
+    // constant folding of integer operators; nil when not foldable
+    fn fold_int(self, op: str, a: int, b: int) -> int? {
+        if op == "+" { return a + b }
+        if op == "-" { return a - b }
+        if op == "*" { return a * b }
+        if op == "&" { return a & b }
+        if op == "|" { return a | b }
+        if op == "^" { return a ^ b }
+        if op == "<<" and b >= 0 and b < 64 { return a << b }
+        if op == ">>" and b >= 0 and b < 64 { return a >> b }
+        if op == ">>>" and b >= 0 and b < 64 { return a >>> b }
+        if op == "/" and b != 0 and not (a == INT_MIN and b == -1) { return a / b }
+        if op == "%" and b != 0 and not (a == INT_MIN and b == -1) { return a % b }
+        return nil
+    }
+
+    fn x_Binary(self, e: Expr, op: str, le: Expr, re: Expr, expected: Type?) -> TExpr {
+        let pos = e.pos
+        if op == "and" or op == "or" {
+            let l = self.ce_as(le, TBool)
+            let r = self.ce_as(re, TBool)
+            if is_const(l) and is_const(r) {
+                var v = false
+                if op == "and" { v = const_ival(l) != 0 and const_ival(r) != 0 } else { v = const_ival(l) != 0 or const_ival(r) != 0 }
+                return c_bool(v, pos)
+            }
+            if op == "and" { return texpr(TK.And(l, r), TBool, pos) }
+            return texpr(TK.Or(l, r), TBool, pos)
+        }
+        if op == "in" { return self.check_in(e, le, re) }
+        var hint: Type? = nil
+        if (op == "+" or op == "-" or op == "*" or op == "/" or op == "%") and (ty_is(expected, TInt) or ty_is(expected, TFloat)) {
+            hint = expected
+        }
+        let l = self.ce_value(le, hint)
+        var rhint: Type? = nil
+        if l.ty == TInt or l.ty == TFloat or l.ty == TStr { rhint = l.ty }
+        let r = self.ce_value(re, rhint)
+        return self.binop(op, l, r, pos)
+    }
+
+    fn binop(self, op: str, l0: TExpr, r0: TExpr, pos: Pos) -> TExpr {
+        var l = l0
+        var r = r0
+        let lt = l.ty
+        let rt = r.ty
+        if cmp_name(op) != nil { return self.compare(op, l, r, pos) }
+        // strings
+        if lt == TStr and op == "+" {
+            if rt != TStr {
+                fail(pos, "cannot add str and {rt.to_str()}", "use string interpolation \"\{x\}\" or str(x) to join text with other values")
+            }
+            if is_const(l) and is_const(r) { return c_str(const_sval(l) + const_sval(r), pos) }
+            return self.call_rt("str_concat", [l, r], [], pos)
+        }
+        if lt == TStr and op == "*" and (rt == TInt or rt == TByte) {
+            return self.call_rt("str_repeat", [l, self.coerce(r, TInt)], [], pos)
+        }
+        // pointer arithmetic
+        if is_ptr(lt) {
+            if (op == "+" or op == "-") and (rt == TInt or rt == TByte) {
+                r = self.coerce(r, TInt)
+                let es = self.esize(ptr_elem(lt))
+                var off = r
+                if es != 1 { off = texpr(TK.Bin("mul", r, self.ci(es)), TInt, NOPOS) }
+                return texpr(TK.Bin(int_bin_name(op)!, l, off), lt, pos)
+            }
+            if op == "-" and rt == lt {
+                let d = texpr(TK.Bin("sub", l, r), TInt, pos)
+                let es = self.esize(ptr_elem(lt))
+                if es == 1 { return d }
+                return texpr(TK.Bin("div", d, self.ci(es)), TInt, pos)
+            }
+            fail(pos, "invalid pointer operation: {lt.to_str()} {op} {rt.to_str()}")
+        }
+        if is_numeric_t(lt) and is_numeric_t(rt) { return self.arith(op, l, r, pos) }
+        // user-defined operators
+        let mname = arith_method(op)
+        if mname != nil {
+            if not is_numeric_t(lt) {
+                let r2 = self.try_method(l, mname!, [r], pos)
+                if r2 != nil { return r2! }
+            }
+        }
+        var hint = ""
+        if mname != nil and (is_struct_t(lt) or is_enum_t(lt)) {
+            hint = "define  fn {mname!}(self, other: {rt.to_str()}) -> ...  in an impl block to support it"
+        }
+        if op == "+" and rt == TStr {
+            fail(pos, "cannot add {lt.to_str()} and str", "use string interpolation \"\{x\}\" or str(x) to join text with other values")
+        }
+        fail(pos, "cannot apply '{op}' to {lt.to_str()} and {rt.to_str()}", hint)
+    }
+
+    fn arith(self, op: str, l0: TExpr, r0: TExpr, pos: Pos) -> TExpr {
+        var l = l0
+        var r = r0
+        if op == "**" {
+            if l.ty == TFloat or r.ty == TFloat {
+                l = self.coerce(l, TFloat)
+                r = self.coerce(r, TFloat)
+                return self.call_extern("pow", [l, r], pos)
+            }
+            return self.call_rt("int_pow", [self.coerce(l, TInt), self.coerce(r, TInt)], [], pos)
+        }
+        let u = self.num_unify(l, r)
+        l = u.0
+        r = u.1
+        let t = l.ty
+        if t == TFloat {
+            let fname = flt_bin_name(op)
+            if fname != nil {
+                if is_const(l) and is_const(r) and not (op == "/" and const_fval(r) == 0.0) {
+                    let a = const_fval(l)
+                    let b = const_fval(r)
+                    var v = 0.0
+                    if op == "+" { v = a + b } else if op == "-" { v = a - b } else if op == "*" { v = a * b } else { v = a / b }
+                    return c_float(v, pos)
+                }
+                return texpr(TK.Bin(fname!, l, r), TFloat, pos)
+            }
+            if op == "%" { return self.call_extern("fmod", [l, r], pos) }
+            fail(pos, "operator '{op}' does not work on floats")
+        }
+        let iname = int_bin_name(op)
+        if iname == nil { fail(pos, "operator '{op}' does not work on ints") }
+        if is_const(l) and is_const(r) {
+            let v = self.fold_int(op, const_ival(l), const_ival(r))
+            if v != nil { return c_int(v!, TInt, pos) }
+        }
+        if (op == "/" or op == "%") and is_const(r) and const_ival(r) == 0 { fail(pos, "division by zero") }
+        return texpr(TK.Bin(iname!, l, r), TInt, pos)
+    }
+
+    fn pyop(self, op: str, a: int, b: int) -> bool {
+        return match op {
+            "<" => a < b
+            "<=" => a <= b
+            ">" => a > b
+            ">=" => a >= b
+            "==" => a == b
+            _ => a != b
+        }
+    }
+
+    fn pyopf(self, op: str, a: float, b: float) -> bool {
+        return match op {
+            "<" => a < b
+            "<=" => a <= b
+            ">" => a > b
+            ">=" => a >= b
+            "==" => a == b
+            _ => a != b
+        }
+    }
+
+    fn compare(self, op: str, l0: TExpr, r0: TExpr, pos: Pos) -> TExpr {
+        var l = l0
+        var r = r0
+        var lt = l.ty
+        var rt = r.ty
+        let cn = cmp_name(op)!
+        // nil comparisons
+        if rt == TNil or lt == TNil {
+            if op != "==" and op != "!=" { fail(pos, "nil can only be compared with == or !=") }
+            var x = r
+            if rt == TNil { x = l }
+            if not (is_opt(x.ty) or is_ptr(x.ty)) {
+                fail(pos, "{x.ty.to_str()} can never be nil", "only optional types like  {x.ty.to_str()}?  can be nil")
+            }
+            return texpr(TK.Bin(cn, x, c_nil(x.ty, NOPOS)), TBool, pos)
+        }
+        if is_numeric_t(lt) and is_numeric_t(rt) {
+            let u = self.num_unify(l, r)
+            l = u.0
+            r = u.1
+            if l.ty == TFloat {
+                if is_const(l) and is_const(r) { return c_bool(self.pyopf(op, const_fval(l), const_fval(r)), pos) }
+                return texpr(TK.Bin("f" + cn, l, r), TBool, pos)
+            }
+            if is_const(l) and is_const(r) { return c_bool(self.pyop(op, const_ival(l), const_ival(r)), pos) }
+            return texpr(TK.Bin(cn, l, r), TBool, pos)
+        }
+        if is_opt(lt) and not is_opt(rt) {
+            let rr = self.try_coerce(r, lt)
+            if rr != nil {
+                r = rr!
+                rt = r.ty
+            }
+        } else if is_opt(rt) and not is_opt(lt) {
+            let ll = self.try_coerce(l, rt)
+            if ll != nil {
+                l = ll!
+                lt = l.ty
+            }
+        }
+        if lt != rt { fail(pos, "cannot compare {lt.to_str()} with {rt.to_str()}") }
+        if op == "==" or op == "!=" {
+            let eq = self.eq_expr(l, r, pos)
+            if op == "!=" {
+                if is_const(eq) { return c_bool(const_ival(eq) == 0, pos) }
+                return texpr(TK.Un("not", eq), TBool, pos)
+            }
+            return eq
+        }
+        let c = self.cmp_expr(l, r, pos)
+        return texpr(TK.Bin(cn, c, self.ci(0)), TBool, pos)
+    }
+
+    fn check_in(self, e: Expr, le: Expr, re: Expr) -> TExpr {
+        let pos = e.pos
+        match re.k {
+            ExprK.Range(rlo, rhi, inclusive, stp) => {
+                let x = self.ce_value(le)
+                var lo: TExpr? = nil
+                var hi: TExpr? = nil
+                if rlo != nil { lo = self.ce_value(rlo!) }
+                if rhi != nil { hi = self.ce_value(rhi!) }
+                let stmts: [TStmt] = []
+                let xs = self.bind_tmp(x, stmts)
+                var conds: [TExpr] = []
+                if lo != nil { conds.push(self.compare(">=", xs, lo!, pos)) }
+                if hi != nil {
+                    var op = "<"
+                    if inclusive { op = "<=" }
+                    conds.push(self.compare(op, xs, hi!, pos))
+                }
+                if conds.len() == 0 { return c_bool(true, pos) }
+                var c = conds[0]
+                for i in 1..conds.len() { c = texpr(TK.And(c, conds[i]), TBool, pos) }
+                if stmts.len() > 0 { return texpr(TK.Seq(stmts, c), TBool, pos) }
+                return c
+            }
+            _ => {}
+        }
+        let x = self.ce_value(le)
+        let c = self.ce_value(re)
+        let r = self.try_method(c, "op_contains", [x], pos)
+        if r == nil {
+            fail(pos, "cannot use 'in' with {c.ty.to_str()}", "'in' works with arrays, maps, strings and ranges (like  x in 1..10 )")
+        }
+        return r!
+    }
+}

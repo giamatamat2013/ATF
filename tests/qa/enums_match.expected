@@ -1,0 +1,19 @@
+17 (3*x + -y)
+(0 + 1*--q*0) => 0
+a (-4)
+Expr.Add(Expr.Mul(Expr.Num(3), Expr.Var("x")), Expr.Neg(Expr.Var("y")))
+[3.0, 4.0, 6.0, 0.0]
+["zero", "small", "medium", "small negative", "negative -50", "big even", "big odd"]
+0 1 2 -1
+exact zero with a big x long other
+nothing got 5 got 6
+both one none
+[Light.Red, Light.Green, Light.Yellow, Light.Red] true true true
+1 5 10 Level.Mid [Level.Low, Level.High]
+Opt2.Has(nil) Opt2.Has(3) Opt2.Empty true true false
+not a circle
+circle with diameter 4.0
+true false false
+true true
+rect 4.0 5.0
+not circle

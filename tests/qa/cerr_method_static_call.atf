@@ -1,0 +1,7 @@
+struct C { n: int }
+impl C {
+    fn get(self) -> int { return self.n }
+}
+fn main() {
+    println(C.get())
+}

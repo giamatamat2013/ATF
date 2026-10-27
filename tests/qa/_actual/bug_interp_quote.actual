@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: unexpected 'x' (expected end of statement)
+  --> bug_interp_quote.atf:6:17
+ 6 |     let s = "<{"x".upper()}>"
+   |                 ^

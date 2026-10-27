@@ -1,0 +1,13 @@
+written: true  exists: true
+42 bytes, 6 lines
+  Ann   91
+  Bob   78
+  Cy    85
+  Di    62
+average: 79.00
+best: Ann
+error: line 2: '5x' is not a number
+error: line 2: expected 2 columns, found 1
+after appending: 7 lines, last line is 'Ed, 99'
+missing file: nil
+delete works: true  exists now: false

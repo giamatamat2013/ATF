@@ -1,0 +1,48 @@
+// anagrams.atf - group words that are made of the same letters.
+// Shows: maps from str to [str], sorting characters to build a key, sets for unique values,
+//        array methods (sort, contains), nested data printed with join.
+// Run:   python run_atf.py run examples/anagrams.atf
+
+let WORDS = ["listen", "silent", "enlist", "google", "gogole", "cat", "act", "tac", "dog", "god",
+             "evil", "vile", "live", "veil", "banana", "bat", "tab", "abc", "cab", "xyz"]
+
+// "listen" -> "eilnst": all anagrams share the same sorted letters
+fn signature(word: str) -> str {
+    let letters = word.chars()
+    letters.sort()
+    return "".join(letters)
+}
+
+fn main() {
+    var groups: {str: [str]} = {}
+    for w in WORDS {
+        let key = signature(w)
+        if not (key in groups) { groups[key] = [] }
+        groups[key].push(w)
+    }
+
+    println("{WORDS.len()} words fall into {groups.len()} groups")
+    var big: [[str]] = []
+    for key, members in groups {
+        if members.len() > 1 { big.push(members) }
+    }
+    // largest groups first; for equal sizes keep the order of first appearance
+    big.sort_by(|a, b| b.len() - a.len())
+    for g in big {
+        println("  {g.len()} anagrams: {g.join(", ")}")
+    }
+
+    var singles: [str] = []
+    for key, members in groups {
+        if members.len() == 1 { singles.push(members[0]) }
+    }
+    println("no anagram partner:", singles)
+
+    // unique letters of all words, sorted
+    let letters = set_new::<str>()
+    for w in WORDS {
+        for c in w { letters.add(c) }
+    }
+    let sorted_letters = letters.items().sorted()
+    println("{letters.len()} different letters: {sorted_letters.join("")}")
+}

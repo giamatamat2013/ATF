@@ -1,0 +1,210 @@
+// calculator.atf - an expression parser and evaluator.
+// Shows: an enum AST (recursive, with payloads), a recursive descent parser written with
+//        Result and the ? operator, structs with methods, match, error messages with positions.
+// Run:   python run_atf.py run examples/calculator.atf
+//
+// grammar:   expr   = term   { ("+" | "-") term }
+//            term   = factor { ("*" | "/" | "%") factor }
+//            factor = "-" factor | power
+//            power  = atom [ "^" factor ]
+//            atom   = number | name | name "(" expr ")" | "(" expr ")"
+
+enum Expr {
+    Num(float),
+    Var(str),
+    Neg(Expr),
+    Bin(str, Expr, Expr),        // operator, left, right
+    Call(str, Expr)              // function name, argument
+}
+
+struct Parser {
+    text: str,
+    pos: int
+}
+
+impl Parser {
+    fn peek(self) -> str {
+        while self.pos < self.text.len() and self.text[self.pos] == " " { self.pos += 1 }
+        if self.pos >= self.text.len() { return "" }
+        return self.text[self.pos]
+    }
+
+    fn fail<T>(self, msg: str) -> Result<T, str> {
+        return Result.Err("{msg} at position {self.pos + 1}")
+    }
+
+    fn expr(self) -> Result<Expr, str> {
+        var left = self.term()?
+        loop {
+            let c = self.peek()
+            if c != "+" and c != "-" { break }
+            self.pos += 1
+            let right = self.term()?
+            left = Expr.Bin(c, left, right)
+        }
+        return Result.Ok(left)
+    }
+
+    fn term(self) -> Result<Expr, str> {
+        var left = self.factor()?
+        loop {
+            let c = self.peek()
+            if c != "*" and c != "/" and c != "%" { break }
+            self.pos += 1
+            let right = self.factor()?
+            left = Expr.Bin(c, left, right)
+        }
+        return Result.Ok(left)
+    }
+
+    fn factor(self) -> Result<Expr, str> {
+        if self.peek() == "-" {
+            self.pos += 1
+            let e = self.factor()?
+            return Result.Ok(Expr.Neg(e))
+        }
+        return self.power()
+    }
+
+    fn power(self) -> Result<Expr, str> {
+        let base = self.atom()?
+        if self.peek() == "^" {
+            self.pos += 1
+            let exp = self.factor()?          // right associative
+            return Result.Ok(Expr.Bin("^", base, exp))
+        }
+        return Result.Ok(base)
+    }
+
+    fn atom(self) -> Result<Expr, str> {
+        let c = self.peek()
+        if c == "" { return self.fail("unexpected end of input") }
+        if c == "(" {
+            self.pos += 1
+            let e = self.expr()?
+            if self.peek() != ")" { return self.fail("expected ')'") }
+            self.pos += 1
+            return Result.Ok(e)
+        }
+        let b = c.byte_at(0)
+        if b.is_digit() or c == "." {
+            let start = self.pos
+            while self.pos < self.text.len() {
+                let ch = self.text.byte_at(self.pos)
+                if ch.is_digit() or ch == '.' { self.pos += 1 } else { break }
+            }
+            let word = self.text[start..self.pos]
+            let v = word.parse_float()
+            if v == nil { return self.fail("bad number '{word}'") }
+            return Result.Ok(Expr.Num(v!))
+        }
+        if b.is_alpha() {
+            let start = self.pos
+            while self.pos < self.text.len() and self.text.byte_at(self.pos).is_alpha() { self.pos += 1 }
+            let name = self.text[start..self.pos]
+            if self.peek() == "(" {
+                self.pos += 1
+                let arg = self.expr()?
+                if self.peek() != ")" { return self.fail("expected ')' after the argument of {name}") }
+                self.pos += 1
+                return Result.Ok(Expr.Call(name, arg))
+            }
+            return Result.Ok(Expr.Var(name))
+        }
+        return self.fail("unexpected '{c}'")
+    }
+}
+
+fn parse(text: str) -> Result<Expr, str> {
+    let p = Parser{ text: text, pos: 0 }
+    let e = p.expr()?
+    if p.peek() != "" { return p.fail("unexpected '{p.peek()}'") }
+    return Result.Ok(e)
+}
+
+fn eval(e: Expr, vars: {str: float}) -> Result<float, str> {
+    return match e {
+        Expr.Num(v) => Result.Ok(v)
+        Expr.Var(name) => {
+            let v = vars.try_get(name)
+            if v == nil { Result.Err("unknown variable '{name}'") } else { Result.Ok(v!) }
+        }
+        Expr.Neg(a) => {
+            let x = eval(a, vars)?
+            Result.Ok(-x)
+        }
+        Expr.Bin(op, a, b) => {
+            let x = eval(a, vars)?
+            let y = eval(b, vars)?
+            apply(op, x, y)
+        }
+        Expr.Call(name, a) => {
+            let x = eval(a, vars)?
+            match name {
+                "sqrt" => if x < 0.0 { Result.Err("sqrt of a negative number") } else { Result.Ok(sqrt(x)) }
+                "abs" => Result.Ok(fabs(x))
+                "sin" => Result.Ok(sin(x))
+                "cos" => Result.Ok(cos(x))
+                "ln" => if x <= 0.0 { Result.Err("ln needs a positive number") } else { Result.Ok(log(x)) }
+                _ => Result.Err("unknown function '{name}'")
+            }
+        }
+    }
+}
+
+fn apply(op: str, x: float, y: float) -> Result<float, str> {
+    return match op {
+        "+" => Result.Ok(x + y)
+        "-" => Result.Ok(x - y)
+        "*" => Result.Ok(x * y)
+        "/" => if y == 0.0 { Result.Err("division by zero") } else { Result.Ok(x / y) }
+        "%" => if y == 0.0 { Result.Err("division by zero") } else { Result.Ok(x % y) }
+        _ => Result.Ok(pow(x, y))
+    }
+}
+
+// the expression as fully parenthesised text
+fn show(e: Expr) -> str {
+    return match e {
+        Expr.Num(v) => str(v)
+        Expr.Var(n) => n
+        Expr.Neg(a) => "(-{show(a)})"
+        Expr.Bin(op, a, b) => "({show(a)} {op} {show(b)})"
+        Expr.Call(n, a) => "{n}({show(a)})"
+    }
+}
+
+fn run(text: str, vars: {str: float}) {
+    match parse(text) {
+        Result.Err(msg) => println("{text:<24} parse error: {msg}")
+        Result.Ok(tree) => {
+            match eval(tree, vars) {
+                Result.Ok(v) => println("{text:<24} = {v}    {show(tree)}")
+                Result.Err(msg) => println("{text:<24} error: {msg}")
+            }
+        }
+    }
+}
+
+fn main() {
+    let vars = {"x": 3.0, "pi": PI}
+    for text in [
+        "1 + 2 * 3",
+        "(1 + 2) * 3",
+        "10 / 4 - 1",
+        "2 ^ 3 ^ 2",
+        "-2 ^ 2",
+        "x * x + 1",
+        "sqrt(16) + abs(-2.5)",
+        "7 % 4 + 0.5",
+        "1 / 0",
+        "2 * (3 + ",
+        "4 + * 5",
+        "y + 1",
+        "sqrt(-4)",
+        "3 $ 4",
+        "2 * pi"
+    ] {
+        run(text, vars)
+    }
+}

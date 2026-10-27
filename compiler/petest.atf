@@ -1,0 +1,74 @@
+// Builds a PE image with compiler/pe.atf for a test scenario and writes it to a file.
+// build/pedump.py does the same with atf/pe.py; the files must be byte-identical.
+// usage: petest <scenario 0..> <out file>
+import "pe"
+
+var state: int = 12345
+
+fn rnd() -> int {
+    state = state * 6364136223846793005 + 1442695040888963407
+    return (state >>> 33) & 255
+}
+
+fn fill(n: int) -> Bytes {
+    let b = bytes_new()
+    for i in 0..n { b.u8(rnd()) }
+    return b
+}
+
+fn main(args: [str]) {
+    let scn = args[0].to_int()
+    let img = new_image()
+    if scn == 0 {
+        img.text = fill(100)
+        img.rdata = fill(50)
+    } else if scn == 1 {
+        img.text = fill(5000)
+        img.rdata = fill(4100)
+        img.data_size = 100000
+        img.entry = 17
+        let exit_p = img.import_sym("kernel32.dll", "ExitProcess")
+        img.import_sym("kernel32.dll", "GetStdHandle")
+        img.import_sym("kernel32.dll", "WriteFile")
+        let sin = img.import_sym("msvcrt.dll", "sin")
+        img.import_sym("msvcrt.dll", "cos")
+        img.import_sym("msvcrt.dll", "a")
+        img.import_sym("msvcrt.dll", "bb")
+        img.import_sym("kernel32.dll", "ExitProcess")          // duplicate: ignored
+        img.symbols["s_text"] = Symbol("text", 40)
+        img.symbols["s_rdata"] = Symbol("rdata", 8)
+        img.symbols["s_rdata2"] = Symbol("rdata", 4000)
+        img.symbols["s_data"] = Symbol("data", 99992)
+        img.symbols["tb"] = Symbol("rdata", 16)
+        img.text_relocs = [Reloc(10, "s_text", 0, 0), Reloc(30, "s_rdata", 1, 0), Reloc(50, "s_data", 4, 8),
+                           Reloc(100, exit_p, 0, 0), Reloc(200, sin, 1, 0), Reloc(300, "s_rdata2", 0, -5),
+                           Reloc(4990, "tb", 4, 1), Reloc(4996, "s_text", 0, 0), Reloc(1000, "imp:msvcrt.dll!bb", 0, 0)]
+    } else if scn == 2 {
+    } else if scn == 3 {
+        img.text = fill(4096)
+        img.rdata = fill(1)
+        img.data_size = 17
+        img.import_sym("k.dll", "a")
+        img.import_sym("kk.dll", "ab")
+        img.import_sym("kkk.dll", "abc")
+        img.import_sym("kkkk.dll", "abcd")
+        img.import_sym("kkkk.dll", "abcde")
+        img.symbols["x"] = Symbol("data", 0)
+        img.text_relocs = [Reloc(0, "x", 0, 0), Reloc(4092, "x", 0, 0)]
+    } else if scn == 4 {
+        img.text = fill(4097)
+        img.rdata = fill(4096)
+        img.data_size = 0
+        img.entry = 4000
+        img.stack_reserve = 1 << 20
+        img.stack_commit = 4096
+        img.symbols["a"] = Symbol("text", 4096)
+        img.symbols["b"] = Symbol("rdata", 0)
+        img.text_relocs = [Reloc(5, "a", 0, -100000), Reloc(6, "b", 4, 100000)]
+        img.import_sym("x", "y")
+    }
+    if not write_file(args[1], img.build().to_str()) {
+        eprintln("cannot write " + args[1])
+        exit(1)
+    }
+}

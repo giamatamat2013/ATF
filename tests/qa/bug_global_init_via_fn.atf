@@ -1,0 +1,13 @@
+// global initializers are ordered by direct references only, not through function calls:
+// 'a' is initialized by calling read_b() before 'b' got its value (0), and for a str it crashes
+var a = read_b()
+var b = 42
+var s = read_t() + "!"
+var t = "tee"
+
+fn read_b() -> int { return b }
+fn read_t() -> str { return t }
+
+fn main() {
+    println(a, b, s)
+}

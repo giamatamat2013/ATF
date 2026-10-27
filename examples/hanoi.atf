@@ -1,0 +1,56 @@
+// hanoi.atf - the Towers of Hanoi.
+// Shows: recursion, a struct holding three stacks (arrays), counting moves, string padding.
+// Run:   python run_atf.py run examples/hanoi.atf
+
+struct Towers {
+    pegs: [[int]],     // pegs[0..3], each a stack of disk sizes (top = last element)
+    moves: int,
+    verbose: bool
+}
+
+impl Towers {
+    fn new(disks: int, verbose: bool) -> Towers {
+        var first: [int] = []
+        var d = disks
+        while d >= 1 {
+            first.push(d)
+            d -= 1
+        }
+        return Towers{ pegs: [first, [] as [int], [] as [int]], moves: 0, verbose: verbose }
+    }
+
+    fn move_disk(self, from: int, to: int) {
+        let d = self.pegs[from].pop()
+        self.pegs[to].push(d)
+        self.moves += 1
+        if self.verbose {
+            println("move {self.moves:>2}: disk {d} from {name(from)} to {name(to)}   {self.pegs}")
+        }
+    }
+
+    // move n disks from one peg to another using the third as helper
+    fn solve(self, n: int, from: int, to: int, via: int) {
+        if n == 0 { return }
+        self.solve(n - 1, from, via, to)
+        self.move_disk(from, to)
+        self.solve(n - 1, via, to, from)
+    }
+}
+
+fn name(peg: int) -> str {
+    return ["A", "B", "C"][peg]
+}
+
+fn main() {
+    let t = Towers.new(3, true)
+    println("start:  ", t.pegs)
+    t.solve(3, 0, 2, 1)
+    println("done in {t.moves} moves")
+
+    // the number of moves is 2^n - 1
+    for n in [1, 5, 10, 16, 20] {
+        let q = Towers.new(n, false)
+        q.solve(n, 0, 2, 1)
+        println("{n:>2} disks: {q.moves:>8} moves   (2^{n} - 1 = {2 ** n - 1})   target peg: {q.pegs[2].len()} disks")
+    }
+}

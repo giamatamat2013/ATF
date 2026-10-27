@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: expected ')' to close the call but found '2'
+  --> cerr_missing_comma_args.atf:3:17
+ 3 |     println(f(1 2))
+   |                 ^
+  hint: separate the arguments with commas

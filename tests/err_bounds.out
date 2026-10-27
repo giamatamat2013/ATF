@@ -1,0 +1,4 @@
+before
+[exit 1]
+[stderr] panic: index 5 is out of range (length 3)
+  at main (err_bounds.atf:5)

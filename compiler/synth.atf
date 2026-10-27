@@ -1,0 +1,390 @@
+// Type-directed helpers: to-string, equality, ordering and hashing (port of atf/synth.py)
+import "util"
+import "ast"
+import "types"
+import "tir"
+import "tirutil"
+import "checker"
+import "check_expr"
+import "check_call"
+
+fn c_true(pos: Pos) -> TExpr { return c_bool(true, pos) }
+
+impl Checker {
+    // ------------------------------------------------------------------ synthesized functions
+    // builder: given the new instance and its parameters, produces the body
+    fn get_synth(self, kind: str, ty: Type, ret: Type, nparams: int, builder: fn(FnInst, [Var]) -> [TStmt]) -> FnInst {
+        let key = kind + "|" + ty.key()
+        let found = self.synth_cache.try_get(key)
+        if found != nil { return found! }
+        var params: [Var] = []
+        for i in 0..nparams {
+            let v = new_var("x{i}", ty, true, NOPOS)
+            v.is_param = true
+            params.push(v)
+        }
+        let inst = new_fninst("{kind}<{ty.to_str()}>", params, ret)
+        var vars: [Var] = []
+        for p in params { vars.push(p) }
+        inst.vars = vars
+        inst.is_prelude = true
+        self.synth_cache[key] = inst
+        self.program.funcs.push(inst)
+        let saved = self.cx
+        self.cx = new_fnctx(inst, {}, nil, ret)
+        inst.body = builder(inst, params)
+        self.cx = saved
+        return inst
+    }
+
+    fn call_synth(self, inst: FnInst, args: [TExpr], pos: Pos) -> TExpr {
+        self.ctx().inst.callees[inst.uid] = inst
+        return texpr(TK.Call(inst, args), inst.ret, pos)
+    }
+
+    fn sconst(self, s: str) -> TExpr { return c_str(s, NOPOS) }
+
+    fn concat(self, parts: [TExpr]) -> TExpr {
+        var out: [TExpr] = []
+        for p in parts {
+            if is_const(p) and out.len() > 0 and is_const(out[out.len() - 1]) {
+                out[out.len() - 1] = c_str(const_sval(out[out.len() - 1]) + const_sval(p), NOPOS)
+            } else {
+                out.push(p)
+            }
+        }
+        var r = out[0]
+        for i in 1..out.len() { r = self.call_rt("str_concat", [r, out[i]]) }
+        return r
+    }
+
+    // ------------------------------------------------------------------ to string
+    fn str_of(self, te: TExpr, nested: bool = false) -> TExpr {
+        let t = te.ty
+        let pos = te.pos
+        if t == TStr {
+            if nested { return self.call_rt("quote_str", [te], [], pos) }
+            return te
+        }
+        if t == TInt or t == TByte {
+            if is_const(te) { return self.sconst(str(const_ival(te))) }
+            var arg = te
+            if t == TByte { arg = texpr(TK.Cvt("nop", te), TInt, NOPOS) }
+            return self.call_rt("int_to_str", [arg], [], pos)
+        }
+        if t == TFloat { return self.call_rt("float_to_str", [te], [], pos) }
+        if t == TBool {
+            if is_const(te) {
+                if const_ival(te) != 0 { return self.sconst("true") }
+                return self.sconst("false")
+            }
+            return texpr(TK.Cond(te, self.sconst("true"), self.sconst("false")), TStr, pos)
+        }
+        if t == TNil { return self.sconst("nil") }
+        if t == TVoid { fail(pos, "this expression does not produce a value") }
+        if t == TNever { return self.sconst("") }
+        if is_opt(t) {
+            let stmts: [TStmt] = []
+            let x = self.bind_tmp(te, stmts)
+            let inner = self.str_of(self.unwrap_opt(x), true)
+            let c = texpr(TK.Cond(texpr(TK.Bin("eq", x, c_nil(t, NOPOS)), TBool, NOPOS), self.sconst("nil"), inner), TStr, pos)
+            if stmts.len() > 0 { return texpr(TK.Seq(stmts, c), TStr, pos) }
+            return c
+        }
+        if is_func(t) { return self.sconst("<function>") }
+        match t {
+            Type.Iface(info) => {
+                for m in self.iface_methods(info) {
+                    if m.name == "to_str" and m.params.len() == 0 and m.ret == TStr {
+                        let r = self.iface_call(te, info, "to_str", [], pos)
+                        return r!
+                    }
+                }
+                return self.sconst("<" + info.name + ">")
+            }
+            _ => {}
+        }
+        if is_ptr(t) {
+            return self.call_rt("int_to_hex", [texpr(TK.Cvt("nop", te), TInt, NOPOS)], [], pos)
+        }
+        if self.is_array_t(t) { return self.call_rt("array_to_str", [te], [type_args(t)[0]], pos) }
+        if self.is_map_t(t) { return self.call_rt("map_to_str", [te], type_args(t), pos) }
+        if is_struct_t(t) or is_enum_t(t) or is_tuple(t) {
+            if not is_tuple(t) {
+                for h in self.find_methods(t, "to_str") {
+                    if h.fi.has_self and h.fi.decl.params.len() == 1 {
+                        let r = self.invoke(h.fi, h.binds.copy(), te, [], pos, nil, nil)
+                        if r.ty == TStr { return r }
+                    }
+                }
+            }
+            let me = self
+            let inst = self.get_synth("str", t, TStr, 1, |i, ps| { return me.build_str(i, ps) })
+            return self.call_synth(inst, [te], pos)
+        }
+        fail(pos, "cannot convert {t.to_str()} to text")
+    }
+
+    fn build_str(self, inst: FnInst, params: [Var]) -> [TStmt] {
+        let t = params[0].ty
+        let p = texpr(TK.VarRef(params[0]), t, NOPOS)
+        match t {
+            Type.Struct(info, args) => {
+                var parts: [TExpr] = [self.sconst(info.name + "\{")]
+                let fields = self.struct_fields(t)
+                for i in 0..fields.len() {
+                    if i > 0 { parts.push(self.sconst(", ")) }
+                    parts.push(self.sconst(fields[i].name + ": "))
+                    parts.push(self.str_of(texpr(TK.Load(p, i), fields[i].ty, NOPOS), true))
+                }
+                parts.push(self.sconst("}"))
+                return [tstmt(SK.Ret(self.concat(parts)), NOPOS)]
+            }
+            Type.Tuple(es) => {
+                var parts: [TExpr] = [self.sconst("(")]
+                for i in 0..es.len() {
+                    if i > 0 { parts.push(self.sconst(", ")) }
+                    parts.push(self.str_of(texpr(TK.Load(p, i), es[i], NOPOS), true))
+                }
+                parts.push(self.sconst(")"))
+                return [tstmt(SK.Ret(self.concat(parts)), NOPOS)]
+            }
+            _ => {}
+        }
+        // enum
+        let info = self.enum_info_of(t)
+        var body: [TStmt] = []
+        for vi in 0..info.decl.variants.len() {
+            let v = info.decl.variants[vi]
+            let payload = self.variant_payload(t, vi)
+            let full = info.name + "." + v.name
+            if info.simple {
+                let cond = texpr(TK.Bin("eq", p, c_int(info.tags[vi], t, NOPOS)), TBool, NOPOS)
+                body.push(tstmt(SK.If(cond, [tstmt(SK.Ret(self.sconst(full)), NOPOS)], []), NOPOS))
+            } else {
+                let cond = texpr(TK.Bin("eq", texpr(TK.Load(p, 0), TInt, NOPOS), self.ci(vi)), TBool, NOPOS)
+                var r = self.sconst(full)
+                if payload.len() > 0 {
+                    var parts: [TExpr] = [self.sconst(full + "(")]
+                    for i in 0..payload.len() {
+                        if i > 0 { parts.push(self.sconst(", ")) }
+                        parts.push(self.str_of(texpr(TK.Load(p, i + 1), payload[i], NOPOS), true))
+                    }
+                    parts.push(self.sconst(")"))
+                    r = self.concat(parts)
+                }
+                body.push(tstmt(SK.If(cond, [tstmt(SK.Ret(r), NOPOS)], []), NOPOS))
+            }
+        }
+        body.push(tstmt(SK.Ret(self.sconst("?")), NOPOS))
+        return body
+    }
+
+    // ------------------------------------------------------------------ equality
+    fn eq_expr(self, a: TExpr, b: TExpr, pos: Pos) -> TExpr {
+        let t = a.ty
+        if t == TInt or t == TByte or t == TBool or is_ptr(t) or is_func(t) or is_simple_enum(t) or is_iface(t) {
+            if is_const(a) and is_const(b) { return c_bool(const_ival(a) == const_ival(b), pos) }
+            return texpr(TK.Bin("eq", a, b), TBool, pos)
+        }
+        if t == TFloat {
+            if is_const(a) and is_const(b) { return c_bool(const_fval(a) == const_fval(b), pos) }
+            return texpr(TK.Bin("feq", a, b), TBool, pos)
+        }
+        if t == TStr {
+            if is_const(a) and is_const(b) { return c_bool(const_sval(a) == const_sval(b), pos) }
+            return self.call_rt("str_eq", [a, b], [], pos)
+        }
+        if t == TNil { return c_bool(true, pos) }
+        if self.is_array_t(t) { return self.call_rt("array_eq", [a, b], [type_args(t)[0]], pos) }
+        if self.is_map_t(t) { return self.call_rt("map_eq", [a, b], type_args(t), pos) }
+        if is_struct_t(t) or is_enum_t(t) {
+            for h in self.find_methods(t, "eq") {
+                if h.fi.has_self and h.fi.decl.params.len() == 2 {
+                    return self.invoke(h.fi, h.binds.copy(), a, [AV.Typed(b)], pos, nil, nil)
+                }
+            }
+        }
+        if is_struct_t(t) or is_enum_t(t) or is_tuple(t) or is_opt(t) {
+            let me = self
+            let inst = self.get_synth("eq", t, TBool, 2, |i, ps| { return me.build_eq(i, ps) })
+            return self.call_synth(inst, [a, b], pos)
+        }
+        fail(pos, "cannot compare values of type {t.to_str()} with ==")
+    }
+
+    fn field_checks(self, av: TExpr, bv: TExpr, ftys: [Type], off: int) -> [TStmt] {
+        var out: [TStmt] = []
+        let fls = tstmt(SK.Ret(c_bool(false, NOPOS)), NOPOS)
+        for i in 0..ftys.len() {
+            let eq = self.eq_expr(texpr(TK.Load(av, i + off), ftys[i], NOPOS), texpr(TK.Load(bv, i + off), ftys[i], NOPOS), NOPOS)
+            out.push(tstmt(SK.If(texpr(TK.Un("not", eq), TBool, NOPOS), [fls], []), NOPOS))
+        }
+        return out
+    }
+
+    fn build_eq(self, inst: FnInst, params: [Var]) -> [TStmt] {
+        let t = params[0].ty
+        let a = texpr(TK.VarRef(params[0]), t, NOPOS)
+        let b = texpr(TK.VarRef(params[1]), t, NOPOS)
+        let fls = tstmt(SK.Ret(c_bool(false, NOPOS)), NOPOS)
+        let tru = tstmt(SK.Ret(c_bool(true, NOPOS)), NOPOS)
+        if is_opt(t) {
+            let nilc = c_nil(t, NOPOS)
+            var body: [TStmt] = [
+                tstmt(SK.If(texpr(TK.Bin("eq", a, b), TBool, NOPOS), [tru], []), NOPOS),
+                tstmt(SK.If(texpr(TK.Or(texpr(TK.Bin("eq", a, nilc), TBool, NOPOS), texpr(TK.Bin("eq", b, nilc), TBool, NOPOS)), TBool, NOPOS), [fls], []), NOPOS)
+            ]
+            let eq = self.eq_expr(self.unwrap_opt(a), self.unwrap_opt(b), NOPOS)
+            body.push(tstmt(SK.Ret(eq), NOPOS))
+            return body
+        }
+        match t {
+            Type.Struct(info, args) => {
+                var body: [TStmt] = [tstmt(SK.If(texpr(TK.Bin("eq", a, b), TBool, NOPOS), [tru], []), NOPOS)]
+                var ftys: [Type] = []
+                for f in self.struct_fields(t) { ftys.push(f.ty) }
+                for x in self.field_checks(a, b, ftys, 0) { body.push(x) }
+                body.push(tru)
+                return body
+            }
+            Type.Tuple(es) => {
+                var body: [TStmt] = []
+                for x in self.field_checks(a, b, es, 0) { body.push(x) }
+                body.push(tru)
+                return body
+            }
+            _ => {}
+        }
+        // enum with payload
+        let info = self.enum_info_of(t)
+        var body: [TStmt] = [tstmt(SK.If(texpr(TK.Bin("eq", a, b), TBool, NOPOS), [tru], []), NOPOS)]
+        body.push(tstmt(SK.If(texpr(TK.Bin("ne", texpr(TK.Load(a, 0), TInt, NOPOS), texpr(TK.Load(b, 0), TInt, NOPOS)), TBool, NOPOS), [fls], []), NOPOS))
+        for vi in 0..info.decl.variants.len() {
+            let payload = self.variant_payload(t, vi)
+            if payload.len() > 0 {
+                var chk = self.field_checks(a, b, payload, 1)
+                chk.push(tru)
+                body.push(tstmt(SK.If(texpr(TK.Bin("eq", texpr(TK.Load(a, 0), TInt, NOPOS), self.ci(vi)), TBool, NOPOS), chk, []), NOPOS))
+            }
+        }
+        body.push(tru)
+        return body
+    }
+
+    // ------------------------------------------------------------------ ordering
+    fn cmp_expr(self, a: TExpr, b: TExpr, pos: Pos) -> TExpr {
+        let t = a.ty
+        if t == TInt or t == TByte or t == TBool or is_simple_enum(t) {
+            return self.call_rt("cmp_int", [texpr(TK.Cvt("nop", a), TInt, NOPOS), texpr(TK.Cvt("nop", b), TInt, NOPOS)], [], pos)
+        }
+        if t == TFloat { return self.call_rt("cmp_float", [a, b], [], pos) }
+        if t == TStr { return self.call_rt("str_cmp", [a, b], [], pos) }
+        if is_struct_t(t) or is_enum_t(t) {
+            for h in self.find_methods(t, "cmp") {
+                if h.fi.has_self and h.fi.decl.params.len() == 2 {
+                    return self.invoke(h.fi, h.binds.copy(), a, [AV.Typed(b)], pos, nil, nil)
+                }
+            }
+        }
+        if is_tuple(t) {
+            let me = self
+            let inst = self.get_synth("cmp", t, TInt, 2, |i, ps| { return me.build_cmp(i, ps) })
+            return self.call_synth(inst, [a, b], pos)
+        }
+        var hint = ""
+        if is_struct_t(t) or is_enum_t(t) {
+            hint = "define  fn cmp(self, other: {t.to_str()}) -> int  in an impl block (negative, zero, or positive)"
+        }
+        fail(pos, "values of type {t.to_str()} cannot be ordered with < > <= >=", hint)
+    }
+
+    fn build_cmp(self, inst: FnInst, params: [Var]) -> [TStmt] {
+        let t = params[0].ty
+        let a = texpr(TK.VarRef(params[0]), t, NOPOS)
+        let b = texpr(TK.VarRef(params[1]), t, NOPOS)
+        var body: [TStmt] = []
+        let es = tuple_elems(t)
+        for i in 0..es.len() {
+            let c = self.new_tmp(TInt, "$c")
+            body.push(tstmt(SK.Decl(c, self.cmp_expr(texpr(TK.Load(a, i), es[i], NOPOS), texpr(TK.Load(b, i), es[i], NOPOS), NOPOS)), NOPOS))
+            let cr = texpr(TK.VarRef(c), TInt, NOPOS)
+            body.push(tstmt(SK.If(texpr(TK.Bin("ne", cr, self.ci(0)), TBool, NOPOS), [tstmt(SK.Ret(texpr(TK.VarRef(c), TInt, NOPOS)), NOPOS)], []), NOPOS))
+        }
+        body.push(tstmt(SK.Ret(self.ci(0)), NOPOS))
+        return body
+    }
+
+    // ------------------------------------------------------------------ hashing
+    fn hash_expr(self, a: TExpr, pos: Pos) -> TExpr {
+        let t = a.ty
+        if t == TInt or t == TByte or t == TBool or is_simple_enum(t) or is_ptr(t) or is_iface(t) {
+            return self.call_rt("hash_int", [texpr(TK.Cvt("nop", a), TInt, NOPOS)], [], pos)
+        }
+        if t == TFloat {
+            // x + 0.0 turns -0.0 into 0.0, so that the two (equal) zeros hash the same
+            let z = texpr(TK.Bin("fadd", a, c_float(0.0, NOPOS)), TFloat, NOPOS)
+            return self.call_rt("hash_int", [texpr(TK.Intr("f2bits", [z]), TInt, NOPOS)], [], pos)
+        }
+        if t == TStr { return self.call_rt("str_hash", [a], [], pos) }
+        if self.is_array_t(t) { return self.call_rt("array_hash", [a], [type_args(t)[0]], pos) }
+        if is_struct_t(t) or is_enum_t(t) {
+            for h in self.find_methods(t, "hash") {
+                if h.fi.has_self and h.fi.decl.params.len() == 1 {
+                    return self.invoke(h.fi, h.binds.copy(), a, [], pos, nil, nil)
+                }
+            }
+            // a custom eq without a custom hash: equal values may differ field by field,
+            // so every value gets the same hash (correct, but maps of such keys are slower)
+            for h in self.find_methods(t, "eq") {
+                if h.fi.has_self and h.fi.decl.params.len() == 2 { return self.ci(0x5bd1e995) }
+            }
+        }
+        if is_struct_t(t) or is_enum_t(t) or is_tuple(t) or is_opt(t) {
+            let me = self
+            let inst = self.get_synth("hash", t, TInt, 1, |i, ps| { return me.build_hash(i, ps) })
+            return self.call_synth(inst, [a], pos)
+        }
+        fail(pos, "values of type {t.to_str()} cannot be used as map keys")
+    }
+
+    fn hash_mix_stmt(self, h: Var, e: TExpr) -> TStmt {
+        let hv = texpr(TK.VarRef(h), TInt, NOPOS)
+        let mixed = self.call_rt("hash_mix", [hv, self.hash_expr(e, NOPOS)])
+        return tstmt(SK.Set(hv, mixed), NOPOS)
+    }
+
+    fn build_hash(self, inst: FnInst, params: [Var]) -> [TStmt] {
+        let t = params[0].ty
+        let a = texpr(TK.VarRef(params[0]), t, NOPOS)
+        let h = self.new_tmp(TInt, "$h")
+        var body: [TStmt] = [tstmt(SK.Decl(h, self.ci(17)), NOPOS)]
+        if is_struct_t(t) {
+            let fields = self.struct_fields(t)
+            for i in 0..fields.len() {
+                body.push(self.hash_mix_stmt(h, texpr(TK.Load(a, i), fields[i].ty, NOPOS)))
+            }
+        } else if is_tuple(t) {
+            let es = tuple_elems(t)
+            for i in 0..es.len() { body.push(self.hash_mix_stmt(h, texpr(TK.Load(a, i), es[i], NOPOS))) }
+        } else if is_opt(t) {
+            body.push(tstmt(SK.If(texpr(TK.Bin("eq", a, c_nil(t, NOPOS)), TBool, NOPOS), [tstmt(SK.Ret(self.ci(0)), NOPOS)], []), NOPOS))
+            body.push(self.hash_mix_stmt(h, self.unwrap_opt(a)))
+        } else {
+            body.push(self.hash_mix_stmt(h, texpr(TK.Load(a, 0), TInt, NOPOS)))
+            let info = self.enum_info_of(t)
+            for vi in 0..info.decl.variants.len() {
+                let payload = self.variant_payload(t, vi)
+                if payload.len() > 0 {
+                    var inner: [TStmt] = []
+                    for i in 0..payload.len() {
+                        inner.push(self.hash_mix_stmt(h, texpr(TK.Load(a, i + 1), payload[i], NOPOS)))
+                    }
+                    body.push(tstmt(SK.If(texpr(TK.Bin("eq", texpr(TK.Load(a, 0), TInt, NOPOS), self.ci(vi)), TBool, NOPOS), inner, []), NOPOS))
+                }
+            }
+        }
+        body.push(tstmt(SK.Ret(texpr(TK.VarRef(h), TInt, NOPOS)), NOPOS))
+        return body
+    }
+}

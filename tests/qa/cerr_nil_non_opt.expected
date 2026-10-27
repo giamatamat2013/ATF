@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected int but found nil
+  --> cerr_nil_non_opt.atf:3:9
+ 3 |     x = nil
+   |         ^
+  hint: only optional types can hold nil: declare it as  int?

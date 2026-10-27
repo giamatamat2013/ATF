@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: cannot assign to 'i' because it was declared with 'let'
+  --> cerr_assign_loop_var.atf:3:9
+ 3 |         i = i + 1
+   |         ^
+  hint: declare it with 'var i = ...' to allow changes

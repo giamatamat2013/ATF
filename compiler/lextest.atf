@@ -1,0 +1,29 @@
+import "lexer"
+
+fn esc(s: str) -> str {
+    return s.replace("\n", "\n").replace("\t", "\t").replace("\r", "\r")
+}
+
+fn main(args: [str]) {
+    let path = args[0]
+    let src = read_file(path)!
+    let toks = tokenize(src, path)
+    for t in toks {
+        var text = ""
+        match t.kind {
+            TokKind.Int => text = str(t.ival)
+            TokKind.Char => text = str(t.ival)
+            TokKind.Float => text = int_to_hex(__f2bits(t.fval))
+            TokKind.Str => {
+                for p in t.parts {
+                    match p {
+                        StrPart.Lit(s) => text = text + "L<" + esc(s) + ">"
+                        StrPart.Interp(src2, l, c, spec) => text = text + "I<" + esc(src2) + "|" + str(l) + ":" + str(c) + "|" + spec + ">"
+                    }
+                }
+            }
+            _ => text = esc(t.val)
+        }
+        println(t.kind, text, t.line, t.col, t.space_before)
+    }
+}

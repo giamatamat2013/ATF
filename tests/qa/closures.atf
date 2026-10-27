@@ -1,0 +1,149 @@
+// closures: capturing loop variables, mutated variables, nested closures, closures in data structures
+struct Handler {
+    name: str,
+    run: fn(int) -> int
+}
+
+struct Rec {
+    f: fn(int) -> int
+}
+
+fn make_counter(start: int) -> fn() -> int {
+    var n = start
+    return || {
+        n += 1
+        return n
+    }
+}
+
+fn make_pair() -> (fn() -> int, fn(int)) {
+    var shared = 0
+    let get = || shared
+    let set = |v: int| { shared = v }
+    return (get, set)
+}
+
+fn compose(f: fn(int) -> int, g: fn(int) -> int) -> fn(int) -> int {
+    return |x| g(f(x))
+}
+
+fn apply_n(f: fn(int) -> int, n: int, x: int) -> int {
+    var r = x
+    for i in 0..n { r = f(r) }
+    return r
+}
+
+fn adder(k: int) -> fn(int) -> fn(int) -> int {
+    return |a| |b| a + b + k
+}
+
+fn main() {
+    // each iteration of a for loop gets its own variable
+    var fs: [fn() -> int] = []
+    for i in 0..5 { fs.push(|| i * 10) }
+    println(fs.map(|f| f()))
+    // loop with a let inside: each closure sees its own copy
+    var gs: [fn() -> str] = []
+    for w in ["a", "b", "c"] {
+        let up = w.upper()
+        gs.push(|| up + w)
+    }
+    println(gs.map(|g| g()))
+    // while loop: closures capture the variable by reference
+    var hs: [fn() -> int] = []
+    var j = 0
+    while j < 3 {
+        let jj = j
+        hs.push(|| jj)
+        j += 1
+    }
+    println(hs.map(|h| h()))
+    var shared_cap: [fn() -> int] = []
+    var k = 0
+    while k < 3 {
+        shared_cap.push(|| k)
+        k += 1
+    }
+    println(shared_cap.map(|h| h()))
+    // capture of a mutated variable sees later changes; closures can change it
+    var x = 1
+    let read_x = || x
+    x = 42
+    println(read_x())
+    let bump = || { x += 1 }
+    bump()
+    bump()
+    println(x, read_x())
+    // counters are independent
+    let c1 = make_counter(0)
+    let c2 = make_counter(100)
+    println(c1(), c1(), c2(), c1(), c2())
+    // two closures sharing one captured variable
+    let (get, set) = make_pair()
+    set(7)
+    println(get())
+    set(get() * 3)
+    println(get())
+    // nested closures and currying
+    let add = adder(1000)
+    let add5 = add(5)
+    println(add5(1), add(10)(20), adder(0)(1)(2))
+    let inc = |v: int| v + 1
+    let dbl = |v: int| v * 2
+    println(compose(inc, dbl)(5), compose(dbl, inc)(5), apply_n(compose(inc, inc), 10, 0))
+    // three levels of capture
+    var total = 0
+    let outer = |a: int| {
+        let middle = |b: int| {
+            let inner = |c: int| { total += a * 100 + b * 10 + c }
+            inner(3)
+        }
+        middle(2)
+    }
+    outer(1)
+    outer(4)
+    println(total)
+    // closures stored in structs, arrays and maps
+    let hs2 = [Handler("sq", |v| v * v), Handler("neg", |v| -v)]
+    for h in hs2 { print(h.name, h.run(7), "") }
+    println()
+    var table: {str: fn(int) -> int} = {}
+    for m in 1..=3 { table["times{m}"] = |v| v * m }
+    println(table["times1"](5), table["times2"](5), table["times3"](5))
+    // recursion through a struct field
+    let r = Rec(|n| n)
+    r.f = |n| if n <= 1 { 1 } else { n * r.f(n - 1) }
+    println(r.f(10), r.f(1))
+    // fib through a closure stored in a var (recursive via reference)
+    var fib: fn(int) -> int = |n| n
+    fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+    println(fib(20))
+    // closures as arguments to methods, capturing params
+    let base = 3
+    println([1, 2, 3].map(|v| v + base), [5, 6, 7].filter(|v| v % base == 0), [1, 2].reduce(base, |s, v| s * v))
+    // a closure returned from a closure
+    let mk = |a: int| { return |b: int| a - b }
+    println(mk(10)(3))
+    // a closure that captures a struct and mutates it
+    let h = Handler("x", |v| v)
+    let rename = |s: str| { h.name = s }
+    rename("renamed")
+    println(h.name)
+    // closure capturing an array and pushing to it
+    var log: [str] = []
+    let logger = |s: str| { log.push(s) }
+    logger("one")
+    logger("two")
+    println(log)
+    // no-arg lambda with block returning a value
+    let pick = || {
+        if x > 10 { return "big" }
+        return "small"
+    }
+    println(pick())
+    // function values of named functions
+    let fv: fn(int) -> int = inc
+    let named = make_counter
+    let c3 = named(5)
+    println(fv(1), c3(), c3())
+}

@@ -1,0 +1,79 @@
+// sets_tuples.atf - sets, tuples and maps with tuple keys.
+// Shows: set_new, add / has / remove / items, set algebra written with loops, tuples as
+//        values and as map keys, returning several values, destructuring with let.
+// Run:   python run_atf.py run examples/sets_tuples.atf
+
+fn union(a: Set<int>, b: Set<int>) -> Set<int> {
+    let r = set_new::<int>()
+    for x in a.items() { r.add(x) }
+    for x in b.items() { r.add(x) }
+    return r
+}
+
+fn intersection(a: Set<int>, b: Set<int>) -> Set<int> {
+    let r = set_new::<int>()
+    for x in a.items() {
+        if b.has(x) { r.add(x) }
+    }
+    return r
+}
+
+fn difference(a: Set<int>, b: Set<int>) -> Set<int> {
+    let r = set_new::<int>()
+    for x in a.items() {
+        if not b.has(x) { r.add(x) }
+    }
+    return r
+}
+
+fn make_set(values: [int]) -> Set<int> {
+    let s = set_new::<int>()
+    for v in values { s.add(v) }
+    return s
+}
+
+// several results at once: (min, max, average)
+fn summary(a: [int]) -> (int, int, float) {
+    return (a.min(), a.max(), float(a.sum()) / float(a.len()))
+}
+
+fn main() {
+    let evens = make_set([0, 2, 4, 6, 8, 10])
+    let threes = make_set([0, 3, 6, 9])
+    println("evens:", evens, " threes:", threes)
+    println("union:       ", union(evens, threes).items().sorted())
+    println("intersection:", intersection(evens, threes).items().sorted())
+    println("difference:  ", difference(evens, threes).items().sorted())
+    println("has 6? {evens.has(6)}  has 7? {evens.has(7)}  size {evens.len()}")
+    println("remove 6:", evens.remove(6), " remove 7:", evens.remove(7), " now", evens.items())
+
+    // removing duplicates, keeping the first occurrence
+    let seen = set_new::<str>()
+    var unique: [str] = []
+    for w in "to be or not to be that is the question to be".split(" ") {
+        if not seen.has(w) {
+            seen.add(w)
+            unique.push(w)
+        }
+    }
+    println(unique)
+
+    // tuples
+    let (lo, hi, avg) = summary([4, 8, 15, 16, 23, 42])
+    println("min {lo}, max {hi}, average {avg:.2f}")
+    let t = (1, "one", 1.0)
+    println(t, t.0, t.1, t.2)
+    var pairs = [(3, "c"), (1, "a"), (2, "b")]
+    pairs.sort()                                  // tuples compare element by element
+    println(pairs)
+
+    // a map with tuple keys: a sparse grid
+    var grid: {(int, int): str} = {}
+    grid[(0, 0)] = "origin"
+    grid[(2, 3)] = "treasure"
+    grid[(-1, 4)] = "trap"
+    println("(2, 3) holds {grid[(2, 3)]}")
+    println("(5, 5) holds {grid.get((5, 5), "nothing")}")
+    println("keys:", grid.keys())
+    println("has (0, 0)?", (0, 0) in grid, " has (1, 1)?", (1, 1) in grid)
+}

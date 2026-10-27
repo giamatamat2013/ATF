@@ -1,0 +1,394 @@
+// tests for std/collections
+import "std/collections"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+struct Task {
+    pri: int,
+    name: str
+}
+
+fn test_stack() {
+    println("---- Stack")
+    let s = stack_new::<int>()
+    println(s, s.len(), s.is_empty(), s.pop(), s.peek())
+    s.push(1)
+    s.push(2)
+    s.push(3)
+    println(s, s.len(), s.is_empty(), s.peek(), s.contains(2), s.contains(9))
+    println(s.pop(), s.pop(), s.to_array(), s.pop(), s.pop(), s.len())
+    s.push(7)
+    let arr = s.to_array()
+    arr.push(99)                 // a copy: the stack is unchanged
+    println(s, arr)
+    s.clear()
+    println(s, s.is_empty())
+    let words = stack_new::<str>()
+    for w in "to be or not".split(" ") { words.push(w) }
+    var out: [str] = []
+    while let w = words.pop() { out.push(w) }
+    println(out)
+}
+
+fn test_deque() {
+    println("---- Deque")
+    let d = deque_new::<int>()
+    println(d, d.len(), d.pop_front(), d.pop_back(), d.peek_front(), d.peek_back())
+    d.push_back(1)
+    d.push_back(2)
+    d.push_front(0)
+    d.push_front(-1)
+    println(d, d.len(), d.peek_front(), d.peek_back(), d.get(0), d.get(3), d.get(-1), d[1])
+    d[1] = 100
+    d.set(-1, 200)
+    println(d, d.contains(100), d.contains(5))
+    println(d.pop_front(), d.pop_back(), d)
+    // growth while wrapped around
+    let w = deque_new::<int>()
+    for i in 0..6 { w.push_back(i) }
+    for i in 0..4 { w.pop_front() }
+    for i in 6..30 { w.push_back(i) }
+    for i in 1..4 { w.push_front(-i) }
+    println(w.len(), w.to_array())
+    let r = deque_from([1, 2, 3, 4, 5])
+    r.rotate(2)
+    println("rotate 2:", r)
+    r.rotate(-3)
+    println("rotate -3:", r)
+    r.rotate(10)
+    println("rotate 10:", r)
+    var seen: [int] = []
+    r.for_each(|x| seen.push(x * 10))
+    println("for_each:", seen)
+    println("eq:", deque_from([1, 2]) == deque_from([1, 2]), deque_from([1, 2]) == deque_from([2, 1]))
+    let a = deque_from([1, 2, 3])
+    let b = deque_new::<int>()
+    b.push_front(3)
+    b.push_front(2)
+    b.push_front(1)
+    println("eq after different histories:", a == b, a, b)
+    println("out of range:", catch_panic(|| { println(a.get(3)) }), catch_panic(|| { a.set(-4, 0) }))
+    r.clear()
+    println("cleared:", r, r.is_empty())
+    // compare with an array model for many random operations
+    rand_seed(7)
+    let dq = deque_new::<int>()
+    var model: [int] = []
+    var ok = true
+    for i in 0..20000 {
+        let op = rand_int(0, 5)
+        if op == 0 or op == 4 {
+            dq.push_back(i)
+            model.push(i)
+        } else if op == 1 {
+            dq.push_front(i)
+            model.insert(0, i)
+        } else if op == 2 {
+            let x = dq.pop_front()
+            if model.len() == 0 {
+                if x != nil { ok = false }
+            } else if x != model.remove(0) { ok = false }
+        } else if op == 3 {
+            let x = dq.pop_back()
+            if model.len() == 0 {
+                if x != nil { ok = false }
+            } else if x != model.pop() { ok = false }
+        } else if model.len() > 0 {
+            let k = rand_int(0, model.len() - 1)
+            if dq[k] != model[k] { ok = false }
+        }
+        if dq.len() != model.len() { ok = false }
+    }
+    println("random ops match array model:", ok, dq.to_array() == model, dq.len())
+    let sd = deque_from(["x", "y"])
+    println("strings:", sd, sd.pop_front(), sd.pop_front(), sd.pop_front())
+}
+
+fn test_pq() {
+    println("---- PriorityQueue")
+    let q = pq_new::<int>()
+    println(q, q.pop(), q.peek(), q.is_empty())
+    for x in [5, 1, 8, 3, 9, 2, 7, 1] { q.push(x) }
+    println(q, q.len(), q.peek())
+    var out: [int] = []
+    while let x = q.pop() { out.push(x) }
+    println("min order:", out, q.len())
+    let mx = pq_new_max::<int>()
+    for x in [5, 1, 8, 3, 9, 2, 7] { mx.push(x) }
+    println("max order:", mx.drain(), mx.len())
+    let tasks = pq_with::<Task>(|a, b| if a.pri != b.pri { b.pri - a.pri } else { str_cmp(a.name, b.name) })
+    tasks.push(Task(1, "sleep"))
+    tasks.push(Task(5, "fire"))
+    tasks.push(Task(3, "email"))
+    tasks.push(Task(5, "alarm"))
+    println("tasks:", tasks.to_sorted_array().map(|t| "{t.pri}:{t.name}"), tasks.len())
+    println("first task:", tasks.pop()!.name, tasks.pop()!.name, tasks.peek()!.name)
+    let words = pq_with::<str>(|a, b| a.len() - b.len())
+    for w in ["ccc", "a", "bbbb", "dd"] { words.push(w) }
+    println("by length:", words.drain())
+    let h = pq_from([9, 4, 7, 1, 8, 2, 6, 3, 5, 0], coll_natural_cmp)
+    println("heapify:", h.peek(), h.to_sorted_array(), h.len())
+    println("push_pop:", h.push_pop(-5), h.push_pop(4), h.peek(), h.len())
+    h.clear()
+    println("cleared:", h.is_empty(), h.push_pop(3), h.len())
+    // heap sort of random numbers
+    rand_seed(11)
+    let big = pq_new::<int>()
+    var nums: [int] = []
+    for i in 0..5000 {
+        let x = rand_int(-1000, 1000)
+        nums.push(x)
+        big.push(x)
+    }
+    nums.sort()
+    println("heap sort matches sort:", big.drain() == nums)
+    let tuples = pq_new::<(int, str)>()
+    tuples.push((2, "b"))
+    tuples.push((1, "z"))
+    tuples.push((2, "a"))
+    println("tuples:", tuples.drain())
+    let fl = pq_new_max::<float>()
+    fl.push(1.5)
+    fl.push(-2.0)
+    fl.push(3.25)
+    println("floats:", fl, fl.pop())
+}
+
+fn test_linked_list() {
+    println("---- LinkedList")
+    let l = linked_list_new::<int>()
+    println(l, l.len(), l.pop_front(), l.pop_back(), l.front(), l.back(), l.get(0), l.is_empty())
+    l.push_back(2)
+    l.push_back(3)
+    l.push_front(1)
+    l.push_front(0)
+    println(l, l.len(), l.front(), l.back(), l.get(0), l.get(2), l.get(3), l.get(4), l.get(-1))
+    l.insert(0, -1)
+    l.insert(5, 4)
+    l.insert(3, 99)
+    println("insert:", l, l.len())
+    println("remove_at:", l.remove_at(3), l.remove_at(0), l.remove_at(l.len() - 1), l.remove_at(10), l)
+    println("set:", l.set(1, 10), l.set(9, 0), l)
+    println("index_of:", l.index_of(10), l.index_of(3), l.index_of(42), l.contains(2), l.contains(42))
+    println("remove value:", l.remove(10), l.remove(10), l)
+    l.reverse()
+    println("reversed:", l, l.front(), l.back())
+    let m = l.map(|x| "<{x}>")
+    println("map:", m)
+    let e = linked_list_from([5, 6])
+    l.extend(e)
+    println("extend:", l, e)
+    println("retain even:", l.retain(|x| x % 2 == 0), l)
+    var sum = 0
+    l.for_each(|x| sum += x)
+    println("for_each sum:", sum)
+    println("eq:", linked_list_from([1, 2]) == linked_list_from([1, 2]), linked_list_from([1, 2]) == linked_list_from([1]))
+    println("insert error:", catch_panic(|| { l.insert(99, 1) }))
+    println("node:", l.node_at(0), l.node_at(100))
+    // pop until empty from both ends
+    let p = linked_list_from(["a", "b", "c", "d", "e"])
+    var got: [str] = []
+    var front = true
+    while not p.is_empty() {
+        if front { got.push(p.pop_front()!) } else { got.push(p.pop_back()!) }
+        front = not front
+    }
+    println("alternating pops:", got, p, p.front(), p.back())
+    p.push_back("again")
+    println("reuse after empty:", p, p.len())
+    l.clear()
+    println("cleared:", l, l.len())
+    // random model test
+    rand_seed(5)
+    let ll = linked_list_new::<int>()
+    var model: [int] = []
+    var ok = true
+    for i in 0..3000 {
+        let op = rand_int(0, 6)
+        if op == 0 {
+            ll.push_back(i)
+            model.push(i)
+        } else if op == 1 {
+            ll.push_front(i)
+            model.insert(0, i)
+        } else if op == 2 {
+            let k = rand_int(0, model.len())
+            ll.insert(k, i)
+            model.insert(k, i)
+        } else if op == 3 and model.len() > 0 {
+            let k = rand_int(0, model.len() - 1)
+            if ll.remove_at(k) != model.remove(k) { ok = false }
+        } else if op == 4 and model.len() > 0 {
+            if ll.pop_back() != model.pop() { ok = false }
+        } else if op == 5 and model.len() > 0 {
+            let k = rand_int(0, model.len() - 1)
+            if ll.get(k) != model[k] { ok = false }
+        } else if op == 6 {
+            ll.reverse()
+            model.reverse()
+        }
+    }
+    println("random ops match array model:", ok, ll.to_array() == model, ll.len() == model.len())
+}
+
+fn test_sorted_map() {
+    println("---- SortedMap")
+    let m = sorted_map_new::<str, int>()
+    println(m, m.len(), m.get("x"), m.min_key(), m.max_key(), m.pop_min(), m.is_empty())
+    m.set("pear", 3)
+    m.set("apple", 5)
+    m["fig"] = 7
+    m.set("banana", 1)
+    m.set("apple", 6)
+    println(m, m.len())
+    println("get:", m.get("apple"), m.get("kiwi"), m.get_or("kiwi", -1), m["fig"], m.has("pear"), m.has("kiwi"), "fig" in m, "kiwi" in m)
+    println("keys/values/items:", m.keys(), m.values(), m.items())
+    println("min/max:", m.min_key(), m.max_key())
+    println("floor/ceiling:", m.floor_key("c"), m.ceiling_key("c"), m.floor_key("apple"), m.ceiling_key("pear"), m.floor_key("a"), m.ceiling_key("q"))
+    println("lower/higher:", m.lower_key("banana"), m.higher_key("banana"), m.lower_key("apple"), m.higher_key("pear"))
+    println("range:", m.range("b", "g"), m.range("a", "z").len(), m.range("x", "z"))
+    println("missing key:", catch_panic(|| { println(m["kiwi"]) }))
+    println("remove:", m.remove("fig"), m.remove("fig"), m)
+    println("pop:", m.pop_min(), m.pop_max(), m)
+    var acc: [str] = []
+    m.for_each(|k, v| acc.push("{k}={v}"))
+    println("for_each:", acc)
+    println("eq:", sorted_map_new::<int, int>() == sorted_map_new::<int, int>(), m == m)
+    m.clear()
+    println("cleared:", m, m.len())
+    // descending order with a custom comparator
+    let desc = sorted_map_with::<int, str>(|a, b| b - a)
+    for i in [3, 1, 4, 1, 5, 9, 2, 6] { desc.set(i, "v{i}") }
+    println("descending:", desc.keys(), desc.min_key(), desc.floor_key(7), desc.ceiling_key(7))
+    // case-insensitive keys
+    let ci = sorted_map_with::<str, int>(|a, b| str_cmp(a.lower(), b.lower()))
+    ci.set("Hello", 1)
+    ci.set("hello", 2)
+    ci.set("ABC", 3)
+    println("case-insensitive:", ci, ci.get("HELLO"))
+    // random model test against a hash map, plus balance check
+    rand_seed(99)
+    let t = sorted_map_new::<int, int>()
+    var model: {int: int} = {}
+    var ok = true
+    for i in 0..20000 {
+        let k = rand_int(0, 2000)
+        let op = rand_int(0, 3)
+        if op <= 1 {
+            t.set(k, i)
+            model[k] = i
+        } else if op == 2 {
+            if t.remove(k) != model.remove(k) { ok = false }
+        } else {
+            if t.get(k) != model.try_get(k) { ok = false }
+        }
+    }
+    var mk = model.keys()
+    mk.sort()
+    println("random ops match:", ok, t.len() == model.len(), t.keys() == mk)
+    var vals_ok = true
+    for k in mk {
+        if t.get(k)! != model[k] { vals_ok = false }
+    }
+    println("values match:", vals_ok)
+    // floor/ceiling against brute force
+    var fc_ok = true
+    for q in -5..2010 step 7 {
+        var fl: int? = nil
+        var ce: int? = nil
+        for k in mk {
+            if k <= q { fl = k }
+            if k >= q and ce == nil { ce = k }
+        }
+        if t.floor_key(q) != fl or t.ceiling_key(q) != ce { fc_ok = false }
+    }
+    println("floor/ceiling match brute force:", fc_ok)
+    let seq = sorted_map_new::<int, bool>()
+    for i in 0..100000 { seq.set(i, true) }
+    println("sequential inserts: len {seq.len()}, depth {seq.depth()} (AVL bound 25)", seq.depth() <= 25)
+    for i in 0..100000 step 2 { seq.remove(i) }
+    println("after removing half: len {seq.len()}, depth {seq.depth()}", seq.min_key(), seq.max_key(), seq.depth() <= 24)
+    let tk = sorted_map_new::<(int, str), int>()
+    tk.set((2, "a"), 1)
+    tk.set((1, "b"), 2)
+    tk.set((1, "a"), 3)
+    println("tuple keys:", tk.keys())
+}
+
+fn test_sorted_set() {
+    println("---- SortedSet")
+    let s = sorted_set_new::<int>()
+    println(s, s.len(), s.min(), s.max(), s.pop_min(), s.is_empty())
+    println("add:", s.add(5), s.add(1), s.add(5), s.add(3), s.add(9), s)
+    println("has:", s.has(3), s.has(4), s.contains(9), 1 in s, 2 in s)
+    println("min/max:", s.min(), s.max(), s.items(), s.to_array())
+    println("floor/ceiling/lower/higher:", s.floor(4), s.ceiling(4), s.lower(3), s.higher(3), s.floor(0), s.ceiling(10))
+    println("range:", s.range(2, 9), s.range(0, 100))
+    println("remove:", s.remove(3), s.remove(3), s)
+    let a = sorted_set_from([1, 2, 3, 4])
+    let b = sorted_set_from([3, 4, 5])
+    println("union:", a.union(b), "intersection:", a.intersection(b), "difference:", a.difference(b), b.difference(a))
+    println("subset:", sorted_set_from([3, 4]).is_subset(a), b.is_subset(a), sorted_set_new::<int>().is_subset(a))
+    println("eq:", sorted_set_from([3, 1, 2]) == sorted_set_from([1, 2, 3]), a == b)
+    println("pop:", a.pop_min(), a.pop_max(), a)
+    var xs: [int] = []
+    a.for_each(|x| xs.push(x))
+    println("for_each:", xs)
+    a.clear()
+    println("cleared:", a, a.len())
+    let words = sorted_set_from("the quick brown fox jumps over the lazy dog the end".split(" "))
+    println("words:", words, words.len())
+    let by_len = sorted_set_with::<str>(|x, y| if x.len() != y.len() { x.len() - y.len() } else { str_cmp(x, y) })
+    for w in words.items() { by_len.add(w) }
+    println("by length:", by_len)
+}
+
+fn test_counter() {
+    println("---- Counter")
+    let c = counter_from("the cat and the hat and the bat".split(" "))
+    println(c, c.len(), c.total())
+    println("get:", c.get("the"), c["and"], c.get("dog"), c.has("cat"), c.has("dog"))
+    println("most common:", c.most_common(2), c.most_common(0), c.most_common(100).len(), c.most_common())
+    println("keys/items:", c.keys(), c.items())
+    c.add("dog")
+    c.add_n("dog", 4)
+    c.add_n("the", -2)
+    println("after adds:", c, c.total())
+    c.add_n("cat", -5)
+    println("count to zero removes:", c.has("cat"), c.get("cat"), c.total(), c.len())
+    c.add_n("never", -1)
+    println("negative for missing key:", c.has("never"), c.total())
+    println("remove:", c.remove("dog"), c.remove("dog"), c.total())
+    let d = counter_from(["hat", "zebra"])
+    c.merge(d)
+    println("merge:", c, c.total())
+    println("eq:", counter_from([1, 2, 1]) == counter_from([2, 1, 1]), counter_from([1]) == counter_from([1, 1]))
+    let letters = counter_new::<str>()
+    for ch in "mississippi" { letters.add(ch) }
+    println("letters:", letters.most_common(), letters.is_empty())
+    letters.clear()
+    println("cleared:", letters, letters.is_empty(), letters.total())
+}
+
+fn main() -> int {
+    test_stack()
+    test_deque()
+    test_pq()
+    test_linked_list()
+    test_sorted_map()
+    test_sorted_set()
+    test_counter()
+    check("natural cmp", "{coll_natural_cmp(1, 2)} {coll_natural_cmp("b", "a")} {coll_natural_cmp(3.0, 3.0)}", "-1 1 0")
+    check("reverse cmp", "{coll_reverse_cmp(1, 2)} {coll_reverse_cmp("b", "a")} {coll_reverse_cmp(3, 3)}", "1 -1 0")
+    println("failures:", failures)
+    return failures
+}

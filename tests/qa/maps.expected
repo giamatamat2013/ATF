@@ -1,0 +1,26 @@
+20000 0 19999 false -1
+10000 10000 false true false
+10010 -1 0
+99999955
+{"b": 10, "c": 3, "d": 4, "a": 5} ["b", "c", "d", "a"] [10, 3, 4, 5] [("b", 10), ("c", 3), ("d", 4), ("a", 5)]
+{} 0 true
+{"z": 1}
+34 49 49 false ["k0", "k3", "k6"]
+yes no {true: "yes", false: "no"}
+{1.5: "c", -2.25: "b"} b false
+10 false 20 {(1, "x"): 10, (2, "y"): 20}
+2 300 false {K2{a: 1, b: "a"}: 300, K2{a: 1, b: "b"}: 200}
+4 5 3 false {Kind.One: 1, Kind.Two(5): 5, Kind.Three("q", 1): 3, Kind.Two(6): 4}
+2 {97: 1, 98: 2}
+a false {[1, 2]: "a", [3]: "b"}
+{"x": {"y": [1, 2, 9], "z": [3]}}
+7 12 2
+{"a": 1, "b": nil} true true true
+true false 2 3 true
+{} 0
+{"new": 1}
+true false true
+4 [5, 1, 3, 9] true false [5, 1, 3, 9] true false [1, 3, 9]
+["b", "a"] 2 true
+2 true
+1234

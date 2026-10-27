@@ -1,0 +1,9 @@
+name? [Ada Lovelace]
+"second line \t" 13
+empty: "" 0
+long: 100001 aaa 100000 true
+after: 31037 31037 false
+unicode: héllo ☺ λ 13
+numbers: 4 40
+rest: ["tail one", "tail two"] 18
+eof: nil []

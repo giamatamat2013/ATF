@@ -1,0 +1,19 @@
+    1 -> I
+    4 -> IV
+    9 -> IX
+   14 -> XIV
+   40 -> XL
+   90 -> XC
+  400 -> CD
+ 1994 -> MCMXCIV
+ 2024 -> MMXXIV
+ 3999 -> MMMCMXCIX
+    0 -> error: 0 is outside 1..3999
+ 4000 -> error: 4000 is outside 1..3999
+ MCMXCIV -> 1994
+    XLII -> 42
+  MMXXIV -> 2024
+     ABC -> error: 'A' is not a roman digit
+      iv -> error: 'i' is not a roman digit
+round trip failures for 1..3999: 0
+longest numeral: 3888 = MMMDCCCLXXXVIII (15 letters)

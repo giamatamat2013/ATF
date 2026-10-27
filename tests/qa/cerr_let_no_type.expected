@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: 'let x' needs a value:  let x = ...
+  --> cerr_let_no_type.atf:2:5
+ 2 |     let x
+   |     ^

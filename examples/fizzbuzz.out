@@ -1,0 +1,9 @@
+1, 2, Fizz, 4, Buzz, Fizz, 7, 8, Fizz, Buzz, 11, Fizz, 13, 14, FizzBuzz, 16, 17, Fizz, 19, Buzz
+versions agree on 100 of 100 numbers
+[0, 5, 10, 15, 20, 25, 30]
+100: Buzz
+101: 101
+102: Fizz
+103: 103
+104: 104
+105: FizzBuzz

@@ -1,0 +1,9 @@
+// calling a closure stored in a global variable is rejected:
+//   error: unknown function 'handler'   hint: did you mean 'handler'?
+var handler: fn(int) -> int = |x| x + 1
+
+fn main() {
+    println(handler(1))
+    handler = |x| x * 10
+    println(handler(2))
+}

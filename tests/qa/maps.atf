@@ -1,0 +1,109 @@
+// maps: many inserts/removals/re-inserts, insertion order, keys of every type, Set
+struct K2 { a: int, b: str }
+enum Kind { One, Two(int), Three(str, int) }
+
+fn main() {
+    // many inserts, then remove the even keys, then re-insert some
+    var m: {int: int} = {}
+    for i in 0..20000 { m[i * 7] = i }
+    println(m.len(), m[0], m[7 * 19999], m.has(7 * 20000), m.get(5, -1))
+    var removed = 0
+    for i in 0..20000 {
+        if i % 2 == 0 {
+            if m.remove(i * 7) { removed += 1 }
+        }
+    }
+    println(removed, m.len(), m.has(0), m.has(7), m.remove(0))
+    for i in 0..10 { m[i * 14] = -i }
+    println(m.len(), m[14], m[0])
+    var total = 0
+    for k, v in m { total += v }
+    println(total)
+    // insertion order is kept; a removed then re-added key goes to the end
+    var o = {"b": 1, "a": 2, "c": 3}
+    o["d"] = 4
+    o.remove("a")
+    o["a"] = 5
+    o["b"] = 10
+    println(o, o.keys(), o.values(), o.items())
+    // remove everything, then reuse
+    for k in o.keys() { o.remove(k) }
+    println(o, o.len(), o.is_empty())
+    o["z"] = 1
+    println(o)
+    // churn: insert and remove repeatedly to exercise tombstones
+    var ch: {str: int} = {}
+    for round in 0..50 {
+        for i in 0..100 { ch["k" + str(i)] = round }
+        for i in 0..100 {
+            if i % 3 != 0 { ch.remove("k" + str(i)) }
+        }
+    }
+    println(ch.len(), ch["k0"], ch["k99"], ch.has("k1"), ch.keys()[0..3])
+    // keys of every type
+    let bm = {true: "yes", false: "no"}
+    println(bm[true], bm[false], bm)
+    var fm: {float: str} = {}
+    fm[1.5] = "a"
+    fm[-2.25] = "b"
+    fm[1.5] = "c"
+    println(fm, fm[-2.25], fm.has(1.5000001))
+    let tm = {(1, "x"): 10, (2, "y"): 20}
+    println(tm[(1, "x")], tm.has((1, "y")), tm.get((2, "y"), 0), tm)
+    var sm: {K2: int} = {}
+    sm[K2(1, "a")] = 100
+    sm[K2(1, "b")] = 200
+    sm[K2(1, "a")] = 300
+    println(sm.len(), sm[K2(1, "a")], sm.has(K2(2, "a")), sm)
+    var em: {Kind: int} = {}
+    em[Kind.One] = 1
+    em[Kind.Two(5)] = 2
+    em[Kind.Three("q", 1)] = 3
+    em[Kind.Two(6)] = 4
+    em[Kind.Two(5)] = 5
+    println(em.len(), em[Kind.Two(5)], em[Kind.Three("q", 1)], em.has(Kind.Three("q", 2)), em)
+    let byte_map = {'a': 1, 'b': 2}
+    println(byte_map['b'], byte_map)
+    let am = {[1, 2]: "a", [3]: "b"}
+    println(am[[1, 2]], am.has([1]), am)
+    let nested = {"x": {"y": [1, 2]}}
+    nested["x"]["z"] = [3]
+    nested["x"]["y"].push(9)
+    println(nested)
+    // maps of closures and optionals
+    var ops: {str: fn(int, int) -> int} = {}
+    ops["+"] = |a, b| a + b
+    ops["*"] = |a, b| a * b
+    println(ops["+"](3, 4), ops["*"](3, 4), ops.len())
+    let om: {str: int?} = {"a": 1, "b": nil}
+    println(om, om["b"] == nil, om.try_get("c") == nil, om.has("b"))
+    // map equality, copy, clear
+    let m1 = {"a": 1, "b": 2}
+    let m2 = {"b": 2, "a": 1}
+    let m3 = m1.copy()
+    m3["c"] = 3
+    println(m1 == m2, m1 == m3, m1.len(), m3.len(), m1 != {"a": 1, "b": 3})
+    m3.clear()
+    println(m3, m3.len())
+    m3["new"] = 1
+    println(m3)
+    println("a" in m1, "zz" in m1, m1.contains("b"))
+    // Set
+    let s = set_new::<int>()
+    for x in [5, 1, 5, 3, 1, 9] { s.add(x) }
+    println(s.len(), s.items(), s.has(3), 4 in s, s, s.remove(5), s.remove(5), s.items())
+    let ss = set_new::<str>()
+    ss.add("b")
+    ss.add("a")
+    ss.add("b")
+    println(ss, ss.len(), ss.contains("a"))
+    let ts = set_new::<(int, int)>()
+    ts.add((1, 2))
+    ts.add((1, 2))
+    ts.add((2, 1))
+    println(ts.len(), (2, 1) in ts)
+    // big set
+    let bs = set_new::<int>()
+    for i in 0..100000 { bs.add(i % 1234) }
+    println(bs.len())
+}

@@ -1,0 +1,9 @@
+// An interpolation whose expression starts with a string literal needs a space after the brace:
+// "{"  directly before a quote is a literal brace (so JSON text can be written in """...""" strings).
+fn main() {
+    let parts = ["a", "b"]
+    println("[{ ", ".join(parts) }]")
+    let s = "<{ "x".upper() }>"
+    println(s, s.len())
+    println("""{"key": 1}""")
+}

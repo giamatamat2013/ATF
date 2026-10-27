@@ -1,0 +1,171 @@
+// Typed, lowered intermediate representation (port of atf/tir.py)
+import "util"
+import "ast"
+import "types"
+
+// where a variable lives (decided by the code generator)
+enum Loc {
+    NoLoc,
+    Reg(int),                  // integer register number (rbx=3, rsi=6, ...)
+    XReg(int),                 // xmm register number
+    Stack(int)                 // [rbp + disp]
+}
+
+struct Var {
+    name: str,
+    ty: Type,
+    mutable: bool,
+    uid: int,
+    captured: bool,
+    assigned: bool,
+    is_param: bool,
+    weight: int,
+    pos: Pos,
+    loc: Loc,
+    root: Var?,                // nil: this variable is its own root (captured copies point to the original)
+    is_temp: bool
+}
+
+var var_counter: int = 0
+
+fn new_var(name: str, ty: Type, mutable: bool, pos: Pos) -> Var {
+    var_counter += 1
+    return Var(name, ty, mutable, var_counter, false, false, false, 0, pos, Loc.NoLoc, nil, false)
+}
+
+impl Var {
+    fn root_var(self) -> Var {
+        if self.root == nil { return self }
+        return self.root!
+    }
+    fn boxed(self) -> bool {
+        let r = self.root_var()
+        return r.captured and r.assigned
+    }
+}
+
+struct GlobalVar {
+    name: str,
+    ty: Type,
+    uid: int,
+    sym: str,
+    pos: Pos
+}
+
+var global_counter: int = 0
+
+fn new_global(name: str, ty: Type, pos: Pos) -> GlobalVar {
+    global_counter += 1
+    return GlobalVar(name, ty, global_counter, "g" + str(global_counter) + "_" + name, pos)
+}
+
+struct Extern {
+    dll: str,
+    name: str,
+    params: [Type],
+    ret: Type,
+    ret32: bool
+}
+
+enum CK { Int, Float, Bool, Str, Nil }
+
+struct TExpr {
+    k: TK,
+    ty: Type,
+    pos: Pos
+}
+
+struct TStmt {
+    k: SK,
+    pos: Pos
+}
+
+enum TK {
+    Const(CK, int, float, str),          // kind, int/bool/nil value, float value, string bytes
+    VarRef(Var),
+    GlobalRef(GlobalVar),
+    FnRef(FnInst),
+    Un(str, TExpr),                      // neg fneg not bnot
+    Bin(str, TExpr, TExpr),              // add sub mul div mod and or xor shl shr ushr  eq ne lt le gt ge  fadd fsub fmul fdiv feq fne flt fle fgt fge
+    And(TExpr, TExpr),
+    Or(TExpr, TExpr),
+    Cvt(str, TExpr),                     // nop i2f f2i trunc8
+    Call(FnInst, [TExpr]),
+    CallExt(Extern, [TExpr]),
+    CallInd(TExpr, [TExpr]),
+    Load(TExpr, int),                    // [obj + 8*idx]
+    PtrIdx(TExpr, TExpr, int),           // base, index, element size
+    ArrIdx(TExpr, TExpr, int),           // bounds-checked array element
+    NewObj([TExpr]),
+    Intr(str, [TExpr]),
+    Cond(TExpr, TExpr, TExpr),
+    Seq([TStmt], TExpr),
+    MkClosure(FnInst, [Var])
+}
+
+enum SK {
+    Decl(Var, TExpr?),
+    Set(TExpr, TExpr),
+    ExprS(TExpr),
+    If(TExpr, [TStmt], [TStmt]),
+    While(TExpr, [TStmt], [TStmt]),      // condition, body, step
+    Break,
+    Continue,
+    BreakN(int),                         // leave the loop n levels out (0 = innermost)
+    ContinueN(int),
+    Ret(TExpr?),
+    Blk([TStmt])
+}
+
+var fninst_counter: int = 0
+
+struct FnInst {
+    uid: int,
+    name: str,
+    params: [Var],
+    ret: Type,
+    body: [TStmt]?,                      // nil until the body has been checked
+    vars: [Var],
+    callees: {int: FnInst},              // by uid
+    is_lambda: bool,
+    captures: [Var],                     // variables of the enclosing function captured by this lambda
+    capture_inner: {int: Var},           // outer Var uid -> inner Var
+    label: int,
+    pos: Pos,
+    info: FnInfo?,
+    targs: [Type],
+    is_prelude: bool,
+    origin: Pos?                         // for library code: the user call that needed this instance
+}
+
+fn new_fninst(name: str, params: [Var], ret: Type) -> FnInst {
+    fninst_counter += 1
+    return FnInst(fninst_counter, name, params, ret, nil, [], {}, false, [], {}, 0, NOPOS, nil, [], false, nil)
+}
+
+struct Program {
+    funcs: [FnInst],
+    globals: [GlobalVar],
+    externs: [Extern],
+    entry: FnInst?,
+    alloc: FnInst?,
+    rt: {str: FnInst}
+}
+
+fn new_program() -> Program {
+    return Program([], [], [], nil, nil, {})
+}
+
+// ---- small constructors used by the checker and the code generator
+fn texpr(k: TK, ty: Type, pos: Pos) -> TExpr { return TExpr(k, ty, pos) }
+fn tstmt(k: SK, pos: Pos) -> TStmt { return TStmt(k, pos) }
+
+fn c_int(v: int, ty: Type, pos: Pos) -> TExpr { return TExpr(TK.Const(CK.Int, v, 0.0, ""), ty, pos) }
+fn c_float(v: float, pos: Pos) -> TExpr { return TExpr(TK.Const(CK.Float, 0, v, ""), Type.Float, pos) }
+fn c_bool(v: bool, pos: Pos) -> TExpr {
+    var n = 0
+    if v { n = 1 }
+    return TExpr(TK.Const(CK.Bool, n, 0.0, ""), Type.Bool, pos)
+}
+fn c_str(v: str, pos: Pos) -> TExpr { return TExpr(TK.Const(CK.Str, 0, 0.0, v), Type.Str, pos) }
+fn c_nil(ty: Type, pos: Pos) -> TExpr { return TExpr(TK.Const(CK.Nil, 0, 0.0, ""), ty, pos) }

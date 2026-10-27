@@ -1,0 +1,13 @@
+Result.Ok(7)
+Result.Err("not a number: x")
+Result.Err("negative: -1")
+ok 30
+5 -1 true true
+"H!" nil
+caught: "zero not allowed"
+caught: "index 7 is out of range (length 3)"
+2
+caught: nil
+caught: "division by zero"
+0 15 -4 2
+true false true

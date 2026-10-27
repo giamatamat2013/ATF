@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected str but found int
+  --> cerr_map_key_type.atf:3:7
+ 3 |     m[2] = 3
+   |       ^
+  hint: use str(x) to convert it to text

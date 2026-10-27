@@ -1,0 +1,33 @@
+fn main() {
+    // integers
+    println(7 / 2, -7 / 2, 7 % 3, -7 % 3, 2 ** 10, 1 << 40, -16 >> 2, 5 & 3, 5 | 3, 5 ^ 3, ~5)
+    println(10 / 3 * 3 + 10 % 3, (1 + 2) * 3, 2 + 3 * 4, -2 ** 2)
+    let big = 9223372036854775807
+    println(big, big + 1, -big - 1)
+    println(0xFF, 0b1010, 0o17, 1_000_000)
+    // floats
+    println(1.5 + 2, 3 * 0.5, 7.0 / 2, 1e3, 1.5e-3, 100.0, 0.1 + 0.2)
+    println(sqrt(2.0), floor(2.7), ceil(2.1), round(2.5), round(-2.5), 2.0 ** 0.5, 10.0 % 3.0)
+    println(int(3.99), int(-3.99), float(7), 5 as float, 3.7 as int)
+    println(PI, E)
+    // bool & comparisons
+    println(1 < 2, 2 <= 2, 3 > 4, 3 >= 4, 1 == 1, 1 != 1, 1.5 < 2, "a" < "b", "abc" == "abc", "abc" != "abd")
+    println(true and false, true or false, not true, 1 < 2 and 2 < 3)
+    // chars / bytes
+    let c = 'a'
+    println(c, c + 1, 'z' - 'a', byte(65), chr(65), ord("A"), "héllo".len())
+    // strings
+    let s = "Hello, World"
+    println(s.len(), s.upper(), s.lower(), s[0], s[7..], s[..5], s[3..8], s.find("World"), s.contains("lo, W"))
+    println(s.starts_with("Hell"), s.ends_with("ld"), s.replace("l", "L"), "  pad ".trim() + "|", "ab" * 3)
+    println("x".repeat(3), "a-b-c".split("-"), ", ".join(["a", "b", "c"]), "abc".reverse())
+    println("42".parse_int(), "x".parse_int(), "3.5".parse_float(), int("123") + 1, float("2.5") * 2.0)
+    println("{1 + 1} { "nested" } {s.len()}", "tab\there", "quote\"s", 'x')
+    let n = 255
+    println("{n:x} {n:X} {n:b} {n:5}| {n:<5}| {n:^7}| {n:05} {3.14159:.2f} {2.5:8.3f}|")
+    // multi-line
+    let ml = """line1
+line2"""
+    println(ml)
+    println(r"raw\n{x}")
+}

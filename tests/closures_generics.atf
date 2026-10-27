@@ -1,0 +1,82 @@
+fn make_counter() -> fn() -> int {
+    var n = 0
+    return || {
+        n += 1
+        return n
+    }
+}
+
+fn make_adder(k: int) -> fn(int) -> int {
+    return |x| x + k
+}
+
+fn compose<A, B, C>(f: fn(A) -> B, g: fn(B) -> C) -> fn(A) -> C {
+    return |x| g(f(x))
+}
+
+fn apply_n(f: fn(int) -> int, n: int, x: int) -> int {
+    var r = x
+    for i in 0..n { r = f(r) }
+    return r
+}
+
+fn swap_pair<A, B>(p: (A, B)) -> (B, A) {
+    return (p.1, p.0)
+}
+
+fn first_or<T>(a: [T], d: T) -> T {
+    if a.len() == 0 { return d }
+    return a[0]
+}
+
+struct Pair<A, B> { first: A, second: B }
+
+fn double(x: int) -> int { return x * 2 }
+
+fn main() {
+    let c1 = make_counter()
+    let c2 = make_counter()
+    println(c1(), c1(), c1(), c2())
+    let add5 = make_adder(5)
+    println(add5(10), make_adder(1)(1))
+    let f = compose(|x: int| x + 1, |x| x * 10)
+    println(f(4))
+    let g = compose(double, add5)
+    println(g(7))
+    println(apply_n(double, 10, 1))
+    println(swap_pair((1, "a")))
+    println(first_or([3, 4], 0), first_or([] as [int], -1), first_or(["x"], "y"))
+    let p = Pair{ first: 1, second: "one" }
+    println(p, p.first, p.second)
+    let p2 = Pair(2.5, [1, 2])
+    println(p2)
+
+    // closures capturing loop variables
+    var fs: [fn() -> int] = []
+    for i in 0..3 {
+        fs.push(|| i * i)
+    }
+    for f in fs { print(f(), "") }
+    println()
+
+    // nested closure captures
+    let base = 100
+    let outer = |a: int| {
+        let inner = |b: int| a + b + base
+        return inner(1) + inner(2)
+    }
+    println(outer(10))
+
+    // higher-order array methods
+    let nums = [5, 2, 8, 1, 9, 3]
+    println(nums.map(|x| x * 2), nums.filter(|x| x % 2 == 1), nums.reduce(0, |a, b| a + b))
+    println(nums.any(|x| x > 8), nums.all(|x| x > 1), nums.sorted(), nums.reversed())
+    var words = ["pear", "fig", "banana", "kiwi"]
+    words.sort_by(|a, b| a.len() - b.len())
+    println(words)
+    words.sort()
+    println(words, words.index_of("kiwi"), words.contains("fig"))
+    let total = sum([1.5, 2.5, 3.0])
+    println(total)
+    println(zip([1, 2, 3], ["a", "b", "c"]))
+}

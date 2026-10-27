@@ -1,0 +1,8 @@
+module constant: origin
+a = <1.0, 2.0>, b = <4.0, 6.0>
+a + b = <5.0, 8.0>, b - a = <3.0, 4.0>, a * 3 = <3.0, 6.0>, -a = <-1.0, -2.0>
+distance(a, b) = 5.0
+|b| = 7.211102550927978, a . b = 16.0
+area of the square: 16.0
+area of the triangle: 24.0
+perimeter of the triangle: 24.0

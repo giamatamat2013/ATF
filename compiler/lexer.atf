@@ -1,0 +1,570 @@
+// Tokenizer (port of atf/lexer.py)
+import "util"
+
+enum TokKind { Int, Float, Str, Char, Ident, Kw, Op, Newline, Eof }
+
+enum StrPart {
+    Lit(str),
+    Interp(str, int, int, str)          // source text, line, column, format spec ("" if none)
+}
+
+struct Token {
+    kind: TokKind,
+    val: str,
+    ival: int,
+    fval: float,
+    parts: [StrPart],
+    line: int,
+    col: int,
+    space_before: bool
+}
+
+fn new_token(kind: TokKind, val: str, line: int, col: int) -> Token {
+    return Token(kind, val, 0, 0.0, [], line, col, false)
+}
+
+let KEYWORDS: {str: bool} = make_set([
+    "fn", "let", "var", "const", "if", "else", "while", "for", "in", "loop", "break", "continue", "return",
+    "struct", "enum", "impl", "match", "import", "extern", "true", "false", "and", "or", "not", "as",
+    "defer", "type", "nil", "step", "unsafe", "pub", "interface"
+])
+
+let CONTINUERS: {str: bool} = make_set([
+    "+", "-", "*", "/", "%", "=", "&", "|", "^", ",", "(", "[", ".", "==", "!=", "<=", ">=", "&&", "||",
+    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "->", "=>", "..", "::", "??", "**", "..=", "<<=", ">>=",
+    "**=", "and", "or", "not", "in", "as", ":"
+])
+
+let OPS3: {str: bool} = make_set(["..=", "<<=", ">>>", ">>=", "**="])
+let OPS2: {str: bool} = make_set([
+    "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+    "<<", ">>", "->", "=>", "..", "::", "??", "**"
+])
+let OPS1: {str: bool} = make_set([
+    "+", "-", "*", "/", "%", "=", "<", ">", "!", "&", "|", "^", "~", "(", ")", "[", "]", "\{", "}", ",", ":", ";",
+    ".", "?", "@", "#"
+])
+
+fn make_set(items: [str]) -> {str: bool} {
+    var m: {str: bool} = {}
+    for s in items { m[s] = true }
+    return m
+}
+
+fn is_ident_start(c: int) -> bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c >= 128
+}
+
+fn is_ident_char(c: int) -> bool {
+    return is_ident_start(c) or (c >= '0' and c <= '9')
+}
+
+fn is_digit(c: int) -> bool { return c >= '0' and c <= '9' }
+
+fn hex_val(c: int) -> int {
+    if c >= '0' and c <= '9' { return c - '0' }
+    if c >= 'a' and c <= 'f' { return c - 'a' + 10 }
+    if c >= 'A' and c <= 'F' { return c - 'A' + 10 }
+    return -1
+}
+
+// decodes one UTF-8 character: returns (code point, byte length)
+fn utf8_decode(s: str, i: int) -> (int, int) {
+    let c = s.byte_at(i)
+    if c < 0x80 { return (c, 1) }
+    if c < 0xE0 and i + 1 < s.len() { return (((c & 0x1F) << 6) | (s.byte_at(i + 1) & 0x3F), 2) }
+    if c < 0xF0 and i + 2 < s.len() {
+        return (((c & 0x0F) << 12) | ((s.byte_at(i + 1) & 0x3F) << 6) | (s.byte_at(i + 2) & 0x3F), 3)
+    }
+    if i + 3 < s.len() {
+        return (((c & 0x07) << 18) | ((s.byte_at(i + 1) & 0x3F) << 12) | ((s.byte_at(i + 2) & 0x3F) << 6) | (s.byte_at(i + 3) & 0x3F), 4)
+    }
+    return (c, 1)
+}
+
+fn starts_at(s: str, pat: str, i: int) -> bool {
+    let n = pat.len()
+    if i + n > s.len() { return false }
+    let p = str_data(s)
+    let q = str_data(pat)
+    for k in 0..n {
+        if p[i + k] != q[k] { return false }
+    }
+    return true
+}
+
+// balanced brackets in s?
+fn balanced(s: str) -> bool {
+    var d = 0
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == '(' or c == '[' or c == '{' { d += 1 }
+        else if c == ')' or c == ']' or c == '}' { d -= 1 }
+    }
+    return d == 0
+}
+
+fn is_spec_char(c: int) -> bool {
+    return c == 'f' or c == 'd' or c == 'x' or c == 'X' or c == 'b' or c == 's' or c == 'c'
+}
+
+// does `spec` match  [<>^]? digits* (. digits+)? [fdxXbsc]?  followed only by spaces?  (and is non-empty)
+fn valid_spec(spec: str) -> bool {
+    let n = spec.len()
+    var i = 0
+    if i < n and (spec.byte_at(i) == '<' or spec.byte_at(i) == '>' or spec.byte_at(i) == '^') { i += 1 }
+    while i < n and is_digit(spec.byte_at(i)) { i += 1 }
+    if i < n and spec.byte_at(i) == '.' {
+        var j = i + 1
+        while j < n and is_digit(spec.byte_at(j)) { j += 1 }
+        if j > i + 1 { i = j }
+    }
+    if i < n and is_spec_char(spec.byte_at(i)) { i += 1 }
+    var j = i
+    while j < n and spec.byte_at(j).is_space() { j += 1 }
+    return j == n
+}
+
+// finds a trailing ":spec" in the text of an interpolation; returns the index of the ':' or -1
+fn find_spec(inner: str) -> int {
+    let n = inner.len()
+    for k in 0..n {
+        if inner.byte_at(k) != ':' { continue }
+        if k > 0 and inner.byte_at(k - 1) == ':' { continue }
+        let spec = inner[k + 1..]
+        if spec.trim().len() == 0 { continue }
+        if not valid_spec(spec) { continue }
+        let before = inner[..k]
+        let tb = before.trim()
+        if tb.ends_with("?") or tb.ends_with("::") { continue }
+        if not balanced(before) { continue }
+        return k
+    }
+    return -1
+}
+
+fn tokenize(src: str, file: str) -> [Token] {
+    var toks: [Token] = []
+    var i = 0
+    let n = src.len()
+    var line = 1
+    var line_start = 0
+    var depth: [int] = []
+    var depth_pos: [Pos] = []
+    var last: Token? = nil
+    var pending_nl = false
+    var pending_space = false
+
+    while i < n {
+        let c = src.byte_at(i)
+        if c == '\n' {
+            line += 1
+            i += 1
+            line_start = i
+            pending_nl = true
+            pending_space = true
+            continue
+        }
+        if c == ' ' or c == 9 or c == 13 {
+            i += 1
+            pending_space = true
+            continue
+        }
+        if c == '/' and starts_at(src, "//", i) {
+            let j = src.find_from("\n", i)
+            if j < 0 { i = n } else { i = j }
+            continue
+        }
+        if c == '#' and i == 0 and i + 1 < n and src.byte_at(1) == '!' {
+            let j = src.find_from("\n", i)
+            if j < 0 { i = n } else { i = j }
+            continue
+        }
+        if c == '/' and starts_at(src, "/*", i) {
+            var dc = 1
+            var j = i + 2
+            while j < n and dc > 0 {
+                if starts_at(src, "/*", j) {
+                    dc += 1
+                    j += 2
+                } else if starts_at(src, "*/", j) {
+                    dc -= 1
+                    j += 2
+                } else {
+                    if src.byte_at(j) == '\n' {
+                        line += 1
+                        line_start = j + 1
+                        pending_nl = true
+                    }
+                    j += 1
+                }
+            }
+            if dc > 0 { fail(Pos(file, line, i - line_start + 1), "unterminated block comment") }
+            i = j
+            pending_space = true
+            continue
+        }
+
+        let col = i - line_start + 1
+        // ---- is the pending newline significant?
+        if pending_nl {
+            pending_nl = false
+            var sig = true
+            if depth.len() > 0 and (depth[depth.len() - 1] == '(' or depth[depth.len() - 1] == '[') {
+                sig = false
+            } else if last == nil {
+                sig = false
+            } else if (last!.kind == TokKind.Op or last!.kind == TokKind.Kw) and last!.val in CONTINUERS {
+                sig = false
+            } else {
+                if starts_at(src, "&&", i) or starts_at(src, "||", i) or starts_at(src, "??", i) { sig = false }
+                if c == '.' and not starts_at(src, "..", i) { sig = false }
+            }
+            if sig and last != nil and last!.kind != TokKind.Newline {
+                let t = new_token(TokKind.Newline, "\n", line - 1, 0)
+                toks.push(t)
+                last = t
+            }
+        }
+        let sp = pending_space
+        pending_space = false
+
+        // ---- strings
+        let is_raw = c == 'r' and i + 1 < n and (src.byte_at(i + 1) == '"' or starts_at(src, "r#\"", i))
+        if c == '"' or is_raw {
+            let start_line = line
+            let start_col = col
+            if is_raw {
+                var hashes = 0
+                i += 1
+                while src.byte_at(i) == '#' {
+                    hashes += 1
+                    i += 1
+                }
+                i += 1
+                let endp = "\"" + "#".repeat(hashes)
+                let j = src.find_from(endp, i)
+                if j < 0 { fail(Pos(file, start_line, start_col), "unterminated raw string") }
+                let text = src[i..j]
+                for k in 0..text.len() {
+                    if text.byte_at(k) == '\n' {
+                        line += 1
+                        line_start = i + k + 1
+                    }
+                }
+                i = j + endp.len()
+                let t = new_token(TokKind.Str, "", start_line, start_col)
+                t.parts = [StrPart.Lit(text)]
+                t.space_before = sp
+                toks.push(t)
+                last = t
+                continue
+            }
+            let triple = starts_at(src, "\"\"\"", i)
+            if triple { i += 3 } else { i += 1 }
+            var parts: [StrPart] = []
+            var buf = str_builder()
+            loop {
+                if i >= n { fail(Pos(file, start_line, start_col), "unterminated string") }
+                let ch = src.byte_at(i)
+                if triple and starts_at(src, "\"\"\"", i) {
+                    i += 3
+                    break
+                }
+                if not triple and ch == '"' {
+                    i += 1
+                    break
+                }
+                if ch == '\n' {
+                    if not triple {
+                        fail(Pos(file, start_line, start_col), "unterminated string (use \"\"\" for multi-line strings)")
+                    }
+                    line += 1
+                    line_start = i + 1
+                    buf.add_byte('\n')
+                    i += 1
+                    continue
+                }
+                if ch == '\\' {
+                    i += 1
+                    let e = if i < n { src.byte_at(i) } else { 0 }
+                    if e == 'n' { buf.add_byte('\n'); i += 1 }
+                    else if e == 't' { buf.add_byte(9); i += 1 }
+                    else if e == 'r' { buf.add_byte(13); i += 1 }
+                    else if e == '0' { buf.add_byte(0); i += 1 }
+                    else if e == '\\' { buf.add_byte('\\'); i += 1 }
+                    else if e == '"' { buf.add_byte('"'); i += 1 }
+                    else if e == '\'' { buf.add_byte('\''); i += 1 }
+                    else if e == '{' { buf.add_byte('{'); i += 1 }
+                    else if e == '}' { buf.add_byte('}'); i += 1 }
+                    else if e == 'a' { buf.add_byte(7); i += 1 }
+                    else if e == 'e' { buf.add_byte(27); i += 1 }
+                    else if e == 'x' {
+                        buf.add_byte(byte(hex_val(src.byte_at(i + 1)) * 16 + hex_val(src.byte_at(i + 2))))
+                        i += 3
+                    } else if e == 'u' {
+                        if src.byte_at(i + 1) != '{' { fail(Pos(file, line, i - line_start + 1), "expected \\u\{...\}") }
+                        let j = src.find_from("}", i)
+                        buf.add(chr(src[i + 2..j].parse_int_base(16)))
+                        i = j + 1
+                    } else if e == '\n' and triple {
+                        line += 1
+                        line_start = i + 1
+                        i += 1
+                    } else {
+                        fail(Pos(file, line, i - line_start + 1), "unknown escape \\" + chr(e))
+                    }
+                    continue
+                }
+                if ch == '{' and i + 1 < n and src.byte_at(i + 1) == '"' {
+                    buf.add_byte('{')            // a brace right before the closing quote is literal
+                    i += 1
+                    continue
+                }
+                if ch == '{' {
+                    // string interpolation: find the matching brace
+                    var j = i + 1
+                    var d = 1
+                    let istart_line = line
+                    let istart_col = i - line_start + 2
+                    while j < n and d > 0 {
+                        let cj = src.byte_at(j)
+                        if cj == '{' {
+                            d += 1
+                        } else if cj == '}' {
+                            d -= 1
+                            if d == 0 { break }
+                        } else if cj == '"' {
+                            j += 1
+                            while j < n and src.byte_at(j) != '"' {
+                                if src.byte_at(j) == '\\' { j += 1 }
+                                j += 1
+                            }
+                        } else if cj == '\'' {
+                            if j + 2 < n and src.byte_at(j + 2) == '\'' {
+                                j += 2
+                            } else if j + 3 < n and src.byte_at(j + 1) == '\\' and src.byte_at(j + 3) == '\'' {
+                                j += 3
+                            }
+                        }
+                        j += 1
+                    }
+                    if d > 0 { fail(Pos(file, istart_line, istart_col), "unterminated \{interpolation\} in string") }
+                    var inner = src[i + 1..j]
+                    var spec = ""
+                    let k = find_spec(inner)
+                    if k >= 0 {
+                        spec = inner[k + 1..].trim_end()
+                        inner = inner[..k]
+                    }
+                    if buf.len > 0 {
+                        parts.push(StrPart.Lit(buf.finish()))
+                        buf = str_builder()
+                    }
+                    parts.push(StrPart.Interp(inner, istart_line, istart_col, spec))
+                    // line bookkeeping for multi-line interpolations
+                    let seg = src[i..j]
+                    for q in 0..seg.len() {
+                        if seg.byte_at(q) == '\n' {
+                            line += 1
+                            line_start = i + q + 1
+                        }
+                    }
+                    i = j + 1
+                    continue
+                }
+                buf.add_byte(ch)
+                i += 1
+            }
+            if buf.len > 0 or parts.len() == 0 { parts.push(StrPart.Lit(buf.finish())) }
+            let t = new_token(TokKind.Str, "", start_line, start_col)
+            t.parts = parts
+            t.space_before = sp
+            toks.push(t)
+            last = t
+            continue
+        }
+
+        // ---- character literal
+        if c == '\'' {
+            var j = i + 1
+            var v = 0
+            if j < n and src.byte_at(j) == '\\' {
+                let e = src.byte_at(j + 1)
+                if e == 'n' { v = 10; j += 2 }
+                else if e == 't' { v = 9; j += 2 }
+                else if e == 'r' { v = 13; j += 2 }
+                else if e == '0' { v = 0; j += 2 }
+                else if e == '\\' { v = 92; j += 2 }
+                else if e == '\'' { v = 39; j += 2 }
+                else if e == '"' { v = 34; j += 2 }
+                else if e == 'a' { v = 7; j += 2 }
+                else if e == 'e' { v = 27; j += 2 }
+                else if e == 'x' {
+                    v = hex_val(src.byte_at(j + 2)) * 16 + hex_val(src.byte_at(j + 3))
+                    j += 4
+                } else if e == 'u' {
+                    let k = src.find_from("}", j)
+                    v = src[j + 3..k].parse_int_base(16)
+                    j = k + 1
+                } else {
+                    fail(Pos(file, line, col), "unknown escape \\" + chr(e))
+                }
+            } else {
+                let (cp, len) = utf8_decode(src, j)
+                v = cp
+                j += len
+            }
+            if j >= n or src.byte_at(j) != '\'' {
+                fail(Pos(file, line, col), "unterminated character literal (character literals hold one character, like 'a')")
+            }
+            i = j + 1
+            let t = new_token(TokKind.Char, "", line, col)
+            t.ival = v
+            t.space_before = sp
+            toks.push(t)
+            last = t
+            continue
+        }
+
+        // ---- numbers
+        if is_digit(c) {
+            let t = new_token(TokKind.Int, "", line, col)
+            t.space_before = sp
+            let prev_dot = toks.len() > 0 and toks[toks.len() - 1].kind == TokKind.Op and toks[toks.len() - 1].val == "." and not sp
+            if prev_dot {
+                // tuple index like  t.0.1  : integers only
+                var j = i
+                var v = 0
+                while j < n and is_digit(src.byte_at(j)) {
+                    v = v * 10 + (src.byte_at(j) - '0')
+                    j += 1
+                }
+                i = j
+                t.ival = v
+                toks.push(t)
+                last = t
+                continue
+            }
+            let start = i
+            var base = 10
+            if c == '0' and i + 1 < n {
+                let p = src.byte_at(i + 1)
+                if (p == 'x' or p == 'X') and i + 2 < n and (hex_val(src.byte_at(i + 2)) >= 0 or src.byte_at(i + 2) == '_') { base = 16 }
+                else if (p == 'b' or p == 'B') and i + 2 < n and (src.byte_at(i + 2) == '0' or src.byte_at(i + 2) == '1' or src.byte_at(i + 2) == '_') { base = 2 }
+                else if (p == 'o' or p == 'O') and i + 2 < n and ((src.byte_at(i + 2) >= '0' and src.byte_at(i + 2) <= '7') or src.byte_at(i + 2) == '_') { base = 8 }
+            }
+            if base != 10 {
+                var j = i + 2
+                var v = 0
+                var digits = 0
+                loop {
+                    if j >= n { break }
+                    let d = src.byte_at(j)
+                    if d == '_' { j += 1; continue }
+                    let hv = hex_val(d)
+                    if hv < 0 or hv >= base { break }
+                    if v != 0 or hv != 0 { digits += 1 }
+                    v = v * base + hv
+                    j += 1
+                }
+                if (base == 16 and digits > 16) or (base == 2 and digits > 64) or (base == 8 and digits > 22) {
+                    fail(Pos(file, line, col), "integer literal too large")
+                }
+                i = j
+                t.ival = v
+                toks.push(t)
+                last = t
+                continue
+            }
+            var j = i
+            var is_float = false
+            while j < n and (is_digit(src.byte_at(j)) or src.byte_at(j) == '_') { j += 1 }
+            if j + 1 < n and src.byte_at(j) == '.' and is_digit(src.byte_at(j + 1)) {
+                is_float = true
+                j += 1
+                while j < n and (is_digit(src.byte_at(j)) or src.byte_at(j) == '_') { j += 1 }
+            }
+            if j < n and (src.byte_at(j) == 'e' or src.byte_at(j) == 'E') {
+                var k = j + 1
+                if k < n and (src.byte_at(k) == '+' or src.byte_at(k) == '-') { k += 1 }
+                if k < n and is_digit(src.byte_at(k)) {
+                    while k < n and is_digit(src.byte_at(k)) { k += 1 }
+                    is_float = true
+                    j = k
+                }
+            }
+            let text = src[start..j].replace("_", "")
+            i = j
+            if is_float {
+                t.kind = TokKind.Float
+                t.fval = parse_float_str(text)!
+            } else {
+                // up to 2^64-1 is accepted (values >= 2^63 wrap later)
+                if text.len() > 20 or (text.len() == 20 and text > "18446744073709551615") {
+                    fail(Pos(file, line, col), "integer literal too large")
+                }
+                var v = 0
+                for q in 0..text.len() { v = v * 10 + (text.byte_at(q) - '0') }
+                t.ival = v
+            }
+            toks.push(t)
+            last = t
+            continue
+        }
+
+        // ---- identifiers / keywords
+        if is_ident_start(c) {
+            var j = i
+            while j < n and is_ident_char(src.byte_at(j)) { j += 1 }
+            let text = src[i..j]
+            i = j
+            var kind = TokKind.Ident
+            if text in KEYWORDS { kind = TokKind.Kw }
+            let t = new_token(kind, text, line, col)
+            t.space_before = sp
+            toks.push(t)
+            last = t
+            continue
+        }
+
+        // ---- operators
+        var op = ""
+        if i + 3 <= n and src[i..i + 3] in OPS3 {
+            op = src[i..i + 3]
+        } else if i + 2 <= n and src[i..i + 2] in OPS2 {
+            op = src[i..i + 2]
+        } else if src[i..i + 1] in OPS1 {
+            op = src[i..i + 1]
+        } else {
+            fail(Pos(file, line, col), "unexpected character '" + chr(utf8_decode(src, i).0) + "'")
+        }
+        i += op.len()
+        if op == "(" or op == "[" or op == "\{" {
+            depth.push(op.byte_at(0))
+            depth_pos.push(Pos(file, line, col))
+        } else if op == ")" or op == "]" or op == "}" {
+            if depth.len() == 0 { fail(Pos(file, line, col), "unmatched '" + op + "'", "there is no opening bracket for it") }
+            let open = depth[depth.len() - 1]
+            var want = ")"
+            if open == '[' { want = "]" } else if open == '{' { want = "}" }
+            if op != want {
+                let op_pos = depth_pos[depth_pos.len() - 1]
+                fail(Pos(file, line, col), "'" + op + "' does not match the '" + chr(open) + "' opened at line " + str(op_pos.line) + ", column " + str(op_pos.col),
+                     "is a '" + want + "' missing before this?")
+            }
+            depth.pop()
+            depth_pos.pop()
+        }
+        let t = new_token(TokKind.Op, op, line, col)
+        t.space_before = sp
+        toks.push(t)
+        last = t
+    }
+    if depth.len() > 0 {
+        fail(depth_pos[depth_pos.len() - 1], "this '" + chr(depth[depth.len() - 1]) + "' is never closed", "the file ends before the matching bracket")
+    }
+    toks.push(new_token(TokKind.Newline, "\n", line, 0))
+    toks.push(new_token(TokKind.Eof, "", line, 1))
+    return toks
+}

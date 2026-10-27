@@ -1,0 +1,57 @@
+// fibonacci.atf - Fibonacci numbers: recursive, memoized with a map, and iterative.
+// Shows: recursion, global maps, loops, 64-bit integer wraparound, timing with clock().
+// Run:   python run_atf.py run examples/fibonacci.atf
+
+// naive recursion: exponential time, fine for small n
+fn fib_rec(n: int) -> int {
+    if n < 2 { return n }
+    return fib_rec(n - 1) + fib_rec(n - 2)
+}
+
+// memoization: remember results in a map (a global variable)
+var memo: {int: int} = {}
+
+fn fib_memo(n: int) -> int {
+    if n < 2 { return n }
+    if n in memo { return memo[n] }
+    let r = fib_memo(n - 1) + fib_memo(n - 2)
+    memo[n] = r
+    return r
+}
+
+// iterative: constant memory
+fn fib_iter(n: int) -> int {
+    var a = 0
+    var b = 1
+    for i in 0..n {
+        let t = a + b
+        a = b
+        b = t
+    }
+    return a
+}
+
+fn main() {
+    var firsts: [int] = []
+    for i in 0..15 { firsts.push(fib_rec(i)) }
+    println("first 15:", firsts)
+
+    println("fib_rec(25)  =", fib_rec(25))
+    println("fib_memo(25) =", fib_memo(25))
+    println("fib_iter(25) =", fib_iter(25))
+
+    // the memoized version handles big arguments instantly
+    println("fib_memo(90) =", fib_memo(90))
+    println("memo has {memo.len()} entries")
+
+    // the three versions agree
+    var ok = true
+    for i in 0..30 {
+        if fib_rec(i) != fib_iter(i) or fib_memo(i) != fib_iter(i) { ok = false }
+    }
+    println("all versions agree:", ok)
+
+    // ints are 64 bit and wrap around silently
+    println("fib_iter(92) =", fib_iter(92))
+    println("fib_iter(93) =", fib_iter(93), "(overflow: wraps around)")
+}

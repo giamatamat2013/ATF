@@ -1,0 +1,168 @@
+ok   null: null
+ok   true: true
+ok   false: false
+ok   zero: 0
+ok   negative zero int: 0
+ok   int: 12345
+ok   negative int: -987
+ok   int max: 9223372036854775807
+ok   int min: -9223372036854775808
+ok   int max + 1 becomes float: 9.223372036854776e+18
+ok   huge int becomes float: 1.2345678901234568e+29
+ok   float: 3.25
+ok   float neg: -0.5
+ok   float exp: 1000.0
+ok   float exp+: 250.0
+ok   float exp-: 2.5
+ok   float small: 1.5e-10
+ok   float big: 1e+300
+ok   float zero: 0.0
+ok   negative zero float: -0.0
+ok   string: "hello"
+ok   empty string: ""
+ok   escapes: "a\"b\\c/d\n\t\r\b\f"
+ok   unicode escape: "é☺"
+ok   surrogate pair: "😀"
+ok   escaped nul: "a\u0000b"
+ok   raw utf8: "שלום"
+ok   empty array: []
+ok   empty object: {}
+ok   spaces in empty: []
+ok   array: [1,2.5,"x",true,false,null]
+ok   nested: {"a":[1,{"b":{}}],"c":"d"}
+ok   key order kept: {"z":1,"a":2,"m":3}
+ok   duplicate key keeps last: {"a":3,"b":2}
+ok   whitespace everywhere: [1,2]
+ok   byte order mark: [1]
+ok   deep nesting ok: true
+error for "": ERR line 1, column 1: unexpected end of input, expected a value
+error for "   ": ERR line 1, column 4: unexpected end of input, expected a value
+error for "nul": ERR line 1, column 1: invalid literal 'nul' (expected null)
+error for "nulll": ERR line 1, column 1: invalid literal 'nulll' (expected null)
+error for "True": ERR line 1, column 1: unexpected 'T', expected a value (object, array, string, number, true, false or null)
+error for "[1,]": ERR line 1, column 4: trailing comma before ']'
+error for "[1 2]": ERR line 1, column 4: expected ',' or ']' after an array element, found '2'
+error for "{\"a\":1,}": ERR line 1, column 8: trailing comma before '}'
+error for "{\"a\" 1}": ERR line 1, column 6: expected ':' after the key "a", found '1'
+error for "{a:1}": ERR line 1, column 2: expected a string key in double quotes, found 'a'
+error for "{'a':1}": ERR line 1, column 2: expected a string key in double quotes, found '''
+error for "'x'": ERR line 1, column 1: strings must use double quotes, not single quotes
+error for "[1": ERR line 1, column 1: unterminated array (missing ']')
+error for "{\"a\":1": ERR line 1, column 1: unterminated object (missing '}')
+error for "\"abc": ERR line 1, column 1: unterminated string (missing closing quote)
+error for "\"a\nb\"": ERR line 1, column 3: unescaped newline in string (write \n)
+error for "\"a\tb\"": ERR line 1, column 3: unescaped control character (byte 0x09) in string
+error for "\"\\x\"": ERR line 1, column 2: invalid escape '\x' in string
+error for "\"\\u12\"": ERR line 1, column 4: incomplete \u escape (expected 4 hex digits)
+error for "\"\\u12G4\"": ERR line 1, column 6: invalid hex digit in \u escape
+error for "\"\\ud800\"": ERR line 1, column 2: lone high surrogate in \u escape
+error for "\"\\ud800\\u0041\"": ERR line 1, column 8: invalid low surrogate in \u escape
+error for "\"\\udc00\"": ERR line 1, column 2: lone low surrogate in \u escape
+error for "01": ERR line 1, column 1: numbers cannot have leading zeros
+error for "-": ERR line 1, column 2: expected a digit after '-'
+error for "-a": ERR line 1, column 2: expected a digit after '-'
+error for "1.": ERR line 1, column 3: expected a digit after the decimal point
+error for ".5": ERR line 1, column 1: unexpected '.', expected a value (object, array, string, number, true, false or null)
+error for "1e": ERR line 1, column 3: expected a digit in the exponent
+error for "1e+": ERR line 1, column 4: expected a digit in the exponent
+error for "+1": ERR line 1, column 1: unexpected '+', expected a value (object, array, string, number, true, false or null)
+error for "[1] x": ERR line 1, column 5: unexpected 'x' after the end of the JSON value
+error for "1 2": ERR line 1, column 3: unexpected '2' after the end of the JSON value
+error for "{}}": ERR line 1, column 3: unexpected '}' after the end of the JSON value
+error for "]": ERR line 1, column 1: unexpected ']', expected a value
+error for "[1,\n2,\n  @]": ERR line 3, column 3: unexpected '@', expected a value (object, array, string, number, true, false or null)
+error for "{\"key\": \"value\"\n  \"next\": 1}": ERR line 2, column 3: expected ',' or '}' after an object member, found '"'
+error for "": ERR line 1, column 1: unexpected byte 0x01, expected a value (object, array, string, number, true, false or null)
+error for "[[[[[[[[[[[[[[[[[[[[...(2002 bytes)": ERR line 1, column 1002: nesting is too deep (more than 1000 levels)
+error for "NaN": ERR line 1, column 1: unexpected 'N', expected a value (object, array, string, number, true, false or null)
+error for "Infinity": ERR line 1, column 1: unexpected 'I', expected a value (object, array, string, number, true, false or null)
+error for "[\"é\" , é]": ERR line 1, column 8: unexpected byte 0xc3, expected a value (object, array, string, number, true, false or null)
+{"name":"Ada \"the first\" Lovelace","born":1815,"height":1.65,"tags":["math","poet\nry"],"empty_list":[],"empty_obj":{},"nothing":null,"ok":true,"inner":{"x":[1,2,3],"y":[0.5,-2.0]}}
+{
+  "name": "Ada \"the first\" Lovelace",
+  "born": 1815,
+  "height": 1.65,
+  "tags": [
+    "math",
+    "poet\nry"
+  ],
+  "empty_list": [],
+  "empty_obj": {},
+  "nothing": null,
+  "ok": true,
+  "inner": {
+    "x": [
+      1,
+      2,
+      3
+    ],
+    "y": [
+      0.5,
+      -2.0
+    ]
+  }
+}
+{
+    "born": 1815,
+    "empty_list": [],
+    "empty_obj": {},
+    "height": 1.65,
+    "inner": {
+        "x": [
+            1,
+            2,
+            3
+        ],
+        "y": [
+            0.5,
+            -2.0
+        ]
+    },
+    "name": "Ada \"the first\" Lovelace",
+    "nothing": null,
+    "ok": true,
+    "tags": [
+        "math",
+        "poet\nry"
+    ]
+}
+"\u00e9 \u263a \ud83d\ude00 \u007f \u0001"
+"bad utf8 \ufffd\ufffd"
+"tab\there" "\ud83d\ude00"
+[0.1,1e+21,1e-07,100.0,-0.0]
+[null,null,null]
+to_str via println: ["math","poet\nry"] {"name":"Ada \"the first\" Lovelace","born":1815,"height":1.65,"tags":["math","poet\nry"],"empty_list":[],"empty_obj":{},"nothing":null,"ok":true,"inner":{"x":[1,2,3],"y":[0.5,-2.0]}}
+interpolation: {"x":[1,2,3],"y":[0.5,-2.0]}
+pretty round trip equal: true true
+ascii round trip: true
+kind: object array int null float string bool
+is: true false true true true true false true true true
+len: 4 2 3 0
+keys: ["users", "count", "meta", "nil"] ["name", "age", "admin", "score"] []
+has: true false false
+query: "Bob" 3 "y" "1.2"
+query missing: nil nil nil nil nil nil
+query empty path: true
+get_*: Ann 31 9.5 true
+get_* defaults: ? -1 1.5 false not an object
+int from whole float: 25 nil nil 7.0
+as_*: true nil "s" nil nil nil
+at: nil nil nil
+as_array len: 2 Bob
+as_object keys: ["ver", "list"]
+pushed: [1,"two"] 2
+set: {"a":10,"b":2} true false {"a":10}
+remove on non-object: false
+users now: 3 "third"
+object_of / array_of: {"k":1} [null,false]
+equality: true false
+sum of numbers: 6.5
+or_panic ok: [true]
+or_panic err: "invalid JSON: line 1, column 2: invalid literal 'tru' (expected true)"
+write file: true
+read file equal: true
+file text starts: "{\n  \"name\": " true
+compact file: true "[1,2]\n"
+missing file: true true
+big: 116401 2000 "item #1999" 0.875 true
+failures: 0

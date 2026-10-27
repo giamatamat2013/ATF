@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: str has no method 'lenght'
+  --> cerr_unknown_method.atf:3:15
+ 3 |     println(s.lenght())
+   |               ^
+  hint: did you mean 'len'?

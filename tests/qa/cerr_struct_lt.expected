@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: values of type P cannot be ordered with < > <= >=
+  --> cerr_struct_lt.atf:3:18
+ 3 |     println(P(1) < P(2))
+   |                  ^
+  hint: define  fn cmp(self, other: P) -> int  in an impl block (negative, zero, or positive)

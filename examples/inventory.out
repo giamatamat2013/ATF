@@ -1,0 +1,21 @@
+item          price   qty     value
+apple          0.50   100     50.00
+banana         0.25   150     37.50
+cherry        12.00    10    120.00
+durian        25.99     2     51.98
+total                        259.48
+
+removed 50 banana, 100 left
+cannot remove: only 10 cherry in stock, cannot remove 11
+removed 2 durian, 0 left
+cannot remove: no such item: elderberry
+
+item          price   qty     value
+apple          0.55   120     66.00
+banana         0.25   100     25.00
+cherry        12.00    10    120.00
+total                        211.00
+
+names in insertion order: ["apple", "banana", "cherry"]
+cheap items: ["apple", "banana"]
+most valuable stock: cherry (120.00)

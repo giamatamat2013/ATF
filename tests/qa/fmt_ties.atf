@@ -1,0 +1,7 @@
+// exact decimal ties in fixed formatting: C99/IEEE (and Python) round half to even;
+// the runtime (msvcrt _fcvt) rounds half away from zero. Also, huge values lose their exact digits.
+fn main() {
+    println("{0.5:.0f}|{1.5:.0f}|{2.5:.0f}|{-0.5:.0f}|{0.125:.2f}|{0.375:.2f}")
+    println(fmt_fixed(1.25, 1), fmt_fixed(-2.5, 0))
+    println("{1e23:.0f}")
+}

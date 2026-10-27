@@ -1,0 +1,87 @@
+// stack_queue.atf - generic Stack<T> and Queue<T> data structures.
+// Shows: generic structs, impl<T>, static constructor functions, optionals returned by pop.
+//        Uses a stack to check balanced brackets.
+// Run:   python run_atf.py run examples/stack_queue.atf
+
+struct Stack<T> {
+    items: [T]
+}
+
+impl<T> Stack<T> {
+    fn new() -> Stack<T> { return Stack{ items: [] } }
+    fn push(self, x: T) { self.items.push(x) }
+    fn pop(self) -> T? {
+        if self.items.len() == 0 { return nil }
+        return self.items.pop()
+    }
+    fn peek(self) -> T? {
+        if self.items.len() == 0 { return nil }
+        return self.items.last()
+    }
+    fn size(self) -> int { return self.items.len() }
+    fn is_empty(self) -> bool { return self.items.len() == 0 }
+}
+
+// a queue with a moving head index (so dequeue does not shift elements)
+struct Queue<T> {
+    items: [T],
+    head: int
+}
+
+impl<T> Queue<T> {
+    fn new() -> Queue<T> { return Queue{ items: [], head: 0 } }
+    fn enqueue(self, x: T) { self.items.push(x) }
+    fn dequeue(self) -> T? {
+        if self.head >= self.items.len() { return nil }
+        let x = self.items[self.head]
+        self.head += 1
+        return x
+    }
+    fn size(self) -> int { return self.items.len() - self.head }
+}
+
+fn balanced(text: str) -> bool {
+    let stack: Stack<str> = Stack.new()
+    for c in text {
+        if c == "(" or c == "[" or c == "{" {
+            stack.push(c)
+        } else if c == ")" or c == "]" or c == "}" {
+            let open = stack.pop()
+            if open == nil { return false }
+            let ok = match c {
+                ")" => open! == "("
+                "]" => open! == "["
+                _ => open! == "{"
+            }
+            if not ok { return false }
+        }
+    }
+    return stack.is_empty()
+}
+
+fn main() {
+    let s: Stack<int> = Stack.new()
+    for i in 1..=5 { s.push(i * i) }
+    println("stack size:", s.size(), " top:", s.peek())
+    var popped: [int] = []
+    while not s.is_empty() {
+        popped.push(s.pop()!)
+    }
+    println("popped in reverse order:", popped)
+    println("pop from empty:", s.pop())
+
+    let q: Queue<str> = Queue.new()
+    for name in ["ann", "bob", "cy", "di"] { q.enqueue(name) }
+    println("queue size:", q.size())
+    println("first out:", q.dequeue(), "then", q.dequeue())
+    q.enqueue("ed")
+    var rest: [str] = []
+    while q.size() > 0 {
+        rest.push(q.dequeue() ?? "?")
+    }
+    println("rest:", rest)
+
+    for text in ["(a + b) * [c - \{d}]", "(]", "((())", "\{[()()]}", ""] {
+        println("{text:<20} balanced: {balanced(text)}")
+    }
+}

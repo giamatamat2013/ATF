@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: tuples cannot be modified
+  --> cerr_tuple_assign.atf:3:7
+ 3 |     t.0 = 5
+   |       ^
+  hint: create a new tuple instead

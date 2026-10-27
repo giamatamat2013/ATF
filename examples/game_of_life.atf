@@ -1,0 +1,93 @@
+// game_of_life.atf - Conway's Game of Life on a small torus.
+// Shows: 2D arrays, nested loops, modulo wraparound, building text rows.
+// Run:   python run_atf.py run examples/game_of_life.atf
+
+let W = 12
+let H = 8
+
+fn new_grid() -> [[bool]] {
+    var g: [[bool]] = []
+    for y in 0..H { g.push(array_make::<bool>(W)) }
+    return g
+}
+
+fn neighbours(g: [[bool]], x: int, y: int) -> int {
+    var n = 0
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            if dx == 0 and dy == 0 { continue }
+            // the board wraps around at the edges
+            let xx = (x + dx + W) % W
+            let yy = (y + dy + H) % H
+            if g[yy][xx] { n += 1 }
+        }
+    }
+    return n
+}
+
+fn next_generation(g: [[bool]]) -> [[bool]] {
+    let next = new_grid()
+    for y in 0..H {
+        for x in 0..W {
+            let n = neighbours(g, x, y)
+            next[y][x] = if g[y][x] { n == 2 or n == 3 } else { n == 3 }
+        }
+    }
+    return next
+}
+
+fn show(g: [[bool]], generation: int) {
+    println("generation {generation}:")
+    for row in g {
+        var line = ""
+        for cell in row {
+            line = line + (if cell { "#" } else { "." })
+        }
+        println(line)
+    }
+}
+
+fn alive(g: [[bool]]) -> int {
+    var n = 0
+    for row in g {
+        for cell in row { if cell { n += 1 } }
+    }
+    return n
+}
+
+fn main() {
+    var g = new_grid()
+    // a glider
+    g[0][1] = true
+    g[1][2] = true
+    g[2][0] = true
+    g[2][1] = true
+    g[2][2] = true
+    // a blinker
+    g[5][8] = true
+    g[5][9] = true
+    g[5][10] = true
+
+    for gen in 0..5 {
+        show(g, gen)
+        g = next_generation(g)
+    }
+    println("cells alive after 5 generations: {alive(g)}")
+
+    // A glider moves one cell diagonally every 4 generations. On a 12 x 8 torus it is
+    // back at its starting position after 4 * lcm(12, 8) = 96 generations.
+    var h = new_grid()
+    h[0][1] = true
+    h[1][2] = true
+    h[2][0] = true
+    h[2][1] = true
+    h[2][2] = true
+    let start = h
+    var gens = 0
+    loop {
+        h = next_generation(h)
+        gens += 1
+        if h == start { break }
+    }
+    println("the lone glider is back in its start position after {gens} generations")
+}

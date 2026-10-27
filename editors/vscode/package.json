@@ -1,0 +1,89 @@
+{
+  "name": "atf",
+  "displayName": "ATF",
+  "description": "Syntax highlighting, snippets, brackets and indentation for the ATF programming language (.atf files).",
+  "version": "0.2.0",
+  "publisher": "atf",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "atf",
+    "atf"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "atf",
+        "aliases": [
+          "atf",
+          "atf"
+        ],
+        "extensions": [
+          ".atf"
+        ],
+        "firstLine": "^#!.*\\batf\\b",
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "atf",
+        "scopeName": "source.atf",
+        "path": "./syntaxes/atf.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.atf.codeblock",
+        "path": "./syntaxes/atf.markdown.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.atf": "atf"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "atf",
+        "path": "./snippets/atf.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[atf]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      }
+    },
+    "problemMatchers": [
+      {
+        "name": "atf",
+        "label": "ATF compiler errors",
+        "owner": "atf",
+        "source": "atf",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": [
+          {
+            "regexp": "^(error|warning): (.*)$",
+            "severity": 1,
+            "message": 2
+          },
+          {
+            "regexp": "^\\s+--> (.*):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ]
+  }
+}

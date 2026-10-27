@@ -1,0 +1,4 @@
+fn main() {
+    let s = set_new()
+    s.add(1)
+}

@@ -1,0 +1,258 @@
+// Untyped syntax tree (port of atf/syntax.py)
+import "util"
+
+// ---- type expressions
+struct TypeExpr {
+    k: TypeK,
+    pos: Pos
+}
+
+enum TypeK {
+    Name(str, [TypeExpr]),
+    Array(TypeExpr),
+    Map(TypeExpr, TypeExpr),
+    Tuple([TypeExpr]),
+    Fn([TypeExpr], TypeExpr?),
+    Opt(TypeExpr),
+    Ptr(TypeExpr)
+}
+
+// ---- expressions
+struct Expr {
+    k: ExprK,
+    pos: Pos
+}
+
+struct Arg {
+    name: str,              // "" for positional arguments
+    expr: Expr,
+    pos: Pos
+}
+
+struct FieldInit {
+    name: str,
+    expr: Expr,
+    pos: Pos
+}
+
+struct LParam {
+    name: str,
+    ty: TypeExpr?
+}
+
+enum StrItem {
+    Lit(str),
+    Interp(Expr, str)               // expression, format spec ("" if none)
+}
+
+enum Cond {
+    Plain(Expr),
+    Let(Pattern, Expr)
+}
+
+enum ExprK {
+    IntLit(int),
+    FloatLit(float),
+    StrLit([StrItem]),
+    CharLit(int),
+    BoolLit(bool),
+    NilLit,
+    Ident(str, [TypeExpr]?),
+    Unary(str, Expr),
+    Binary(str, Expr, Expr),
+    Call(Expr, [Arg]),
+    Field(Expr, str),
+    TupleField(Expr, int),
+    Index(Expr, Expr),
+    Range(Expr?, Expr?, bool, Expr?),
+    ArrayLit([Expr]),
+    MapLit([(Expr, Expr)]),
+    TupleLit([Expr]),
+    StructLit(Expr, [FieldInit]),
+    Lambda([LParam], TypeExpr?, Block),
+    IfExpr(Cond, Block, Block?),
+    MatchExpr(Expr, [Arm]),
+    BlockExpr(Block),
+    Cast(Expr, TypeExpr),
+    Unwrap(Expr),
+    Try(Expr),
+    Coalesce(Expr, Expr)
+}
+
+// ---- patterns
+struct Pattern {
+    k: PatK,
+    pos: Pos
+}
+
+enum PatK {
+    Wild,
+    Bind(str),
+    Lit(Expr),
+    Range(Expr, Expr, bool),
+    Variant([str], [Pattern]?),
+    Tuple([Pattern]),
+    Or([Pattern]),
+    Fields([str], [FieldPat])            // P{ x: 0, y }
+}
+
+// one field of a struct pattern:  x: pattern   (a bare  y  means  y: y)
+struct FieldPat {
+    name: str,
+    pat: Pattern,
+    pos: Pos
+}
+
+struct Arm {
+    pat: Pattern,
+    guard: Expr?,
+    body: ArmBody,
+    pos: Pos
+}
+
+enum ArmBody {
+    Blk(Block),
+    Ex(Expr)
+}
+
+// ---- statements
+struct Stmt {
+    k: StmtK,
+    pos: Pos
+}
+
+struct Block {
+    stmts: [Stmt],
+    pos: Pos
+}
+
+enum StmtK {
+    Let([str], bool, TypeExpr?, Expr?, bool),       // names, is tuple pattern, type, init, mutable
+    Assign(Expr, str, Expr),
+    ExprS(Expr),
+    If(Cond, Block, Block?),
+    While(Cond, Block),
+    Loop(Block),
+    For([str], Expr, Block),
+    Break,
+    Continue,
+    BreakL(str),                                    // break label
+    ContinueL(str),                                 // continue label
+    Labeled(str, Stmt),                             // label: loop
+    Return(Expr?),
+    Defer(Stmt),
+    MatchS(Expr, [Arm]),
+    BlockS(Block)
+}
+
+// ---- declarations
+struct Param {
+    name: str,
+    ty: TypeExpr?,
+    default: Expr?,
+    pos: Pos
+}
+
+struct FnDecl {
+    name: str,
+    tparams: [str],
+    params: [Param],
+    ret: TypeExpr?,
+    body: Block?,
+    attrs: [str],
+    pos: Pos
+}
+
+struct FieldDecl {
+    name: str,
+    ty: TypeExpr,
+    pos: Pos,
+    default: Expr?                  // struct Config { level: int = 1 }
+}
+
+struct StructDecl {
+    name: str,
+    tparams: [str],
+    fields: [FieldDecl],
+    pos: Pos
+}
+
+struct VariantDecl {
+    name: str,
+    payload: [TypeExpr],
+    value: int?,
+    pos: Pos
+}
+
+struct EnumDecl {
+    name: str,
+    tparams: [str],
+    variants: [VariantDecl],
+    pos: Pos
+}
+
+struct ImplDecl {
+    ty: TypeExpr,
+    tparams: [str],
+    methods: [FnDecl],
+    pos: Pos
+}
+
+struct ConstDecl {
+    name: str,
+    ty: TypeExpr?,
+    value: Expr,
+    pos: Pos
+}
+
+struct GlobalDecl {
+    name: str,
+    ty: TypeExpr?,
+    value: Expr?,
+    mutable: bool,
+    pos: Pos
+}
+
+struct ImportDecl {
+    path: str,
+    pos: Pos
+}
+
+struct ExternDecl {
+    dll: str,
+    name: str,
+    params: [Param],
+    ret: TypeExpr?,
+    pos: Pos
+}
+
+// interface Name { fn method(self, a: T) -> R ... }  - any type with matching methods implements it
+struct IfaceDecl {
+    name: str,
+    methods: [FnDecl],
+    pos: Pos
+}
+
+struct AliasDecl {
+    name: str,
+    tparams: [str],
+    ty: TypeExpr,
+    pos: Pos
+}
+
+enum Item {
+    Fn(FnDecl),
+    Struct(StructDecl),
+    Enum(EnumDecl),
+    Impl(ImplDecl),
+    Const(ConstDecl),
+    Global(GlobalDecl),
+    Import(ImportDecl),
+    Extern(ExternDecl),
+    Alias(AliasDecl),
+    Iface(IfaceDecl)
+}
+
+fn mk_expr(k: ExprK, pos: Pos) -> Expr { return Expr(k, pos) }
+fn mk_type(k: TypeK, pos: Pos) -> TypeExpr { return TypeExpr(k, pos) }
+fn mk_stmt(k: StmtK, pos: Pos) -> Stmt { return Stmt(k, pos) }

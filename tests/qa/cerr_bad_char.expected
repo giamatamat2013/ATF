@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: unexpected '@' (expected end of statement)
+  --> cerr_bad_char.atf:2:15
+ 2 |     let x = 5 @ 3
+   |               ^

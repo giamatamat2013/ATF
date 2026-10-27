@@ -1,0 +1,43 @@
+// temperature.atf - a Celsius / Fahrenheit / Kelvin conversion table.
+// Shows: float arithmetic, format specs ({x:.1f}, widths, alignment), functions.
+// Run:   python run_atf.py run examples/temperature.atf
+
+fn c_to_f(c: float) -> float { return c * 9.0 / 5.0 + 32.0 }
+fn c_to_k(c: float) -> float { return c + 273.15 }
+
+fn describe(c: float) -> str {
+    if c < 0.0 { return "freezing" }
+    if c < 15.0 { return "cold" }
+    if c < 25.0 { return "pleasant" }
+    return "hot"
+}
+
+fn main() {
+    // WORKAROUND: a string literal cannot directly follow the '{' of an interpolation
+    // (see the report), so the literals are put into variables first.
+    let h1 = "Celsius"
+    let h2 = "Fahrenheit"
+    let h3 = "Kelvin"
+    let rule = "-"
+    println("{h1:>8} {h2:>11} {h3:>8}  note")
+    println("{rule * 8} {rule * 11} {rule * 8}  {rule * 8}")
+    var c = -20.0
+    while c <= 40.0 {
+        println("{c:8.1f} {c_to_f(c):11.1f} {c_to_k(c):8.2f}  {describe(c)}")
+        c += 10.0
+    }
+
+    // averages with float formatting
+    let readings = [18.5, 21.0, 19.25, 23.75, 20.0]
+    var total = 0.0
+    for r in readings { total += r }
+    let avg = total / float(readings.len())
+    println("average of {readings.len()} readings: {avg:.2f} C = {c_to_f(avg):.2f} F")
+    println("min {readings.min()}, max {readings.max()}, sum {readings.sum()}")
+
+    // a few well known points
+    println("water boils at {c_to_f(100.0)} F")
+    println("absolute zero is {c_to_f(-273.15):.2f} F")
+    println("body temperature 37 C is {c_to_f(37.0):.1f} F")
+    println("round(36.6) = {round(36.6)}, floor = {floor(36.6)}, ceil = {ceil(36.6)}")
+}

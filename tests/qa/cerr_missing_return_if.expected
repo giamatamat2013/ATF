@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: function 'sign_of' must return a value of type int on every path
+  --> cerr_missing_return_if.atf:1:27
+ 1 | fn sign_of(x: int) -> int {
+   |                           ^
+  hint: add a 'return' at the end of the function

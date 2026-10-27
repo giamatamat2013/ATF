@@ -1,0 +1,75 @@
+// file_io.atf - writing, reading and processing text files.
+// Shows: temp_dir(), write_file / read_file (str? is nil when the file is missing),
+//        file_exists, delete_file, lines(), parsing CSV text, defer for cleanup.
+// Run:   python run_atf.py run examples/file_io.atf
+
+struct Row {
+    name: str,
+    score: int
+}
+
+fn parse_csv(text: str) -> Result<[Row], str> {
+    var rows: [Row] = []
+    var line_no = 0
+    for line in text.lines() {
+        line_no += 1
+        if line_no == 1 { continue }                  // header
+        if line.trim() == "" { continue }
+        let cols = line.split(",")
+        if cols.len() != 2 { return Result.Err("line {line_no}: expected 2 columns, found {cols.len()}") }
+        let score = cols[1].trim().parse_int()
+        if score == nil { return Result.Err("line {line_no}: '{cols[1].trim()}' is not a number") }
+        rows.push(Row(cols[0].trim(), score!))
+    }
+    return Result.Ok(rows)
+}
+
+fn main() {
+    let path = temp_dir() + "atf_example_scores.csv"
+    defer delete_file(path)                           // runs when main ends
+
+    let data = "name,score\nAnn, 91\nBob, 78\n\nCy, 85\nDi, 62\n"
+    let ok = write_file(path, data)
+    println("written:", ok, " exists:", file_exists(path))
+
+    let content = read_file(path)
+    if content == nil {
+        println("could not read the file")
+        return
+    }
+    println("{content!.len()} bytes, {content!.lines().len()} lines")
+
+    match parse_csv(content!) {
+        Result.Err(e) => println("error: {e}")
+        Result.Ok(rows) => {
+            var total = 0
+            for r in rows {
+                println("  {r.name:<4} {r.score:>3}")
+                total += r.score
+            }
+            println("average: {float(total) / float(rows.len()):.2f}")
+            var best = rows[0]
+            for r in rows { if r.score > best.score { best = r } }
+            println("best: {best.name}")
+        }
+    }
+
+    // a broken file gives an error message, not a crash
+    match parse_csv("name,score\nEd, 5x\n") {
+        Result.Err(e) => println("error: {e}")
+        Result.Ok(rows) => println("unexpected success")
+    }
+    match parse_csv("name,score\nEd\n") {
+        Result.Err(e) => println("error: {e}")
+        Result.Ok(rows) => println("unexpected success")
+    }
+
+    // append by reading, extending and writing back
+    write_file(path, content! + "Ed, 99\n")
+    let again = read_file(path)!
+    println("after appending: {again.lines().len()} lines, last line is '{again.lines().last()}'")
+
+    // missing files give nil
+    println("missing file:", read_file(temp_dir() + "no_such_file_12345.txt"))
+    println("delete works:", delete_file(path), " exists now:", file_exists(path))
+}

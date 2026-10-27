@@ -1,0 +1,9 @@
+first 15: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377]
+fib_rec(25)  = 75025
+fib_memo(25) = 75025
+fib_iter(25) = 75025
+fib_memo(90) = 2880067194370816120
+memo has 89 entries
+all versions agree: true
+fib_iter(92) = 7540113804746346429
+fib_iter(93) = -6246583658587674878 (overflow: wraps around)

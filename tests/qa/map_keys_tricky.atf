@@ -1,0 +1,27 @@
+// map keys whose equality differs from bit-equality
+struct Name { first: str, last: str }
+
+impl Name {
+    // names are equal ignoring case
+    fn eq(self, o: Name) -> bool { return self.first.lower() == o.first.lower() and self.last.lower() == o.last.lower() }
+}
+
+fn main() {
+    // 0.0 == -0.0, so they must be the same key
+    var fm: {float: int} = {}
+    fm[0.0] = 1
+    fm[-0.0] = 2
+    println(fm.len(), fm[0.0], fm.has(-0.0))
+    // a struct with a custom eq: equal keys must find each other
+    let a = Name("Ada", "Lovelace")
+    let b = Name("ADA", "LOVELACE")
+    println(a == b)
+    var nm: {Name: int} = {}
+    nm[a] = 1
+    println(nm.has(b), nm.get(b, -1))
+    let s = set_new::<Name>()
+    s.add(a)
+    s.add(b)
+    println(s.len())
+    println([a].contains(b), [a].index_of(b))
+}

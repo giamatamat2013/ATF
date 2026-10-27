@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: integer literal too large
+  --> cerr_int_literal_big.atf:2:13
+ 2 |     let x = 99999999999999999999
+   |             ^

@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: '!' can only be used on optional values (types like  int? ), found int
+  --> cerr_unwrap_non_opt.atf:3:14
+ 3 |     println(x!)
+   |              ^

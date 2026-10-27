@@ -1,0 +1,48 @@
+// a struct with custom eq AND hash methods works as a map key / set element
+struct Name { first: str, last: str }
+
+impl Name {
+    fn eq(self, o: Name) -> bool { return self.first.lower() == o.first.lower() and self.last.lower() == o.last.lower() }
+    fn hash(self) -> int { return self.first.lower().hash() * 31 + self.last.lower().hash() }
+}
+
+enum Tag { A(int), B }
+
+impl Tag {
+    // all A tags are equal
+    fn eq(self, o: Tag) -> bool {
+        return match (self, o) {
+            (Tag.A(x), Tag.A(y)) => true
+            (Tag.B, Tag.B) => true
+            _ => false
+        }
+    }
+    fn hash(self) -> int {
+        return match self {
+            Tag.A(x) => 1
+            Tag.B => 2
+        }
+    }
+}
+
+fn main() {
+    let a = Name("Ada", "Lovelace")
+    let b = Name("ADA", "LOVELACE")
+    var nm: {Name: int} = {}
+    nm[a] = 1
+    nm[b] = 2
+    println(nm.len(), nm.has(b), nm.get(Name("ada", "lovelace"), -1), nm)
+    let s = set_new::<Name>()
+    s.add(a)
+    s.add(b)
+    s.add(Name("Alan", "Turing"))
+    println(s.len())
+    var tm: {Tag: str} = {}
+    tm[Tag.A(1)] = "x"
+    tm[Tag.A(2)] = "y"
+    tm[Tag.B] = "z"
+    println(tm.len(), tm[Tag.A(99)], tm)
+    // tuples / arrays / optionals containing such structs use the custom eq and hash too
+    let tup = {(a, 1): "t"}
+    println(tup.has((b, 1)), tup.has((b, 2)), [a] == [b], (a, 1) == (b, 1))
+}

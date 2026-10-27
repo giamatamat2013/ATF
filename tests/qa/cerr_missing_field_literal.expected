@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: missing field 'age' when creating P
+  --> cerr_missing_field_literal.atf:3:13
+ 3 |     let p = P{ name: "a" }
+   |             ^
+  hint: fields: name, age

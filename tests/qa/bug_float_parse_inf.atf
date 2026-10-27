@@ -1,0 +1,8 @@
+// float_to_str prints "inf", "-inf" and "nan", but parse_float()/float() cannot read them back
+fn main() {
+    let z = 0.0
+    let inf = 1.0 / z
+    let s = str(inf)
+    println(s, s.parse_float(), "-inf".parse_float(), "nan".parse_float())
+    println(float(s) == inf)
+}

@@ -1,0 +1,4 @@
+struct P { x: int }
+fn main() {
+    println(P(1) < P(2))
+}

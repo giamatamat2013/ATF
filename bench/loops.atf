@@ -1,0 +1,16 @@
+fn main() {
+    let t = clock()
+    var sum = 0
+    for i in 0..30000 {
+        for j in 0..30000 {
+            sum += (i ^ j) & 7
+        }
+    }
+    println(sum)
+    var x = 0.0
+    for i in 0..100000000 {
+        x += 1.0 / (float(i) + 1.0)
+    }
+    println(x)
+    println("time", clock() - t)
+}

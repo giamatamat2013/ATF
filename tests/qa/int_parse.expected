@@ -1,0 +1,10 @@
+0 0 7 42 -13
+nil nil nil nil nil nil
+nil nil nil nil nil nil
+31 255 -16 5 3 nil nil
+1000 7 9223372036854775807
+9223372036854775807 -9223372036854775808
+123 -5 100 15
+255 255 511 35 5 0
+round trips: 62
+true true

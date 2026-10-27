@@ -1,0 +1,498 @@
+// Expression checking (port of atf/check_expr.py, second half)
+import "util"
+import "ast"
+import "types"
+import "tir"
+import "tirutil"
+import "checker"
+import "check_expr"
+
+impl Checker {
+    // ------------------------------------------------------------------ fields / indexing
+    // If e is a bare name that refers to a type (and is not shadowed by a value), returns that name.
+    fn type_ident(self, e: Expr) -> str? {
+        match e.k {
+            ExprK.Ident(n, targs) => {
+                if self.lookup_var(n) != nil { return nil }
+                let is_type = n in self.enums or n in self.structs or prim_type(n) != nil or n in self.aliases
+                let ci = self.find_const(n)
+                let gi = self.find_global(n)
+                let fi = self.find_fn(n)
+                if ci != nil or gi != nil or fi != nil {
+                    // a library value (like the constant E) does not hide a type of the program
+                    let lib_value = (ci == nil or ci!.prelude) and (gi == nil or gi!.prelude) and (fi == nil or fi!.prelude)
+                    if not (lib_value and is_type and self.is_program_type(n)) { return nil }
+                }
+                if is_type { return n }
+                return nil
+            }
+            _ => return nil
+        }
+    }
+
+    fn is_program_type(self, n: str) -> bool {
+        let si = self.structs.try_get(n)
+        if si != nil { return not si!.prelude }
+        let ei = self.enums.try_get(n)
+        if ei != nil { return not ei!.prelude }
+        return n in self.aliases
+    }
+
+    fn is_array_t(self, t: Type) -> bool {
+        return match t {
+            Type.Struct(info, args) => info.id == self.array_info!.id
+            _ => false
+        }
+    }
+
+    fn is_map_t(self, t: Type) -> bool {
+        return match t {
+            Type.Struct(info, args) => info.id == self.map_info!.id
+            _ => false
+        }
+    }
+
+    fn x_Field(self, e: Expr, obj: Expr, name: str, expected: Type?) -> TExpr {
+        let tn = self.type_ident(obj)
+        if tn != nil { return self.static_member(tn!, e, name, expected) }
+        let o = self.ce_value(obj)
+        return self.field_of(o, name, e.pos)
+    }
+
+    fn field_of(self, obj: TExpr, name: str, pos: Pos) -> TExpr {
+        let t = obj.ty
+        if is_struct_t(t) {
+            let fields = self.struct_fields(t)
+            for i in 0..fields.len() {
+                if fields[i].name == name { return texpr(TK.Load(obj, i), fields[i].ty, pos) }
+            }
+            var names: [str] = []
+            for f in fields { names.push(f.name) }
+            if self.find_methods(t, name).len() > 0 {
+                fail(pos, "'{name}' is a method of {t.to_str()}; call it with parentheses: {name}()")
+            }
+            var hint = suggest(name, names)
+            if hint == "" and names.len() > 0 { hint = "fields: " + ", ".join(names) }
+            fail(pos, "{t.to_str()} has no field '{name}'", hint)
+        }
+        if is_opt(t) {
+            fail(pos, "cannot use '.{name}' on {t.to_str()} because it may be nil",
+                 "unwrap it first:  x!.{name}   or   if let v = x \{ v.{name} \}")
+        }
+        fail(pos, "{t.to_str()} has no field '{name}'")
+    }
+
+    fn tuple_field_of(self, obj: TExpr, idx: int, pos: Pos) -> TExpr {
+        let t = obj.ty
+        if is_tuple(t) {
+            let es = tuple_elems(t)
+            if idx >= es.len() { fail(pos, "tuple {t.to_str()} has no element .{idx}") }
+            return texpr(TK.Load(obj, idx), es[idx], pos)
+        }
+        if is_opt(t) {
+            fail(pos, "cannot use '.{idx}' on {t.to_str()} because it may be nil",
+                 "unwrap it first:  x!.{idx}   or   if let v = x \{ v.{idx} \}")
+        }
+        fail(pos, "{t.to_str()} has no field '{idx}'")
+    }
+
+    fn static_member(self, tn: str, e: Expr, name: str, expected: Type?) -> TExpr {
+        let ei = self.enums.try_get(tn)
+        if ei != nil {
+            let info = ei!
+            let et = self.enum_type_for(info, expected)
+            let vi = info.vindex.try_get(name)
+            if vi != nil {
+                if et == nil { fail(e.pos, "cannot infer the type parameters of {info.name} here", "add a type annotation") }
+                return self.make_variant(et!, vi!, [], e.pos, true)
+            }
+            var names: [str] = []
+            for v in info.decl.variants { names.push(v.name) }
+            var hint = suggest(name, names)
+            if hint == "" { hint = "variants: " + ", ".join(names) }
+            fail(e.pos, "{info.name} has no variant '{name}'", hint)
+        }
+        fail(e.pos, "'{tn}.{name}' is not a value", "static functions are called like  {tn}.{name}(...)")
+    }
+
+    fn enum_type_for(self, info: EnumInfo, expected: Type?) -> Type? {
+        if info.tparams.len() == 0 { return Type.Enum(info, []) }
+        if expected != nil {
+            match expected! {
+                Type.Enum(ei, args) => {
+                    if ei.id == info.id { return expected }
+                }
+                _ => {}
+            }
+        }
+        return nil
+    }
+
+    fn enum_info_of(self, t: Type) -> EnumInfo {
+        return match t {
+            Type.Enum(info, args) => info
+            _ => panic("enum_info_of a non-enum")
+        }
+    }
+
+    fn make_variant(self, et: Type, vi: int, args: [TExpr], pos: Pos, bare: bool = false) -> TExpr {
+        let info = self.enum_info_of(et)
+        let payload = self.variant_payload(et, vi)
+        let vname = info.decl.variants[vi].name
+        if args.len() != payload.len() {
+            if bare and payload.len() > 0 {
+                fail(pos, "{info.name}.{vname} carries {payload.len()} value(s): write {info.name}.{vname}(...)")
+            }
+            fail(pos, "{info.name}.{vname} takes {payload.len()} value(s) but {args.len()} given")
+        }
+        if info.simple { return c_int(info.tags[vi], et, pos) }
+        var vals: [TExpr] = [self.ci(vi)]
+        for i in 0..args.len() { vals.push(self.coerce(args[i], payload[i], pos)) }
+        return texpr(TK.NewObj(vals), et, pos)
+    }
+
+    fn x_Index(self, e: Expr, objx: Expr, indexx: Expr, expected: Type?) -> TExpr {
+        let obj = self.ce_value(objx)
+        let t = obj.ty
+        let pos = e.pos
+        match indexx.k {
+            ExprK.Range(rlo, rhi, inclusive, stp) => {
+                var lo = self.ci(0)
+                if rlo != nil { lo = self.ce_as(rlo!, TInt) }
+                var hi = self.ci(END_SENTINEL)
+                if rhi != nil {
+                    hi = self.ce_as(rhi!, TInt)
+                    if inclusive { hi = texpr(TK.Bin("add", hi, self.ci(1)), TInt, NOPOS) }
+                }
+                let r = self.try_method(obj, "op_slice", [lo, hi], pos)
+                if r == nil { fail(pos, "cannot slice {t.to_str()}") }
+                return r!
+            }
+            _ => {}
+        }
+        if self.is_array_t(t) {
+            let idx = self.ce_as(indexx, TInt)
+            let elem = type_args(t)[0]
+            return texpr(TK.ArrIdx(obj, idx, self.esize(elem)), elem, pos)
+        }
+        if is_ptr(t) {
+            let idx = self.ce_as(indexx, TInt)
+            let elem = ptr_elem(t)
+            return texpr(TK.PtrIdx(obj, idx, self.esize(elem)), elem, pos)
+        }
+        let idx = self.ce_value(indexx)
+        let r = self.try_method(obj, "op_index", [idx], pos)
+        if r == nil {
+            var hint = "indexing works on arrays, strings and maps"
+            if is_opt(t) { hint = "this value may be nil; unwrap it first with  x!" }
+            fail(pos, "{t.to_str()} cannot be indexed with [ ]", hint)
+        }
+        return r!
+    }
+
+    // ------------------------------------------------------------------ literals: containers
+    fn x_ArrayLit(self, e: Expr, elems: [Expr], expected0: Type?) -> TExpr {
+        var expected = expected0
+        if expected != nil and is_opt(expected!) { expected = opt_inner(expected!) }
+        let pos = e.pos
+        var elem: Type? = nil
+        if expected != nil and self.is_array_t(expected!) { elem = type_args(expected!)[0] }
+        var items: [TExpr] = []
+        if elem == nil {
+            if elems.len() == 0 {
+                fail(pos, "cannot tell the type of an empty array", "add a type:  let a: [int] = []")
+            }
+            let first = self.ce_value(elems[0])
+            items.push(first)
+            var el = first.ty
+            if el == TNil { fail(pos, "cannot tell the element type from nil") }
+            for i in 1..elems.len() {
+                let te = self.ce_value(elems[i], el)
+                items.push(te)
+                let r = self.try_coerce(te, el)
+                if r == nil {
+                    if (el == TInt or el == TByte) and te.ty == TFloat {
+                        el = TFloat
+                    } else if el == TByte and te.ty == TInt {
+                        el = TInt
+                    } else if not is_opt(el) and te.ty == TNil {
+                        el = Type.Opt(el)
+                    } else {
+                        fail(elems[i].pos, "array elements must all have the same type: found {el.to_str()} and {te.ty.to_str()}")
+                    }
+                }
+            }
+            var co: [TExpr] = []
+            for it in items { co.push(self.coerce(it, el)) }
+            items = co
+            elem = el
+        } else {
+            for x in elems { items.push(self.ce_as(x, elem!)) }
+        }
+        let aty = Type.Struct(self.array_info!, [elem!])
+        return self.build_array(items, aty, pos)
+    }
+
+    fn build_array(self, items: [TExpr], aty: Type, pos: Pos) -> TExpr {
+        let elem = type_args(aty)[0]
+        let n = items.len()
+        let tmp = self.new_tmp(aty, "$arr")
+        var stmts: [TStmt] = [tstmt(SK.Decl(tmp, self.call_rt("array_raw", [self.ci(n)], [elem], pos)), pos)]
+        if n > 0 {
+            let pty = Type.Ptr(elem)
+            let data = self.new_tmp(pty, "$data")
+            stmts.push(tstmt(SK.Decl(data, texpr(TK.Load(texpr(TK.VarRef(tmp), aty, NOPOS), 0), pty, NOPOS)), pos))
+            let es = self.esize(elem)
+            for i in 0..n {
+                let place = texpr(TK.PtrIdx(texpr(TK.VarRef(data), pty, NOPOS), self.ci(i), es), elem, NOPOS)
+                stmts.push(tstmt(SK.Set(place, items[i]), pos))
+            }
+        }
+        return texpr(TK.Seq(stmts, texpr(TK.VarRef(tmp), aty, NOPOS)), aty, pos)
+    }
+
+    fn x_MapLit(self, e: Expr, pairs: [(Expr, Expr)], expected0: Type?) -> TExpr {
+        var expected = expected0
+        if expected != nil and is_opt(expected!) { expected = opt_inner(expected!) }
+        let pos = e.pos
+        var k = TInt
+        var v = TInt
+        if expected != nil and self.is_map_t(expected!) {
+            k = type_args(expected!)[0]
+            v = type_args(expected!)[1]
+        } else if pairs.len() == 0 {
+            fail(pos, "cannot tell the type of an empty map", "add a type:  let m: \{str: int\} = \{\}")
+        } else {
+            let k0 = self.ce_value(pairs[0].0)
+            let v0 = self.ce_value(pairs[0].1)
+            k = k0.ty
+            v = v0.ty
+        }
+        let mty = Type.Struct(self.map_info!, [k, v])
+        let tmp = self.new_tmp(mty, "$map")
+        var stmts: [TStmt] = [tstmt(SK.Decl(tmp, self.call_rt("map_new", [], [k, v], pos)), pos)]
+        for p in pairs {
+            let kt = self.ce_as(p.0, k)
+            let vt = self.ce_as(p.1, v)
+            let r = self.try_method(texpr(TK.VarRef(tmp), mty, NOPOS), "set", [kt, vt], pos)
+            stmts.push(tstmt(SK.ExprS(r!), NOPOS))
+        }
+        return texpr(TK.Seq(stmts, texpr(TK.VarRef(tmp), mty, NOPOS)), mty, pos)
+    }
+
+    fn x_TupleLit(self, e: Expr, elems: [Expr], expected0: Type?) -> TExpr {
+        var expected = expected0
+        if expected != nil and is_opt(expected!) { expected = opt_inner(expected!) }
+        if elems.len() == 0 {
+            fail(e.pos, "the empty tuple () is not a value; use  void  functions without a return value")
+        }
+        var hints: [Type?] = []
+        var exp_tuple = false
+        if expected != nil and is_tuple(expected!) and tuple_elems(expected!).len() == elems.len() {
+            exp_tuple = true
+            for t in tuple_elems(expected!) { hints.push(t) }
+        } else {
+            for x in elems { hints.push(nil) }
+        }
+        var vals: [TExpr] = []
+        for i in 0..elems.len() { vals.push(self.ce_value(elems[i], hints[i])) }
+        var ty = TVoid
+        if exp_tuple {
+            let et = tuple_elems(expected!)
+            var co: [TExpr] = []
+            for i in 0..vals.len() { co.push(self.coerce(vals[i], et[i])) }
+            vals = co
+            ty = expected!
+        } else {
+            var ts: [Type] = []
+            for v in vals { ts.push(v.ty) }
+            ty = Type.Tuple(ts)
+        }
+        return texpr(TK.NewObj(vals), ty, e.pos)
+    }
+
+    // ------------------------------------------------------------------ if / block / cast
+    fn x_BlockExpr(self, e: Expr, block: Block, expected: Type?) -> TExpr {
+        let r = self.check_value_block(block, expected)
+        if r.1 == nil { fail(e.pos, "this block does not end with a value") }
+        let val = r.1!
+        return texpr(TK.Seq(r.0, val), val.ty, e.pos)
+    }
+
+    fn x_IfExpr(self, e: Expr, cond: Cond, then: Block, els: Block?, expected: Type?) -> TExpr {
+        if els == nil { fail(e.pos, "an 'if' used as a value needs an 'else' branch") }
+        match cond {
+            Cond.Let(pat, ex) => return self.if_let_expr(e, pat, ex, then, els!, expected)
+            Cond.Plain(ce_) => {}
+        }
+        var cx_: Expr? = nil
+        match cond {
+            Cond.Plain(ce_) => cx_ = ce_
+            _ => {}
+        }
+        let c = self.ce_as(cx_!, TBool)
+        let ra = self.check_value_block(then, expected)
+        let rb = self.check_value_block(els!, expected)
+        if ra.1 == nil or rb.1 == nil {
+            fail(e.pos, "both branches of an 'if' used as a value must end with a value")
+        }
+        let j = self.join(ra.1!, rb.1!, e.pos)
+        let a = j.0
+        let b = j.1
+        var ty = a.ty
+        if a.ty == TNever { ty = b.ty }
+        var ae = a
+        if ra.0.len() > 0 { ae = texpr(TK.Seq(ra.0, a), a.ty, NOPOS) }
+        var be = b
+        if rb.0.len() > 0 { be = texpr(TK.Seq(rb.0, b), b.ty, NOPOS) }
+        return texpr(TK.Cond(c, ae, be), ty, e.pos)
+    }
+
+    fn x_Cast(self, e: Expr, ex: Expr, tx: TypeExpr, expected: Type?) -> TExpr {
+        let target = self.resolve_type(tx, self.ctx().tscope)
+        var src = self.ce_value(ex, target)
+        let st = src.ty
+        let pos = e.pos
+        if st == target { return src }
+        if target == TFloat and (st == TInt or st == TByte) { return self.coerce(src, TFloat) }
+        if target == TInt and st == TFloat {
+            if is_const(src) { return c_int(const_fval(src) as int, TInt, pos) }
+            return texpr(TK.Cvt("f2i", src), TInt, pos)
+        }
+        if target == TByte and (st == TInt or st == TFloat) {
+            if st == TFloat { src = texpr(TK.Cvt("f2i", src), TInt, pos) }
+            return texpr(TK.Cvt("trunc8", src), TByte, pos)
+        }
+        if target == TInt and (st == TByte or st == TBool) { return texpr(TK.Cvt("nop", src), TInt, pos) }
+        if target == TByte and st == TBool { return texpr(TK.Cvt("nop", src), TByte, pos) }
+        if target == TInt and is_ptr(st) { return texpr(TK.Cvt("nop", src), TInt, pos) }
+        if is_ptr(target) and (st == TInt or is_ptr(st)) { return texpr(TK.Cvt("nop", src), target, pos) }
+        if is_simple_enum(st) and (target == TInt or target == TByte) { return texpr(TK.Cvt("nop", src), target, pos) }
+        if is_simple_enum(target) and (st == TInt or st == TByte) {
+            return texpr(TK.Cvt("nop", self.coerce(src, TInt)), target, pos)
+        }
+        // reinterpretations used by the low-level runtime
+        if is_ptr(target) and (is_struct_t(st) or is_tuple(st) or is_func(st) or st == TStr) {
+            return texpr(TK.Cvt("nop", src), target, pos)
+        }
+        if is_ptr(st) and (is_struct_t(target) or is_tuple(target) or target == TStr) {
+            return texpr(TK.Cvt("nop", src), target, pos)
+        }
+        let r = self.try_coerce(src, target)
+        if r != nil { return r! }
+        fail(pos, "cannot convert {st.to_str()} to {target.to_str()}", "use int(x), float(x), str(x) for common conversions")
+    }
+
+    fn x_Unwrap(self, e: Expr, ex: Expr) -> TExpr {
+        let x = self.ce_value(ex)
+        if not is_opt(x.ty) {
+            fail(e.pos, "'!' can only be used on optional values (types like  int? ), found {x.ty.to_str()}")
+        }
+        let stmts: [TStmt] = []
+        let xs = self.bind_tmp(x, stmts)
+        let inner = opt_inner(x.ty)
+        let failc = self.call_rt("unwrap_fail", [], [], e.pos)
+        failc.ty = inner
+        let c = texpr(TK.Cond(texpr(TK.Bin("eq", xs, c_nil(x.ty, NOPOS)), TBool, NOPOS), failc, self.unwrap_opt(xs)), inner, e.pos)
+        if stmts.len() > 0 { return texpr(TK.Seq(stmts, c), inner, e.pos) }
+        return c
+    }
+
+    fn x_Try(self, e: Expr, ex: Expr) -> TExpr {
+        let x = self.ce_value(ex)
+        let t = x.ty
+        let cx = self.ctx()
+        let pos = e.pos
+        if cx.ret == nil { fail(pos, "'?' needs the function to declare its return type") }
+        let ret = cx.ret!
+        let stmts: [TStmt] = []
+        let xs = self.bind_tmp(x, stmts)
+        let failb: [TStmt] = []
+        if is_opt(t) {
+            if not is_opt(ret) {
+                fail(pos, "'?' on an optional value needs the function to return an optional type (like {ret.to_str()}?)", "or use  x ?? default  /  x!")
+            }
+            self.emit_return(c_nil(ret, pos), failb, pos)
+            stmts.push(tstmt(SK.If(texpr(TK.Bin("eq", xs, c_nil(t, NOPOS)), TBool, NOPOS), failb, []), pos))
+            return texpr(TK.Seq(stmts, self.unwrap_opt(xs)), opt_inner(t), pos)
+        }
+        match t {
+            Type.Enum(info, targs) => {
+                if info.name == "Result" and info.prelude {
+                    var same_enum = false
+                    match ret {
+                        Type.Enum(rinfo, rargs) => same_enum = rinfo.id == info.id
+                        _ => {}
+                    }
+                    if not same_enum {
+                        fail(pos, "'?' on a Result needs the function to return a Result too, but it returns {ret.to_str()}")
+                    }
+                    let rargs2 = type_args(ret)
+                    if rargs2[1] != targs[1] {
+                        fail(pos, "the error types differ: {targs[1].to_str()} vs {rargs2[1].to_str()}")
+                    }
+                    let err = self.make_variant(ret, 1, [texpr(TK.Load(xs, 1), targs[1], NOPOS)], pos)
+                    self.emit_return(err, failb, pos)
+                    stmts.push(tstmt(SK.If(texpr(TK.Bin("eq", texpr(TK.Load(xs, 0), TInt, NOPOS), self.ci(1)), TBool, NOPOS), failb, []), pos))
+                    return texpr(TK.Seq(stmts, texpr(TK.Load(xs, 1), targs[0], NOPOS)), targs[0], pos)
+                }
+            }
+            _ => {}
+        }
+        fail(pos, "'?' works on optional values (like int?) and on Result values, found {t.to_str()}")
+    }
+
+    fn x_Coalesce(self, e: Expr, lx: Expr, rx: Expr) -> TExpr {
+        let x = self.ce_value(lx)
+        if not is_opt(x.ty) {
+            fail(e.pos, "'??' needs an optional value on the left (like  int? ), found {x.ty.to_str()}")
+        }
+        let inner = opt_inner(x.ty)
+        var d = self.ce_value(rx, inner)
+        if d.ty != TNever { d = self.coerce(d, inner, rx.pos) }
+        let stmts: [TStmt] = []
+        let xs = self.bind_tmp(x, stmts)
+        let c = texpr(TK.Cond(texpr(TK.Bin("ne", xs, c_nil(x.ty, NOPOS)), TBool, NOPOS), self.unwrap_opt(xs), d), inner, e.pos)
+        if stmts.len() > 0 { return texpr(TK.Seq(stmts, c), inner, e.pos) }
+        return c
+    }
+
+    fn call_extern(self, name: str, args: [TExpr], pos: Pos) -> TExpr {
+        let ei = self.externs.try_get(name)
+        if ei == nil { fail(pos, "internal error: extern '{name}' not declared in the prelude") }
+        let ext = self.extern_for(ei!)
+        return texpr(TK.CallExt(ext, args), ext.ret, pos)
+    }
+
+    fn extern_for(self, ei: ExternInfo) -> Extern {
+        if ei.ext == nil {
+            let d = ei.decl
+            var params: [Type] = []
+            for p in d.params { params.push(self.resolve_type_i32(p.ty!)) }
+            var ret32 = false
+            var ret = TVoid
+            if d.ret != nil {
+                match d.ret!.k {
+                    TypeK.Name(n, targs) => {
+                        if n == "i32" { ret32 = true }
+                    }
+                    _ => {}
+                }
+                ret = self.resolve_type_i32(d.ret!)
+            }
+            var dll = d.dll
+            if not dll.contains(".") { dll = dll + ".dll" }
+            let ext = Extern(dll, d.name, params, ret, ret32)
+            ei.ext = ext
+            self.program.externs.push(ext)
+        }
+        return ei.ext!
+    }
+
+    // type resolution inside extern signatures, where i32 means a 32-bit int (treated as int)
+    fn resolve_type_i32(self, t: TypeExpr) -> Type {
+        var ts: {str: Type} = {}
+        ts["i32"] = TInt
+        return self.resolve_type(t, ts)
+    }
+}

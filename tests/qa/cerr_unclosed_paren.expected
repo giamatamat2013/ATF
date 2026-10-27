@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: '}' does not match the '(' opened at line 2, column 12
+  --> cerr_unclosed_paren.atf:4:1
+ 4 | }
+   | ^
+  hint: is a ')' missing before this?

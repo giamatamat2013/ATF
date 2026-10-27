@@ -1,0 +1,10 @@
+'aaabcc' -> '3a1b2c'
+'abc' -> '1a1b1c'
+'zzzzzzzzzzzz' -> '12z'
+'' -> ''
+'aabbbaa' -> '2a3b2a'
+67 characters packed into 18: 12W1B12W3B24W1B14W
+round trip ok: true
+'3a2' is invalid: count at the end has no letter
+'abc' is invalid: letter 'a' at 0 has no count
+'12' is invalid: count at the end has no letter

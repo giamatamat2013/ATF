@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected int but found str
+  --> cerr_arg_type.atf:3:19
+ 3 |     println(twice("4"))
+   |                   ^
+  hint: use int(s) or float(s) to convert text to a number

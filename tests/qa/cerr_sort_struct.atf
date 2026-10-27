@@ -1,0 +1,6 @@
+struct Q { a: int }
+fn main() {
+    var x = [Q(2), Q(1)]
+    x.sort()
+    println(x)
+}

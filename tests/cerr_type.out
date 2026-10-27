@@ -1,0 +1,22 @@
+COMPILE ERROR
+error: type mismatch: expected int but found str
+  --> cerr_type.atf:2:18
+ 2 |     let x: int = "hello"
+   |                  ^
+  hint: use int(s) or float(s) to convert text to a number
+
+error: cannot add int and str
+  --> cerr_type.atf:3:15
+ 3 |     let y = 5 + "a"
+   |               ^
+  hint: use string interpolation "{x}" or str(x) to join text with other values
+
+error: unknown function 'undefined_fn'
+  --> cerr_type.atf:4:5
+ 4 |     undefined_fn(3)
+   |     ^
+
+error: unknown name 'unknown_var'
+  --> cerr_type.atf:5:13
+ 5 |     let z = unknown_var
+   |             ^

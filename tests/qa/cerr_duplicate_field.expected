@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: field 'x' is defined twice in A
+  --> cerr_duplicate_field.atf:1:20
+ 1 | struct A { x: int, x: str }
+   |                    ^

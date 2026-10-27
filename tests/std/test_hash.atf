@@ -1,0 +1,80 @@
+// tests for std/hash
+// The expected output was cross-checked with Python's hashlib / zlib / hmac.
+import "std/hash"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn inputs() -> [str] {
+    var r = ["", "a", "abc", "message digest", "abcdefghijklmnopqrstuvwxyz",
+             "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+             "The quick brown fox jumps over the lazy dog",
+             "The quick brown fox jumps over the lazy dog.",
+             "12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+             "שלום עולם ☺", "\x00", "\x00\xff\x80\x7f"]
+    // lengths around the 64-byte block / 56-byte padding boundaries
+    for n in [55, 56, 57, 63, 64, 65, 111, 112, 119, 120, 127, 128, 129] { r.push("x" * n) }
+    return r
+}
+
+fn main() -> int {
+    // well-known test vectors
+    check("md5 empty", hash_md5(""), "d41d8cd98f00b204e9800998ecf8427e")
+    check("md5 abc", hash_md5("abc"), "900150983cd24fb0d6963f7d28e17f72")
+    check("md5 fox", hash_md5("The quick brown fox jumps over the lazy dog"), "9e107d9d372bb6826bd81d3542a419d6")
+    check("sha1 empty", hash_sha1(""), "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+    check("sha1 abc", hash_sha1("abc"), "a9993e364706816aba3e25717850c26c9cd0d89d")
+    check("sha1 448 bits", hash_sha1("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "84983e441c3bd26ebaae4aa1f95129e5e54670f1")
+    check("sha256 empty", hash_sha256(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    check("sha256 abc", hash_sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    check("sha256 448 bits", hash_sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+    check("crc32 123456789", hash_hex32(hash_crc32("123456789")), "cbf43926")
+    check("crc32 empty", hash_hex32(hash_crc32("")), "00000000")
+    check("adler32 Wikipedia", hash_hex32(hash_adler32("Wikipedia")), "11e60398")
+    check("fnv1a32 empty", hash_hex32(hash_fnv1a32("")), "811c9dc5")
+    check("fnv1a32 a", hash_hex32(hash_fnv1a32("a")), "e40c292c")
+    check("fnv1a32 foobar", hash_hex32(hash_fnv1a32("foobar")), "bf9cf968")
+    check("fnv1a64 empty", hash_hex64(hash_fnv1a64("")), "cbf29ce484222325")
+    check("fnv1a64 a", hash_hex64(hash_fnv1a64("a")), "af63dc4c8601ec8c")
+    check("fnv1a64 foobar", hash_hex64(hash_fnv1a64("foobar")), "85944171f73967e8")
+    check("djb2 hello", int_to_str(hash_djb2("hello")), "261238937")
+    // a million 'a' (FIPS 180 long message vectors)
+    let million = "a" * 1000000
+    check("md5 million a", hash_md5(million), "7707d6ae4e027c70eea2a935c2296f21")
+    check("sha1 million a", hash_sha1(million), "34aa973cd4c4daa4f61eeb2bdbad27316534016f")
+    check("sha256 million a", hash_sha256(million), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+    check("crc32 million a", hash_hex32(hash_crc32(million)), "dc25bfbc")
+
+    // incremental CRC
+    check("crc32 update", hash_hex32(hash_crc32_update(hash_crc32("The quick brown fox "), "jumps over the lazy dog")),
+          hash_hex32(hash_crc32("The quick brown fox jumps over the lazy dog")))
+
+    // HMAC-SHA256 (RFC 4231 test cases 1, 2 and 6)
+    check("hmac rfc4231 #1", hash_hmac_sha256("\x0b" * 20, "Hi There"), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
+    check("hmac rfc4231 #2", hash_hmac_sha256("Jefe", "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+    check("hmac rfc4231 #6", hash_hmac_sha256("\xaa" * 131, "Test Using Larger Than Block-Size Key - Hash Key First"), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54")
+
+    // raw digests have the right sizes and match the hex forms
+    println("raw sizes:", hash_md5_raw("x").len(), hash_sha1_raw("x").len(), hash_sha256_raw("x").len(), hash_hmac_sha256_raw("k", "m").len())
+    println("raw matches hex:", hash_to_hex(hash_sha256_raw("x")) == hash_sha256("x"), hash_to_hex(hash_hmac_sha256_raw("k", "m")) == hash_hmac_sha256("k", "m"))
+    println("hex helpers:", hash_hex32(0), hash_hex32(-1), hash_hex64(-1), hash_hex64(1), hash_to_hex("\x01\xab"))
+
+    // table of all digests for many inputs (compared with Python)
+    for s in inputs() {
+        println("{s.len()} md5={hash_md5(s)} sha1={hash_sha1(s)}")
+        println("{s.len()} sha256={hash_sha256(s)}")
+        println("{s.len()} crc32={hash_hex32(hash_crc32(s))} adler32={hash_hex32(hash_adler32(s))} fnv32={hash_hex32(hash_fnv1a32(s))} fnv64={hash_hex64(hash_fnv1a64(s))}")
+        println("{s.len()} hmac={hash_hmac_sha256("key", s)}")
+    }
+
+    println("failures:", failures)
+    return failures
+}

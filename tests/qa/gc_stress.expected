@@ -1,0 +1,13 @@
+small objects: 2000 true
+garbage 500000
+list: 300000 44999850000
+closures: 1200048890
+global closure: 44
+map: 50000 true
+global map: true
+cycles: 20 true
+big arrays: 4 true
+long string: 200000 abcdefghij 20000
+builder: 300000 012345678901 789
+grid: 2011522500
+after gc: true true true

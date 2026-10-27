@@ -1,0 +1,4 @@
+fn f() -> int {
+    return self.x
+}
+fn main() { println(f()) }

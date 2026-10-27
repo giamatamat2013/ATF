@@ -1,0 +1,19 @@
+// the tutorial says defer runs "when the function ends, however it ends";
+// a panic that is caught by catch_panic skips all pending defers
+var trace: [str] = []
+fn log(s: str) { trace.push(s) }
+
+fn inner() {
+    defer log("inner cleanup")
+    panic("boom")
+}
+
+fn outer() {
+    defer log("outer cleanup")
+    inner()
+}
+
+fn main() {
+    let m = catch_panic(|| { outer() })
+    println(m, trace)
+}

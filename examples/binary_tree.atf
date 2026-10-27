@@ -1,0 +1,109 @@
+// binary_tree.atf - a generic binary search tree.
+// Shows: generic structs and impl<T>, optionals as child links, recursion,
+//        in-order / pre-order traversal, closures passed as arguments.
+// Run:   python run_atf.py run examples/binary_tree.atf
+
+struct Node<T> {
+    value: T,
+    left: Node<T>?,
+    right: Node<T>?
+}
+
+struct Tree<T> {
+    root: Node<T>?,
+    size: int
+}
+
+fn insert_node<T>(node: Node<T>?, v: T) -> Node<T> {
+    if let n = node {
+        if v < n.value {
+            n.left = insert_node(n.left, v)
+        } else if v > n.value {
+            n.right = insert_node(n.right, v)
+        }
+        return n
+    }
+    return Node{ value: v, left: nil, right: nil }
+}
+
+fn height<T>(node: Node<T>?) -> int {
+    if let n = node {
+        return 1 + max(height(n.left), height(n.right))
+    }
+    return 0
+}
+
+fn in_order<T>(node: Node<T>?, visit: fn(T)) {
+    if let n = node {
+        in_order(n.left, visit)
+        visit(n.value)
+        in_order(n.right, visit)
+    }
+}
+
+fn pre_order<T>(node: Node<T>?, visit: fn(T)) {
+    if let n = node {
+        visit(n.value)
+        pre_order(n.left, visit)
+        pre_order(n.right, visit)
+    }
+}
+
+impl<T> Tree<T> {
+    fn new() -> Tree<T> {
+        return Tree{ root: nil, size: 0 }
+    }
+
+    fn contains(self, v: T) -> bool {
+        var cur = self.root
+        while let n = cur {
+            if v == n.value { return true }
+            if v < n.value { cur = n.left } else { cur = n.right }
+        }
+        return false
+    }
+
+    fn add(self, v: T) {
+        if not self.contains(v) { self.size += 1 }
+        self.root = insert_node(self.root, v)
+    }
+
+    fn to_array(self) -> [T] {
+        var out: [T] = []
+        in_order(self.root, |v| out.push(v))
+        return out
+    }
+
+    fn min(self) -> T? {
+        var cur = self.root
+        var best: T? = nil
+        while let n = cur {
+            best = n.value
+            cur = n.left
+        }
+        return best
+    }
+}
+
+fn main() {
+    let t: Tree<int> = Tree.new()
+    for v in [50, 30, 70, 20, 40, 60, 80, 30, 65] {
+        t.add(v)
+    }
+    println("size:", t.size, " height:", height(t.root))
+    println("sorted:", t.to_array())
+    println("contains 60?", t.contains(60), " contains 61?", t.contains(61))
+    println("smallest:", t.min())
+
+    var pre: [int] = []
+    pre_order(t.root, |v| pre.push(v))
+    println("pre-order:", pre)
+
+    // the same code works for strings
+    let words: Tree<str> = Tree.new()
+    for w in "the quick brown fox jumps over the lazy dog".split(" ") {
+        words.add(w)
+    }
+    println(words.to_array())
+    println("{words.size} distinct words, first alphabetically: {words.min()!}")
+}

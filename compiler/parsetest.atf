@@ -1,0 +1,548 @@
+// Parser test driver: parses the file given as first argument and prints a canonical dump of the AST.
+// build/astdump.py prints the identical dump from the Python parser (atf/parser.py).
+//   python run_atf.py run compiler/parsetest.atf file.atf
+import "parser"
+
+var out = str_builder()
+
+fn ps(p: Pos) -> str {
+    return str(p.line) + ":" + str(p.col)
+}
+
+fn hex2(b: int) -> str {
+    let s = int_to_hex(b)
+    if s.len() < 2 { return "0" + s }
+    return s
+}
+
+// printable ASCII is kept, everything else (and the backslash) is written as \xNN
+fn esc(s: str) -> str {
+    var sb = str_builder()
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c == 92 {
+            sb.add("\\\\")
+        } else if c >= 32 and c < 127 {
+            sb.add_byte(c)
+        } else {
+            sb.add("\\x" + hex2(c))
+        }
+    }
+    return sb.finish()
+}
+
+// IEEE bits of a float as unsigned hex (like Python's "%x")
+fn fhex(v: float) -> str {
+    let bits = __f2bits(v)
+    let hi = bits >>> 32
+    let lo = bits & 0xFFFFFFFF
+    if hi == 0 { return int_to_hex(lo) }
+    var l = int_to_hex(lo)
+    while l.len() < 8 { l = "0" + l }
+    return int_to_hex(hi) + l
+}
+
+fn line(d: int, lab: str, text: str) {
+    out.add("  ".repeat(d))
+    if lab.len() > 0 {
+        out.add(lab)
+        out.add(": ")
+    }
+    out.add(text)
+    out.add("\n")
+}
+
+fn names_str(names: [str]) -> str {
+    return ",".join(names)
+}
+
+fn bstr(b: bool) -> str {
+    if b { return "true" }
+    return "false"
+}
+
+
+// ---- accessors for optional enum payloads.
+// A pattern variable bound to a payload of type T? is UNWRAPPED and the arm only matches when the payload is
+// not nil (the match silently falls through otherwise), so every optional payload needs a nil arm and a value arm.
+fn acc_tfn_ret(k: TypeK) -> TypeExpr? {
+    match k {
+        TypeK.Fn(_, nil) => return nil
+        TypeK.Fn(_, r) => return r
+        _ => return nil
+    }
+}
+
+fn acc_ident_targs(k: ExprK) -> [TypeExpr]? {
+    match k {
+        ExprK.Ident(_, nil) => return nil
+        ExprK.Ident(_, t) => return t
+        _ => return nil
+    }
+}
+
+fn acc_range_lo(k: ExprK) -> Expr? {
+    match k {
+        ExprK.Range(nil, _, _, _) => return nil
+        ExprK.Range(x, _, _, _) => return x
+        _ => return nil
+    }
+}
+
+fn acc_range_hi(k: ExprK) -> Expr? {
+    match k {
+        ExprK.Range(_, nil, _, _) => return nil
+        ExprK.Range(_, x, _, _) => return x
+        _ => return nil
+    }
+}
+
+fn acc_range_step(k: ExprK) -> Expr? {
+    match k {
+        ExprK.Range(_, _, _, nil) => return nil
+        ExprK.Range(_, _, _, x) => return x
+        _ => return nil
+    }
+}
+
+fn acc_lambda_ret(k: ExprK) -> TypeExpr? {
+    match k {
+        ExprK.Lambda(_, nil, _) => return nil
+        ExprK.Lambda(_, r, _) => return r
+        _ => return nil
+    }
+}
+
+fn acc_ifexpr_else(k: ExprK) -> Block? {
+    match k {
+        ExprK.IfExpr(_, _, nil) => return nil
+        ExprK.IfExpr(_, _, b) => return b
+        _ => return nil
+    }
+}
+
+fn acc_variant_args(k: PatK) -> [Pattern]? {
+    match k {
+        PatK.Variant(_, nil) => return nil
+        PatK.Variant(_, a) => return a
+        _ => return nil
+    }
+}
+
+fn acc_let_ty(k: StmtK) -> TypeExpr? {
+    match k {
+        StmtK.Let(_, _, nil, _, _) => return nil
+        StmtK.Let(_, _, t, _, _) => return t
+        _ => return nil
+    }
+}
+
+fn acc_let_init(k: StmtK) -> Expr? {
+    match k {
+        StmtK.Let(_, _, _, nil, _) => return nil
+        StmtK.Let(_, _, _, x, _) => return x
+        _ => return nil
+    }
+}
+
+fn acc_if_else(k: StmtK) -> Block? {
+    match k {
+        StmtK.If(_, _, nil) => return nil
+        StmtK.If(_, _, b) => return b
+        _ => return nil
+    }
+}
+
+fn acc_return_val(k: StmtK) -> Expr? {
+    match k {
+        StmtK.Return(nil) => return nil
+        StmtK.Return(x) => return x
+        _ => return nil
+    }
+}
+
+// ---- types
+fn dt(t: TypeExpr, d: int, lab: str) {
+    match t.k {
+        TypeK.Name(name, args) => {
+            line(d, lab, "TName " + ps(t.pos) + " " + name)
+            for a in args { dt(a, d + 1, "arg") }
+        }
+        TypeK.Array(e) => {
+            line(d, lab, "TArray " + ps(t.pos))
+            dt(e, d + 1, "elem")
+        }
+        TypeK.Map(k, v) => {
+            line(d, lab, "TMap " + ps(t.pos))
+            dt(k, d + 1, "key")
+            dt(v, d + 1, "val")
+        }
+        TypeK.Tuple(elems) => {
+            line(d, lab, "TTuple " + ps(t.pos))
+            for a in elems { dt(a, d + 1, "elem") }
+        }
+        TypeK.Fn(params, _) => {
+            line(d, lab, "TFn " + ps(t.pos))
+            for a in params { dt(a, d + 1, "param") }
+            dopt_t(acc_tfn_ret(t.k), d + 1, "ret")
+        }
+        TypeK.Opt(e) => {
+            line(d, lab, "TOpt " + ps(t.pos))
+            dt(e, d + 1, "inner")
+        }
+        TypeK.Ptr(e) => {
+            line(d, lab, "TPtr " + ps(t.pos))
+            dt(e, d + 1, "elem")
+        }
+    }
+}
+
+fn dopt_t(t: TypeExpr?, d: int, lab: str) {
+    if t != nil { dt(t!, d, lab) }
+}
+
+fn dopt_x(e: Expr?, d: int, lab: str) {
+    if e != nil { dx(e!, d, lab) }
+}
+
+// ---- expressions
+fn dx(e: Expr, d: int, lab: str) {
+    let p = ps(e.pos)
+    match e.k {
+        ExprK.IntLit(v) => line(d, lab, "IntLit " + p + " " + str(v))
+        ExprK.FloatLit(v) => line(d, lab, "FloatLit " + p + " " + fhex(v))
+        ExprK.StrLit(parts) => {
+            line(d, lab, "StrLit " + p)
+            for it in parts {
+                match it {
+                    StrItem.Lit(s) => line(d + 1, "", "lit \"" + esc(s) + "\"")
+                    StrItem.Interp(ex, spec) => {
+                        line(d + 1, "", "interp spec=\"" + esc(spec) + "\"")
+                        dx(ex, d + 2, "")
+                    }
+                }
+            }
+        }
+        ExprK.CharLit(v) => line(d, lab, "CharLit " + p + " " + str(v))
+        ExprK.BoolLit(v) => line(d, lab, "BoolLit " + p + " " + bstr(v))
+        ExprK.NilLit => line(d, lab, "NilLit " + p)
+        ExprK.Ident(name, _) => {
+            line(d, lab, "Ident " + p + " " + name)
+            let targs = acc_ident_targs(e.k)
+            if targs != nil {
+                for ta in targs! { dt(ta, d + 1, "targ") }
+            }
+        }
+        ExprK.Unary(op, x) => {
+            line(d, lab, "Unary " + p + " " + op)
+            dx(x, d + 1, "")
+        }
+        ExprK.Binary(op, l, r) => {
+            line(d, lab, "Binary " + p + " " + op)
+            dx(l, d + 1, "")
+            dx(r, d + 1, "")
+        }
+        ExprK.Call(callee, args) => {
+            line(d, lab, "Call " + p)
+            dx(callee, d + 1, "callee")
+            for a in args {
+                if a.name.len() > 0 {
+                    line(d + 1, "", "named " + ps(a.pos) + " " + a.name)
+                    dx(a.expr, d + 2, "")
+                } else {
+                    dx(a.expr, d + 1, "arg")
+                }
+            }
+        }
+        ExprK.Field(o, name) => {
+            line(d, lab, "Field " + p + " " + name)
+            dx(o, d + 1, "")
+        }
+        ExprK.TupleField(o, n) => {
+            line(d, lab, "TupleField " + p + " " + str(n))
+            dx(o, d + 1, "")
+        }
+        ExprK.Index(o, i) => {
+            line(d, lab, "Index " + p)
+            dx(o, d + 1, "")
+            dx(i, d + 1, "")
+        }
+        ExprK.Range(_, _, incl, _) => {
+            line(d, lab, "Range " + p + " " + bstr(incl))
+            dopt_x(acc_range_lo(e.k), d + 1, "lo")
+            dopt_x(acc_range_hi(e.k), d + 1, "hi")
+            dopt_x(acc_range_step(e.k), d + 1, "step")
+        }
+        ExprK.ArrayLit(elems) => {
+            line(d, lab, "ArrayLit " + p)
+            for x in elems { dx(x, d + 1, "") }
+        }
+        ExprK.MapLit(pairs) => {
+            line(d, lab, "MapLit " + p)
+            for pr in pairs {
+                dx(pr.0, d + 1, "key")
+                dx(pr.1, d + 1, "val")
+            }
+        }
+        ExprK.TupleLit(elems) => {
+            line(d, lab, "TupleLit " + p)
+            for x in elems { dx(x, d + 1, "") }
+        }
+        ExprK.StructLit(name, fields) => {
+            line(d, lab, "StructLit " + p)
+            dx(name, d + 1, "name")
+            for f in fields {
+                line(d + 1, "", "field " + ps(f.pos) + " " + f.name)
+                dx(f.expr, d + 2, "")
+            }
+        }
+        ExprK.Lambda(params, _, body) => {
+            line(d, lab, "Lambda " + p)
+            for lp in params {
+                line(d + 1, "", "param " + lp.name)
+                dopt_t(lp.ty, d + 2, "type")
+            }
+            dopt_t(acc_lambda_ret(e.k), d + 1, "ret")
+            dblock(body, d + 1, "body")
+        }
+        ExprK.IfExpr(c, then, _) => {
+            line(d, lab, "IfExpr " + p)
+            dcond(c, d + 1)
+            dblock(then, d + 1, "then")
+            let els = acc_ifexpr_else(e.k)
+            if els != nil { dblock(els!, d + 1, "else") }
+        }
+        ExprK.MatchExpr(subject, arms) => {
+            line(d, lab, "MatchExpr " + p)
+            dx(subject, d + 1, "subject")
+            for a in arms { darm(a, d + 1) }
+        }
+        ExprK.BlockExpr(b) => {
+            line(d, lab, "BlockExpr " + p)
+            dblock(b, d + 1, "")
+        }
+        ExprK.Cast(x, t) => {
+            line(d, lab, "Cast " + p)
+            dx(x, d + 1, "")
+            dt(t, d + 1, "type")
+        }
+        ExprK.Unwrap(x) => {
+            line(d, lab, "Unwrap " + p)
+            dx(x, d + 1, "")
+        }
+        ExprK.Try(x) => {
+            line(d, lab, "Try " + p)
+            dx(x, d + 1, "")
+        }
+        ExprK.Coalesce(l, r) => {
+            line(d, lab, "Coalesce " + p)
+            dx(l, d + 1, "")
+            dx(r, d + 1, "")
+        }
+    }
+}
+
+fn dcond(c: Cond, d: int) {
+    match c {
+        Cond.Plain(e) => dx(e, d, "cond")
+        Cond.Let(pat, e) => {
+            line(d, "cond", "IfLet")
+            dpat(pat, d + 1, "")
+            dx(e, d + 1, "")
+        }
+    }
+}
+
+// ---- patterns
+fn dpat(pt: Pattern, d: int, lab: str) {
+    let p = ps(pt.pos)
+    match pt.k {
+        PatK.Wild => line(d, lab, "PWild " + p)
+        PatK.Bind(name) => line(d, lab, "PBind " + p + " " + name)
+        PatK.Lit(e) => {
+            line(d, lab, "PLit " + p)
+            dx(e, d + 1, "")
+        }
+        PatK.Range(lo, hi, incl) => {
+            line(d, lab, "PRange " + p + " " + bstr(incl))
+            dx(lo, d + 1, "lo")
+            dx(hi, d + 1, "hi")
+        }
+        PatK.Variant(path, _) => {
+            let args = acc_variant_args(pt.k)
+            var a = "none"
+            if args != nil { a = "some" }
+            line(d, lab, "PVariant " + p + " " + ".".join(path) + " args=" + a)
+            if args != nil {
+                for x in args! { dpat(x, d + 1, "") }
+            }
+        }
+        PatK.Tuple(elems) => {
+            line(d, lab, "PTuple " + p)
+            for x in elems { dpat(x, d + 1, "") }
+        }
+        PatK.Or(alts) => {
+            line(d, lab, "POr " + p)
+            for x in alts { dpat(x, d + 1, "") }
+        }
+        PatK.Fields(path, fields) => {
+            line(d, lab, "PFields " + p + " " + ".".join(path))
+            for f in fields { dpat(f.pat, d + 1, f.name) }
+        }
+    }
+}
+
+fn darm(a: Arm, d: int) {
+    line(d, "", "Arm " + ps(a.pos))
+    dpat(a.pat, d + 1, "pat")
+    if a.guard != nil { dx(a.guard!, d + 1, "guard") }
+    match a.body {
+        ArmBody.Blk(b) => dblock(b, d + 1, "body")
+        ArmBody.Ex(e) => dx(e, d + 1, "body")
+    }
+}
+
+// ---- statements
+fn dblock(b: Block, d: int, lab: str) {
+    line(d, lab, "Block " + ps(b.pos))
+    for s in b.stmts { ds(s, d + 1) }
+}
+
+fn ds(s: Stmt, d: int) {
+    let p = ps(s.pos)
+    match s.k {
+        StmtK.Let(names, is_tuple, _, _, mutable) => {
+            line(d, "", "Let " + p + " names=" + names_str(names) + " tuple=" + bstr(is_tuple) + " mutable=" + bstr(mutable))
+            dopt_t(acc_let_ty(s.k), d + 1, "type")
+            dopt_x(acc_let_init(s.k), d + 1, "init")
+        }
+        StmtK.Assign(target, op, value) => {
+            line(d, "", "Assign " + p + " " + op)
+            dx(target, d + 1, "target")
+            dx(value, d + 1, "value")
+        }
+        StmtK.ExprS(e) => {
+            line(d, "", "ExprStmt " + p)
+            dx(e, d + 1, "")
+        }
+        StmtK.If(c, then, _) => {
+            line(d, "", "If " + p)
+            dcond(c, d + 1)
+            dblock(then, d + 1, "then")
+            let els = acc_if_else(s.k)
+            if els != nil { dblock(els!, d + 1, "else") }
+        }
+        StmtK.While(c, body) => {
+            line(d, "", "While " + p)
+            dcond(c, d + 1)
+            dblock(body, d + 1, "body")
+        }
+        StmtK.Loop(body) => {
+            line(d, "", "Loop " + p)
+            dblock(body, d + 1, "body")
+        }
+        StmtK.For(names, it, body) => {
+            line(d, "", "For " + p + " names=" + names_str(names))
+            dx(it, d + 1, "iter")
+            dblock(body, d + 1, "body")
+        }
+        StmtK.Break => line(d, "", "Break " + p)
+        StmtK.Continue => line(d, "", "Continue " + p)
+        StmtK.Return(_) => {
+            line(d, "", "Return " + p)
+            dopt_x(acc_return_val(s.k), d + 1, "value")
+        }
+        StmtK.Defer(st) => {
+            line(d, "", "Defer " + p)
+            ds(st, d + 1)
+        }
+        StmtK.MatchS(subject, arms) => {
+            line(d, "", "MatchS " + p)
+            dx(subject, d + 1, "subject")
+            for a in arms { darm(a, d + 1) }
+        }
+        StmtK.BlockS(b) => {
+            line(d, "", "BlockS " + p)
+            dblock(b, d + 1, "")
+        }
+    }
+}
+
+// ---- declarations
+fn dparam(pm: Param, d: int) {
+    line(d, "", "Param " + ps(pm.pos) + " " + pm.name)
+    dopt_t(pm.ty, d + 1, "type")
+    dopt_x(pm.default, d + 1, "default")
+}
+
+fn dfn(f: FnDecl, d: int) {
+    line(d, "", "Fn " + ps(f.pos) + " " + f.name + " tparams=" + names_str(f.tparams) + " attrs=" + names_str(f.attrs))
+    for pm in f.params { dparam(pm, d + 1) }
+    dopt_t(f.ret, d + 1, "ret")
+    if f.body != nil { dblock(f.body!, d + 1, "body") }
+}
+
+fn ditem(it: Item, d: int) {
+    match it {
+        Item.Fn(f) => dfn(f, d)
+        Item.Struct(s) => {
+            line(d, "", "Struct " + ps(s.pos) + " " + s.name + " tparams=" + names_str(s.tparams))
+            for f in s.fields {
+                line(d + 1, "", "field " + ps(f.pos) + " " + f.name)
+                dt(f.ty, d + 2, "")
+            }
+        }
+        Item.Enum(en) => {
+            line(d, "", "Enum " + ps(en.pos) + " " + en.name + " tparams=" + names_str(en.tparams))
+            for v in en.variants {
+                var vs = "none"
+                if v.value != nil { vs = str(v.value!) }
+                line(d + 1, "", "variant " + ps(v.pos) + " " + v.name + " value=" + vs)
+                for t in v.payload { dt(t, d + 2, "") }
+            }
+        }
+        Item.Impl(im) => {
+            line(d, "", "Impl " + ps(im.pos) + " tparams=" + names_str(im.tparams))
+            dt(im.ty, d + 1, "type")
+            for m in im.methods { dfn(m, d + 1) }
+        }
+        Item.Const(c) => {
+            line(d, "", "Const " + ps(c.pos) + " " + c.name)
+            dopt_t(c.ty, d + 1, "type")
+            dx(c.value, d + 1, "value")
+        }
+        Item.Global(g) => {
+            line(d, "", "Global " + ps(g.pos) + " " + g.name + " mutable=" + bstr(g.mutable))
+            dopt_t(g.ty, d + 1, "type")
+            dopt_x(g.value, d + 1, "value")
+        }
+        Item.Import(im) => line(d, "", "Import " + ps(im.pos) + " \"" + esc(im.path) + "\"")
+        Item.Extern(ex) => {
+            line(d, "", "Extern " + ps(ex.pos) + " \"" + esc(ex.dll) + "\" " + ex.name)
+            for pm in ex.params { dparam(pm, d + 1) }
+            dopt_t(ex.ret, d + 1, "ret")
+        }
+        Item.Alias(a) => {
+            line(d, "", "Alias " + ps(a.pos) + " " + a.name + " tparams=" + names_str(a.tparams))
+            dt(a.ty, d + 1, "type")
+        }
+    }
+}
+
+fn main(args: [str]) {
+    if args.len() < 1 {
+        eprintln("usage: parsetest file.atf")
+        exit(2)
+    }
+    let path = args[0]
+    let src = read_file(path)!
+    var items: [Item] = []
+    let ok = guarded(fn() { items = parse_source(src, path) })
+    if not ok {
+        let dg = diags[0]
+        println("ERROR " + ps(dg.pos) + " " + esc(dg.msg) + " | " + esc(dg.hint))
+        return
+    }
+    for it in items { ditem(it, 0) }
+    print_str(out.finish())
+}

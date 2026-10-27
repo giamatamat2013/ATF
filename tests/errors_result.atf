@@ -1,0 +1,53 @@
+fn parse_pos(s: str) -> Result<int, str> {
+    let n = s.parse_int()
+    if n == nil { return Result.Err("not a number: {s}") }
+    if n! < 0 { return Result.Err("negative: {n!}") }
+    return Result.Ok(n!)
+}
+
+fn sum_strs(a: str, b: str) -> Result<int, str> {
+    let x = parse_pos(a)?
+    let y = parse_pos(b)?
+    return Result.Ok(x + y)
+}
+
+fn first_char(s: str) -> str? {
+    if s.len() == 0 { return nil }
+    return s[0]
+}
+
+fn shout(s: str) -> str? {
+    let c = first_char(s)?
+    return c.upper() + "!"
+}
+
+fn risky(n: int) -> int {
+    if n == 0 { panic("zero not allowed") }
+    let a = [1, 2, 3]
+    return a[n]
+}
+
+fn main() {
+    println(sum_strs("3", "4"))
+    println(sum_strs("3", "x"))
+    println(sum_strs("-1", "4"))
+    match sum_strs("10", "20") {
+        Result.Ok(v) => println("ok", v)
+        Result.Err(e) => println("err", e)
+    }
+    println(parse_pos("5").unwrap(), parse_pos("q").unwrap_or(-1), parse_pos("5").is_ok(), parse_pos("q").is_err())
+    println(shout("hey"), shout(""))
+    let m1 = catch_panic(|| { println(risky(0)) })
+    println("caught:", m1)
+    let m2 = catch_panic(|| { println(risky(7)) })
+    println("caught:", m2)
+    let m3 = catch_panic(|| { println(risky(1)) })
+    println("caught:", m3)
+    var d = 0
+    let m4 = catch_panic(|| { println(10 / d) })
+    println("caught:", m4)
+    println(1 >>> 1, -1 >>> 60, -8 >> 1, 5 >>> 1)
+    let p = [1, 2]
+    let q = p
+    println(same(p, q), same(p, copy(p)), p == copy(p))
+}

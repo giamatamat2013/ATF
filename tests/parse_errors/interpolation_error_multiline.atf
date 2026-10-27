@@ -1,0 +1,4 @@
+fn main() {
+    let s = """first
+second {1 +} third"""
+}

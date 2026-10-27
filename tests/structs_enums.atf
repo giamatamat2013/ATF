@@ -1,0 +1,114 @@
+struct Node {
+    value: int,
+    next: Node?
+}
+
+struct Stack<T> {
+    items: [T]
+}
+
+impl<T> Stack<T> {
+    fn new() -> Stack<T> { return Stack{ items: [] } }
+    fn push(self, x: T) { self.items.push(x) }
+    fn pop(self) -> T? {
+        if self.items.len() == 0 { return nil }
+        return self.items.pop()
+    }
+    fn size(self) -> int { return self.items.len() }
+}
+
+struct Vec2 { x: float, y: float }
+impl Vec2 {
+    fn op_add(self, o: Vec2) -> Vec2 { return Vec2(self.x + o.x, self.y + o.y) }
+    fn op_mul(self, k: float) -> Vec2 { return Vec2(self.x * k, self.y * k) }
+    fn op_neg(self) -> Vec2 { return Vec2(-self.x, -self.y) }
+    fn to_str(self) -> str { return "({self.x}, {self.y})" }
+}
+
+enum Expr {
+    Num(int),
+    Add(Expr, Expr),
+    Mul(Expr, Expr),
+    Neg(Expr)
+}
+
+fn eval(e: Expr) -> int {
+    match e {
+        Expr.Num(n) => return n
+        Expr.Add(a, b) => return eval(a) + eval(b)
+        Expr.Mul(a, b) => return eval(a) * eval(b)
+        Expr.Neg(a) => return -eval(a)
+    }
+}
+
+enum Level { Low = 1, Mid = 5, High = 10 }
+
+fn describe(n: int) -> str {
+    return match n {
+        0 => "zero"
+        1 | 2 | 3 => "small"
+        4..=9 => "medium"
+        x if x < 0 => "negative"
+        _ => "large"
+    }
+}
+
+fn main() {
+    // linked list with optional next
+    var head: Node? = nil
+    for i in 1..=4 {
+        head = Node{ value: i, next: head }
+    }
+    var cur = head
+    var total = 0
+    while let n = cur {
+        print(n.value, "")
+        total += n.value
+        cur = n.next
+    }
+    println("total", total)
+
+    let st: Stack<str> = Stack.new()
+    st.push("a")
+    st.push("b")
+    println(st.size(), st.pop(), st.pop(), st.pop())
+
+    let v = Vec2(1.0, 2.0) + Vec2(0.5, 0.5) * 2.0
+    println(v, -v)
+    println("v is {v}")
+
+    let e = Expr.Add(Expr.Num(2), Expr.Mul(Expr.Num(3), Expr.Neg(Expr.Num(4))))
+    println(eval(e))
+    println(e)
+
+    println(Level.Mid, int(Level.High), Level.Low == Level.Low)
+    for n in [0, 2, 7, -5, 100] { println(n, describe(n)) }
+
+    // tuples
+    let t = (1, "two", 3.0)
+    println(t, t.0, t.1, t.2)
+    let (a, b) = (10, 20)
+    println(a + b)
+    fn_tuple()
+    // struct equality & copy semantics
+    let p1 = Vec2(1.0, 2.0)
+    let p2 = Vec2(1.0, 2.0)
+    println(p1 == p2, p1 != p2)
+    let arr1 = [1, 2, 3]
+    println(arr1 == [1, 2, 3], arr1 == [1, 2])
+}
+
+fn minmax(a: [int]) -> (int, int) {
+    var lo = a[0]
+    var hi = a[0]
+    for x in a {
+        if x < lo { lo = x }
+        if x > hi { hi = x }
+    }
+    return (lo, hi)
+}
+
+fn fn_tuple() {
+    let (lo, hi) = minmax([5, 3, 8, 1, 9, 2])
+    println("min", lo, "max", hi)
+}

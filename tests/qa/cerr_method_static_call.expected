@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: 'get' is a method; call it on a value like  x.get()
+  --> cerr_method_static_call.atf:6:18
+ 6 |     println(C.get())
+   |                  ^

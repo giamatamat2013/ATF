@@ -1,0 +1,15 @@
+     0: bin                  0  oct       0  hex     0  base36 0
+     5: bin                101  oct       5  hex     5  base36 5
+    10: bin               1010  oct      12  hex     a  base36 a
+   255: bin           11111111  oct     377  hex    ff  base36 73
+  1000: bin         1111101000  oct    1750  hex   3e8  base36 rs
+ 65535: bin   1111111111111111  oct  177777  hex  ffff  base36 1ekf
+   -42: bin            -101010  oct     -52  hex   -2a  base36 -16
+built-in: ff 11111111 ff FF 11111111
+zero padded: 00000101 00ff
+255 255 1295 -5
+nil nil
+255 511
+round trip ok for bases 2..36: true
+x = 182 = 10110110, popcount 5, x & 0xF = 6, x >> 4 = 11, x << 2 = 728
+is power of two: [true, false, true, false, true]

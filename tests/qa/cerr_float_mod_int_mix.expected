@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected int but found float
+  --> cerr_float_mod_int_mix.atf:2:22
+ 2 |     let a: int = 2.5 * 2
+   |                      ^
+  hint: use int(x) to convert a float to an int

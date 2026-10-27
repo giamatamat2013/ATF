@@ -1,0 +1,4 @@
+fn main() {
+    let a = 1
+    let x = a not b
+}

@@ -1,0 +1,16 @@
+struct Config {
+    name: str,
+    verbose: bool = false,
+    level: int = 3,
+    tags: [str] = []
+}
+
+fn main() {
+    let a = Config{ name: "a" }
+    let b = Config{ name: "b", level: 9 }
+    let c = Config("c", true)
+    a.tags.push("x")
+    println(a)
+    println(b)
+    println(c, c.tags.len())
+}

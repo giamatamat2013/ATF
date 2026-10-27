@@ -1,0 +1,10 @@
+nil ["inner got: inner boom", "outer continues"]
+"outer boom" ["inner ok", "inner result: nil"]
+"second after first"
+"L3 saw L2 saw L1"
+"bottom reached" 0
+1000
+caught 3334
+5 error: division by zero -2
+"index 3 is out of range (length 3)" 3
+"missing widget #42"

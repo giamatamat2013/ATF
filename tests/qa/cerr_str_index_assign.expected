@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: str does not support  x[i] = v
+  --> cerr_str_index_assign.atf:3:5
+ 3 |     s[0] = "x"
+   |     ^

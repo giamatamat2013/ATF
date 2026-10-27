@@ -1,0 +1,419 @@
+// stdlib_docs.atf - writes docs/STDLIB.md from the library sources.
+//
+//   atf run tools/stdlib_docs.atf          (from the repository root)
+//
+// Every public function, method, constant and module type is listed with its signature and the
+// comment written directly above it (or at the end of a one-line function).
+
+let PRELUDE = "atf/stdlib/prelude.atf"
+let MODULES = ["base64", "collections", "csv", "datetime", "hash", "hex", "json"]
+let OUT = "docs/STDLIB.md"
+
+// top-level prelude functions that only the runtime and the compiler use
+let INTERNAL: {str: bool} = make_set([
+    "out_of_memory", "heap_init", "take_blocks", "zero_words", "small_block", "small_alloc", "large_alloc",
+    "mark_push", "mark_word", "mark_range", "drain_marks", "sweep", "gc_collect", "mem_copy", "write_all",
+    "io_init", "flush_out", "print_str", "eprint_str", "fatal_exit", "cstr_at", "print_traceback",
+    "function_at", "print_traceback_from", "traceback_text", "die", "crash_handler", "install_crash_handler",
+    "panic_at", "assert_fail", "match_fail", "unwrap_fail", "slice_fail", "hash_int", "hash_mix",
+    "str_len", "str_data", "str_new", "str_from_ptr", "str_concat", "str_repeat", "str_eq", "str_cmp",
+    "str_hash", "char_str", "digit_char", "cint_at", "decimal_mul", "parse_int_str", "str_to_int",
+    "parse_float_str", "str_to_float", "alloc_elems", "array_raw", "array_to_str", "array_eq", "array_hash",
+    "merge_sort_by", "map_to_str", "map_eq", "quote_arg", "int_to_base"
+])
+let INTERNAL_METHODS: {str: bool} = make_set(["grow", "tag"])
+// helper types of the modules; entries that mention them are left out
+let INTERNAL_TYPES = ["JsonParser", "SortedMapNode"]
+
+fn mentions_internal_type(s: str) -> bool {
+    for t in INTERNAL_TYPES {
+        if s.contains(t) { return true }
+    }
+    return false
+}
+let PUBLIC_PRELUDE_CONSTS: {str: bool} = make_set(["PI", "E", "INT_MAX", "INT_MIN", "INF"])
+
+fn make_set(names: [str]) -> {str: bool} {
+    var m: {str: bool} = {}
+    for n in names { m[n] = true }
+    return m
+}
+
+struct Entry {
+    sig: str,
+    doc: str
+}
+
+struct Group {
+    title: str,
+    entries: [Entry],
+    code: bool                           // entries are declarations shown as code blocks
+}
+
+struct Section {
+    title: str,
+    intro: [str],
+    groups: [Group]
+}
+
+// ---------------------------------------------------------------- reading signatures
+fn is_ident_byte(c: byte) -> bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_'
+}
+
+// s[i] is an opening bracket: the index just after its partner (strings are skipped)
+fn match_close(s: str, i0: int) -> int {
+    var depth = 0
+    var i = i0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '"' {
+            i += 1
+            while i < s.len() and s.byte_at(i) != '"' {
+                if s.byte_at(i) == '\\' { i += 1 }
+                i += 1
+            }
+        } else if c == '(' or c == '[' or c == '{' or c == '<' {
+            depth += 1
+        } else if c == ')' or c == ']' or c == '}' or c == '>' {
+            // '->' inside a function type is not a closing bracket
+            if not (c == '>' and i > 0 and s.byte_at(i - 1) == '-') {
+                depth -= 1
+                if depth == 0 { return i + 1 }
+            }
+        }
+        i += 1
+    }
+    return s.len()
+}
+
+// the index just after the type that starts at i (or after the spaces before it)
+fn skip_type(s: str, i0: int) -> int {
+    var i = i0
+    while i < s.len() and s.byte_at(i) == ' ' { i += 1 }
+    if i >= s.len() { return i }
+    if s[i..].starts_with("fn(") {
+        i = match_close(s, i + 2)
+        if s[i..].starts_with(" -> ") { i = skip_type(s, i + 4) }
+    } else {
+        let c = s.byte_at(i)
+        if c == '[' or c == '{' or c == '(' {
+            i = match_close(s, i)
+        } else {
+            while i < s.len() and (is_ident_byte(s.byte_at(i)) or s.byte_at(i) == '.') { i += 1 }
+            if i < s.len() and s.byte_at(i) == '<' { i = match_close(s, i) }
+        }
+    }
+    while i < s.len() and s.byte_at(i) == '?' { i += 1 }
+    return i
+}
+
+// "fn name<T>(params) -> Ret { ..."  ->  (name, end of the signature)
+fn read_fn(t: str) -> (str, int) {
+    var i = 3
+    while i < t.len() and is_ident_byte(t.byte_at(i)) { i += 1 }
+    let name = t[3..i]
+    if i < t.len() and t.byte_at(i) == '<' { i = match_close(t, i) }
+    if i >= t.len() or t.byte_at(i) != '(' { return (name, t.len()) }
+    i = match_close(t, i)
+    if t[i..].starts_with(" -> ") { i = skip_type(t, i + 4) }
+    return (name, i)
+}
+
+// a comment at the end of a one-line function:  fn f() { ... }   // text
+fn trailing_comment(rest: str) -> str {
+    let k = rest.rfind("// ")
+    if k < 0 { return "" }
+    if not rest[..k].trim().ends_with("}") { return "" }
+    return rest[k + 3..].trim()
+}
+
+// "fn find(self, sub: str) -> int"  ->  ".find(sub: str) -> int";  without self:  "Type.new() -> T"
+fn method_sig(sig: str, type_name: str) -> str {
+    var s = sig[3..]
+    let p = s.find("(")
+    if p < 0 { return s }
+    let head = s[..p]
+    var rest = s[p + 1..]
+    if rest.starts_with("self, ") {
+        return "." + head + "(" + rest[6..]
+    }
+    if rest.starts_with("self)") {
+        return "." + head + "(" + rest[4..]
+    }
+    return type_name + "." + head + "(" + rest
+}
+
+// how a type is written by users:  Array<T> -> [T],  Map<K, V> -> {K: V}
+fn display_type(impl_line: str) -> str {
+    var s = impl_line.trim()
+    if s.ends_with("{") { s = s[..s.len() - 1].trim() }
+    s = s[4..].trim()                            // after "impl"
+    if s.starts_with("<") { s = s[match_close(s, 0)..].trim() }
+    if s == "Array<T>" { return "[T]" }
+    if s == "Map<K, V>" { return "\{K: V\}" }
+    return s
+}
+
+fn base_name(t: str) -> str {
+    let k = t.find("<")
+    if k < 0 { return t }
+    return t[..k]
+}
+
+// ---------------------------------------------------------------- parsing a file
+fn add_entry(sec: Section, title: str, e: Entry, code: bool) {
+    for g in sec.groups {
+        if g.title == title {
+            g.entries.push(e)
+            return
+        }
+    }
+    sec.groups.push(Group(title, [e], code))
+}
+
+fn read_source(path: str) -> str {
+    let text = read_file(path)
+    if text == nil {
+        eprintln("cannot read {path} (run this from the repository root)")
+        exit(1)
+    }
+    return text!.replace("\r\n", "\n")
+}
+
+fn parse_source(text: str, prelude: bool, module_title: str) -> [Section] {
+    var sections: [Section] = []
+    var cur = Section(module_title, [], [])
+    sections.push(cur)
+    var pending: [str] = []
+    var impl_type = ""
+    var at_top = not prelude                     // module header comment block
+    var decl: [str] = []                         // lines of a struct/enum being collected
+    var decl_doc = ""
+    var skip_decl = false                        // inside the declaration of an internal type
+    let lines = text.split("\n")
+    for raw in lines {
+        let line = raw.trim_end()
+        let t = line.trim()
+        if skip_decl {
+            if line == "}" { skip_decl = false }
+            continue
+        }
+        if decl.len() > 0 {
+            decl.push(line)
+            if line == "}" {
+                add_entry(cur, "Types", Entry("\n".join(decl), decl_doc), true)
+                decl = []
+            }
+            continue
+        }
+        if at_top {
+            if t.starts_with("//") {
+                var c = t[2..]
+                if c.starts_with(" ") { c = c[1..] }
+                cur.intro.push(c)
+                continue
+            }
+            at_top = false
+        }
+        if line.starts_with("// ----") {
+            // a section header (in modules only a separator)
+            if prelude {
+                var k = 2
+                while k < line.len() and (line.byte_at(k) == '-' or line.byte_at(k) == ' ') { k += 1 }
+                cur = Section(line[k..].trim(), [], [])
+                sections.push(cur)
+            }
+            pending = []
+            continue
+        }
+        if t.starts_with("//") {
+            pending.push(t[2..].trim())
+            continue
+        }
+        if t == "" {
+            pending = []
+            continue
+        }
+        let doc = " ".join(pending)
+        pending = []
+        if line.starts_with("impl") {
+            impl_type = display_type(line)
+            continue
+        }
+        if line == "}" {
+            impl_type = ""
+            continue
+        }
+        if line.starts_with("fn ") or (impl_type != "" and line.starts_with("    fn ")) {
+            let r = read_fn(t)
+            let name = r.0
+            var sig = t[..r.1]
+            var d = doc
+            if d == "" { d = trailing_comment(t[r.1..]) }
+            if name.starts_with("__") or name.starts_with("op_") or name.starts_with("rt_") or sig.contains("ptr<") { continue }
+            if mentions_internal_type(sig) or mentions_internal_type(impl_type) { continue }
+            if impl_type == "" {
+                if prelude and name in INTERNAL { continue }
+                add_entry(cur, "Functions", Entry(sig, d), false)
+            } else {
+                if name in INTERNAL_METHODS { continue }
+                add_entry(cur, "Methods of `" + impl_type + "`", Entry(method_sig(sig, base_name(impl_type)), d), false)
+            }
+            continue
+        }
+        if line.starts_with("const ") {
+            let name = t[6..].split(" ")[0].split(":")[0]
+            if prelude and not (name in PUBLIC_PRELUDE_CONSTS) { continue }
+            add_entry(cur, "Constants", Entry(t[6..], doc), false)
+            continue
+        }
+        if not prelude and (line.starts_with("struct ") or line.starts_with("enum ")) {
+            if mentions_internal_type(line) {
+                if not line.ends_with("}") { skip_decl = true }
+                continue
+            }
+            if line.ends_with("}") {
+                add_entry(cur, "Types", Entry(line, doc), true)
+            } else {
+                decl = [line]
+                decl_doc = doc
+            }
+            continue
+        }
+    }
+    var out: [Section] = []
+    for s in sections {
+        if s.groups.len() > 0 { out.push(s) }
+    }
+    return out
+}
+
+// ---------------------------------------------------------------- writing markdown
+fn anchor(title: str) -> str {
+    var sb = str_builder()
+    for c in title.lower().bytes() {
+        if is_ident_byte(c) or c == '-' {
+            sb.add_byte(c)
+        } else if c == ' ' {
+            sb.add_byte('-')
+        }
+    }
+    return sb.finish()
+}
+
+fn section_title(s: Section) -> str {
+    if s.title.len() == 0 or s.title.starts_with("std/") { return s.title }
+    return s.title.capitalize()
+}
+
+fn group_order(title: str) -> int {
+    if title == "Constants" { return 0 }
+    if title == "Types" { return 1 }
+    if title == "Functions" { return 2 }
+    return 3
+}
+
+fn write_section(sb: StrBuilder, s: Section, level: str) {
+    sb.add("\n" + level + " " + section_title(s) + "\n\n")
+    // a module's header comment: prose, and its indented lines as example blocks
+    var intro = s.intro.copy()
+    if intro.len() > 0 and intro[0].starts_with(s.title + " - ") {
+        intro[0] = intro[0][s.title.len() + 3..].capitalize()
+    }
+    var in_code = false
+    var blanks = 0                               // blank lines not written yet
+    for l in intro {
+        if l == "" {
+            blanks += 1
+            continue
+        }
+        let code = l.starts_with("  ")
+        if in_code and not code {
+            sb.add("```\n")
+            in_code = false
+        }
+        if blanks > 0 {
+            sb.add("\n")
+            blanks = 0
+        }
+        if code and not in_code {
+            sb.add("```text\n")
+            in_code = true
+        }
+        if code { sb.add(l[2..] + "\n") } else { sb.add(l + "\n") }
+    }
+    if in_code { sb.add("```\n") }
+    var groups = s.groups.copy()
+    groups.sort_by(|a, b| group_order(a.title) - group_order(b.title))
+    for g in groups {
+        sb.add("\n**" + g.title + "**\n\n")
+        if g.code {
+            for e in g.entries {
+                if e.doc.len() > 0 { sb.add(e.doc + "\n\n") }
+                sb.add("```text\n" + e.sig + "\n```\n\n")
+            }
+        } else {
+            for e in g.entries {
+                var line = "- `" + e.sig + "`"
+                if e.doc.len() > 0 { line = line + " - " + e.doc }
+                sb.add(line + "\n")
+            }
+        }
+    }
+}
+
+let BUILTINS = """
+These are part of the language itself (they accept values of any printable type or have special rules).
+
+- `print(a, b, ...)` - writes the values to standard output, separated by single spaces, without a newline.
+- `println(a, b, ...)` - the same followed by a newline; `println()` writes an empty line.
+- `eprint(...)`, `eprintln(...)` - the same on standard error.
+- `str(x) -> str` - any value as text, exactly as `println` shows it (`P\{x: 1, name: "a"\}`, `[1, 2]`, `Shape.Dot`, `nil`).
+- `int(x) -> int` - a float is truncated toward zero, a `byte`, `bool` or simple enum gives its number,
+  and a `str` is parsed (the program stops with an error if it is not a number; `s.parse_int()` returns `int?` instead).
+- `float(x) -> float` - from an `int` or `byte`, or parsed from a `str` (stops on bad text; `s.parse_float()` returns `float?`).
+- `byte(x) -> byte` - the low 8 bits of an `int` (`byte(300) == 44`); a float is truncated first.
+- `bool(x) -> bool` - numbers: `x != 0`; optional values: `x != nil`.
+- `assert(condition)`, `assert(condition, "message")` - stops the program with the message when the condition is false.
+- `panic("message")` - stops the program with an error message and a traceback (it can be caught with `catch_panic`).
+- `copy(x)` - a shallow copy of a struct, tuple, array or map (structs, arrays and maps are shared by reference).
+- `same(a, b) -> bool` - whether `a` and `b` are the same object; `==` compares the contents instead.
+- `include_str("file")` - the text of a file, read when the program is compiled (the path is relative to the source file).
+- `[expr for x in items if condition]` - a list comprehension (see the tutorial).
+"""
+
+fn main() {
+    var prelude = parse_source(read_source(PRELUDE), true, "")
+    var modules: [Section] = []
+    for m in MODULES {
+        let secs = parse_source(read_source("stdlib/" + m + ".atf"), false, "std/" + m)
+        for s in secs { modules.push(s) }
+    }
+    let sb = str_builder()
+    sb.add("# ATF standard library\n\n")
+    sb.add("<!-- generated by tools/stdlib_docs.atf from the library sources - edit the comments there, not this file -->\n\n")
+    sb.add("Everything in the **prelude** is always available. The **modules** at the end are imported by name,\n")
+    sb.add("for example  `import \"std/json\"`.  Each entry shows the signature and the comment written in the source.\n")
+    sb.add("Methods are called on a value: `.find(sub: str) -> int` under *Methods of `str`* means `\"hello\".find(\"l\")`.\n")
+    sb.add("See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENCE.md) for its exact rules.\n")
+    sb.add("\n## Contents\n\n- [Built-in functions](#built-in-functions)\n- Prelude\n")
+    for s in prelude { sb.add("  - [" + section_title(s) + "](#" + anchor(section_title(s)) + ")\n") }
+    sb.add("- Modules\n")
+    for s in modules { sb.add("  - [" + s.title + "](#" + anchor(s.title) + ")\n") }
+    sb.add("\n## Built-in functions\n\n" + BUILTINS)
+    for s in prelude { write_section(sb, s, "##") }
+    for s in modules { write_section(sb, s, "##") }
+    if not write_file(OUT, sb.finish()) {
+        eprintln("cannot write {OUT}")
+        exit(1)
+    }
+    var n = 0
+    for s in prelude {
+        for g in s.groups { n += g.entries.len() }
+    }
+    for s in modules {
+        for g in s.groups { n += g.entries.len() }
+    }
+    println("wrote {OUT}: {n} entries")
+}

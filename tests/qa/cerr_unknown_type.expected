@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: unknown type 'Strng'
+  --> cerr_unknown_type.atf:1:9
+ 1 | fn f(a: Strng) -> int { return 1 }
+   |         ^
+  hint: did you mean 'str'?

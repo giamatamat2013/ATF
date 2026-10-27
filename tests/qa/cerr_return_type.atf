@@ -1,0 +1,4 @@
+fn name() -> str {
+    return 42
+}
+fn main() { println(name()) }

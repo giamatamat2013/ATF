@@ -1,0 +1,126 @@
+// GC under heavy allocation: results must stay correct when objects are only reachable from
+// closures, maps, globals, optionals, cycles, nested arrays, big arrays and long strings
+struct Node { id: int, next: Node?, data: [int] }
+struct Cyc { name: str, other: Cyc? }
+
+var global_list: [Node] = []
+var global_map: {int: str} = {}
+var global_closure: fn() -> int = || 0
+
+fn make_closure(n: int) -> fn() -> int {
+    let arr = [n, n * 2, n * 3]
+    let s = "v" + str(n)
+    return || arr[0] + arr[1] + arr[2] + s.len()
+}
+
+fn churn(n: int) -> int {
+    // lots of garbage
+    var t = 0
+    for i in 0..n {
+        let tmp = [i, i + 1]
+        let st = "x" + str(i)
+        t += tmp[1] - tmp[0] + st.len() - st.len()
+    }
+    return t
+}
+
+fn main() {
+    let start_runs = gc_runs()
+    // 1. millions of small objects, keep every 1000th alive in a global array
+    for i in 0..2000000 {
+        let n = Node(i, nil, [i])
+        if i % 1000 == 0 { global_list.push(n) }
+    }
+    var ok = true
+    for i, n in global_list {
+        if n.id != i * 1000 or n.data[0] != i * 1000 { ok = false }
+    }
+    println("small objects:", global_list.len(), ok)
+    // 2. a long linked list reachable only through its head
+    var head: Node? = nil
+    for i in 0..300000 { head = Node(i, head, []) }
+    println("garbage", churn(500000))
+    var cnt = 0
+    var sum = 0
+    var cur = head
+    while let c = cur {
+        cnt += 1
+        sum += c.id
+        cur = c.next
+    }
+    println("list:", cnt, sum)
+    // 3. objects only reachable from closures
+    var closures: [fn() -> int] = []
+    for i in 0..20000 { closures.push(make_closure(i)) }
+    churn(300000)
+    var csum = 0
+    for f in closures { csum += f() }
+    println("closures:", csum)
+    global_closure = make_closure(7)
+    churn(300000)
+    let gcf = global_closure  // WORKAROUND: a global closure cannot be called directly (bug_call_global_closure)
+    println("global closure:", gcf())
+    // 4. objects only reachable from maps (keys and values are heap strings)
+    var m: {str: [str]} = {}
+    for i in 0..50000 { m["key" + str(i)] = ["val" + str(i), str(i * i)] }
+    churn(300000)
+    var mok = true
+    for i in 0..50000 {
+        let v = m["key" + str(i)]
+        if v[0] != "val" + str(i) or v[1] != str(i * i) { mok = false }
+    }
+    println("map:", m.len(), mok)
+    for i in 0..100000 { global_map[i] = "g" + str(i) }
+    churn(300000)
+    var gok = true
+    for i in 0..100000 { if global_map[i] != "g" + str(i) { gok = false } }
+    println("global map:", gok)
+    // 5. cycles: two objects pointing at each other, then dropped; and kept cycles
+    var kept: [Cyc] = []
+    for i in 0..200000 {
+        let a = Cyc("a" + str(i), nil)
+        let b = Cyc("b" + str(i), a)
+        a.other = b
+        if i % 10000 == 0 { kept.push(a) }
+    }
+    churn(300000)
+    var cyc_ok = true
+    for i, a in kept {
+        if a.other!.other!.name != "a" + str(i * 10000) or a.other!.name != "b" + str(i * 10000) { cyc_ok = false }
+    }
+    println("cycles:", kept.len(), cyc_ok)
+    // 6. big arrays and long strings
+    var bigs: [[int]] = []
+    for r in 0..40 {
+        let b = array_make::<int>(200000)
+        b[0] = r
+        b[199999] = r * 2
+        if r % 10 == 0 { bigs.push(b) }
+    }
+    var bok = true
+    for i, b in bigs { if b[0] != i * 10 or b[199999] != i * 20 or b.len() != 200000 { bok = false } }
+    println("big arrays:", bigs.len(), bok)
+    var long = ""
+    for i in 0..20000 { long += "abcdefghij" }
+    println("long string:", long.len(), long[199990..], long.count("j"))
+    var sb = str_builder()
+    for i in 0..300000 { sb.add(str(i % 10)) }
+    let built = sb.finish()
+    println("builder:", built.len(), built[0..12], built[built.len() - 3..])
+    // 7. arrays of arrays growing while garbage is produced
+    var grid: [[str]] = []
+    for y in 0..300 {
+        var row: [str] = []
+        for x in 0..300 { row.push(str(x * y)) }
+        grid.push(row)
+    }
+    var gs = 0
+    for row in grid { for c in row { gs += c.to_int() } }
+    println("grid:", gs)
+    // 8. optional fields and strings in structs kept through gc()
+    gc()
+    gc()
+    var still = true
+    for i, n in global_list { if n.id != i * 1000 { still = false } }
+    println("after gc:", still, gc_runs() > start_runs, gc_live_bytes() > 0)
+}

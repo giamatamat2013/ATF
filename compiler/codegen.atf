@@ -1,0 +1,2111 @@
+// x86-64 (Windows x64 ABI) code generator for the typed IR (port of atf/codegen.py).
+// The output must be byte-identical to the Python version: keep the order of every emitted
+// instruction, temp allocation and constant pool entry in sync with codegen.py.
+import "util"
+import "ast"
+import "types"
+import "tir"
+import "x64"
+import "pe"
+
+let INT_REGS: [int] = [3, 6, 7, 12, 13, 14, 15]                    // rbx rsi rdi r12 r13 r14 r15
+let FLT_REGS: [int] = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15]         // xmm6 .. xmm15
+let ARG_REGS: [Operand] = [REGS[1], REGS[2], REGS[8], REGS[9]]     // rcx rdx r8 r9
+let ARG_XREGS: [Operand] = [XMM[0], XMM[1], XMM[2], XMM[3]]
+let SAVE_REGS: [int] = [3, 6, 7, 12, 13, 14, 15]                   // rbx rsi rdi r12 r13 r14 r15
+
+// comparison op -> condition code that means "true"
+fn cc_int(op: str) -> int {
+    if op == "eq" { return CC_E }
+    if op == "ne" { return CC_NE }
+    if op == "lt" { return CC_L }
+    if op == "le" { return CC_LE }
+    if op == "gt" { return CC_G }
+    if op == "ge" { return CC_GE }
+    panic("codegen: not an integer comparison: " + op)
+}
+
+fn is_int_cmp_op(op: str) -> bool {
+    return op == "eq" or op == "ne" or op == "lt" or op == "le" or op == "gt" or op == "ge"
+}
+
+// inverse condition (e<->ne, l<->ge, le<->g, a<->be, ae<->b, p<->np)
+fn cc_inv(cc: int) -> int { return cc ^ 1 }
+
+fn cc_swap(cc: int) -> int {
+    if cc == CC_E { return CC_E }
+    if cc == CC_NE { return CC_NE }
+    if cc == CC_L { return CC_G }
+    if cc == CC_G { return CC_L }
+    if cc == CC_LE { return CC_GE }
+    if cc == CC_GE { return CC_LE }
+    panic("codegen: cc_swap")
+}
+
+fn cg_is_flt(t: Type) -> bool {
+    return match t {
+        Type.Float => true
+        _ => false
+    }
+}
+
+fn cg_is_void(t: Type) -> bool {
+    return match t {
+        Type.Void => true
+        _ => false
+    }
+}
+
+// register / stack slot of a variable as an operand
+fn loc_op(l: Loc) -> Operand {
+    return match l {
+        Loc.Reg(n) => REGS[n]
+        Loc.XReg(n) => XMM[n]
+        Loc.Stack(d) => mem_b(REGS[5], d)
+        Loc.NoLoc => panic("codegen: variable has no location")
+    }
+}
+
+fn loc_is_xreg(l: Loc) -> bool {
+    return match l {
+        Loc.XReg(n) => true
+        _ => false
+    }
+}
+
+fn loc_is_reg(l: Loc) -> bool {
+    return match l {
+        Loc.Reg(n) => true
+        _ => false
+    }
+}
+
+fn loc_is_none(l: Loc) -> bool {
+    return match l {
+        Loc.NoLoc => true
+        _ => false
+    }
+}
+
+fn opt_is_imm(o: Operand?) -> bool {
+    if o == nil { return false }
+    return o!.is_imm()
+}
+
+fn opt_is_reg(o: Operand?) -> bool {
+    if o == nil { return false }
+    return o!.is_reg()
+}
+
+fn opt_is_mem(o: Operand?) -> bool {
+    if o == nil { return false }
+    return o!.is_mem()
+}
+
+// integer payload of a Const expression, nil if e is not a Const
+fn cg_const_iv(e: TExpr) -> int? {
+    return match e.k {
+        TK.Const(ck, iv, fv, sv) => iv
+        _ => nil
+    }
+}
+
+fn cg_is_str_const(e: TExpr) -> bool {
+    return match e.k {
+        TK.Const(ck, iv, fv, sv) => ck == CK.Str
+        _ => false
+    }
+}
+
+fn cg_is_const(e: TExpr) -> bool {
+    return match e.k {
+        TK.Const(ck, iv, fv, sv) => true
+        _ => false
+    }
+}
+
+fn cg_fits32(v: int) -> bool { return v >= -2147483648 and v < 2147483648 }
+
+fn cg_basename(p: str) -> str {
+    var i = p.len() - 1
+    while i >= 0 {
+        let c = p.byte_at(i)
+        if c == '/' or c == '\\' { return p[i + 1..] }
+        i -= 1
+    }
+    return p
+}
+
+// ---------------------------------------------------------------- variable usage weights
+// collect variable usage weights (loop-depth weighted); keyed by Var.uid
+struct Walk {
+    w: {int: int}
+}
+
+impl Walk {
+    fn use_var(self, v: Var, depth: int) {
+        var d = depth
+        if d > 5 { d = 5 }
+        self.w[v.uid] = self.w.get(v.uid, 0) + (1 << (3 * d))          // 8 ** min(depth, 5)
+    }
+
+    fn stmts(self, ss: [TStmt], depth: int) {
+        for s in ss { self.stmt(s, depth) }
+    }
+
+    fn exprs(self, es: [TExpr], depth: int) {
+        for x in es { self.expr(x, depth) }
+    }
+
+    fn stmt(self, s: TStmt, depth: int) {
+        match s.k {
+            SK.Decl(v, init) => {
+                self.use_var(v, depth)
+                if init != nil { self.expr(init!, depth) }
+            }
+            SK.Set(t, val) => {
+                self.expr(t, depth)
+                self.expr(val, depth)
+            }
+            SK.ExprS(x) => self.expr(x, depth)
+            SK.If(c, th, el) => {
+                self.expr(c, depth)
+                self.stmts(th, depth)
+                self.stmts(el, depth)
+            }
+            SK.While(c, body, stp) => {
+                self.expr(c, depth + 1)
+                self.stmts(body, depth + 1)
+                self.stmts(stp, depth + 1)
+            }
+            SK.Break => {}
+            SK.Continue => {}
+            SK.BreakN(n) => {}
+            SK.ContinueN(n) => {}
+            SK.Ret(x) => {
+                if x != nil { self.expr(x!, depth) }
+            }
+            SK.Blk(ss) => self.stmts(ss, depth)
+        }
+    }
+
+    fn expr(self, e: TExpr, depth: int) {
+        match e.k {
+            TK.Const(ck, iv, fv, sv) => {}
+            TK.VarRef(v) => self.use_var(v, depth)
+            TK.GlobalRef(g) => {}
+            TK.FnRef(f) => {}
+            TK.Un(op, x) => self.expr(x, depth)
+            TK.Bin(op, l, r) => {
+                self.expr(l, depth)
+                self.expr(r, depth)
+            }
+            TK.And(l, r) => {
+                self.expr(l, depth)
+                self.expr(r, depth)
+            }
+            TK.Or(l, r) => {
+                self.expr(l, depth)
+                self.expr(r, depth)
+            }
+            TK.Cvt(kind, x) => self.expr(x, depth)
+            TK.Call(f, args) => self.exprs(args, depth)
+            TK.CallExt(x, args) => self.exprs(args, depth)
+            TK.CallInd(f, args) => {
+                self.expr(f, depth)
+                self.exprs(args, depth)
+            }
+            TK.Load(obj, idx) => self.expr(obj, depth)
+            TK.PtrIdx(base, idx, esize) => {
+                self.expr(base, depth)
+                self.expr(idx, depth)
+            }
+            TK.ArrIdx(arr, idx, esize) => {
+                self.expr(arr, depth)
+                self.expr(idx, depth)
+            }
+            TK.NewObj(vals) => self.exprs(vals, depth)
+            TK.Intr(name, args) => self.exprs(args, depth)
+            TK.Cond(c, x, y) => {
+                self.expr(c, depth)
+                self.expr(x, depth)
+                self.expr(y, depth)
+            }
+            TK.Seq(ss, x) => {
+                self.stmts(ss, depth)
+                self.expr(x, depth)
+            }
+            TK.MkClosure(f, caps) => {
+                for c in caps { self.use_var(c, depth) }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- code generator state
+// cold path emitted after the function body.  kind: "bounds" | "bounds_c" | "div"
+// extra (bounds): the index as Imm / register operand
+struct Stub {
+    label: int,
+    kind: str,
+    line: int,
+    extra: Operand
+}
+
+struct CallSite {
+    off: int,
+    line: int,
+    inst: FnInst?
+}
+
+// base pointer register, index register (nil: none) and constant element offset
+struct BaseIdx {
+    rb: Operand,
+    ri: Operand?,
+    imm: int
+}
+
+enum CallTarget {
+    Inst(FnInst),
+    Sym(str),
+    Ind(int)               // closure pointer saved in this frame slot
+}
+
+struct CodeGen {
+    prog: Program,
+    a: Asm,
+    img: Image,
+    strs: {str: str},
+    flts: {int: str},
+    nconst: int,
+    stubs: [Stub],
+    callsites: [CallSite],       // (return offset, line, FnInst)
+    cur_inst: FnInst?,
+    loop_end: [int],             // break targets
+    loop_cont: [int],            // continue targets
+    free_tmps: [int],
+    ret_label: int,
+    cur: int,                    // bytes allocated below rbp
+    maxoff: int,
+    max_out: int,
+    save_i: {int: int},          // callee saved integer register -> save slot
+    save_x: {int: int},
+    env_slot: int                // 0: none
+}
+
+fn new_codegen(prog: Program) -> CodeGen {
+    return CodeGen{
+        prog: prog, a: new_asm(), img: new_image(), strs: {}, flts: {}, nconst: 0, stubs: [], callsites: [],
+        cur_inst: nil, loop_end: [], loop_cont: [], free_tmps: [], ret_label: 0, cur: 0, maxoff: 0, max_out: 32,
+        save_i: {}, save_x: {}, env_slot: 0
+    }
+}
+
+// entry point: typed IR -> complete PE file
+fn generate_exe(prog: Program) -> Bytes {
+    let cg = new_codegen(prog)
+    let img = cg.generate()
+    return img.build()
+}
+
+// pool of names for the traceback table
+struct NamePool {
+    names: Bytes,
+    pool: {str: int}
+}
+
+impl NamePool {
+    fn intern(self, t: str) -> int {
+        let cur = self.pool.try_get(t)
+        if cur != nil { return cur! }
+        let off = self.names.len()
+        self.pool[t] = off
+        self.names.raw(t)
+        self.names.u8(0)
+        return off
+    }
+}
+
+impl CodeGen {
+    // ------------------------------------------------------------------ constants
+    fn str_sym(self, b: str) -> str {
+        let cur = self.strs.try_get(b)
+        if cur != nil { return cur! }
+        let rd = self.img.rdata
+        while rd.len() % 8 != 0 { rd.u8(0) }
+        let sym = "str" + str(self.strs.len())
+        self.img.symbols[sym] = Symbol("rdata", rd.len())
+        rd.u64(b.len())
+        rd.raw(b)
+        rd.u8(0)
+        self.strs[b] = sym
+        return sym
+    }
+
+    fn flt_sym(self, v: float) -> str {
+        let bits = i64_to_bits(v)
+        let cur = self.flts.try_get(bits)
+        if cur != nil { return cur! }
+        let rd = self.img.rdata
+        while rd.len() % 16 != 0 { rd.u8(0) }
+        let sym = "flt" + str(self.flts.len())
+        self.img.symbols[sym] = Symbol("rdata", rd.len())
+        rd.u64(bits)
+        rd.u64(0)
+        self.flts[bits] = sym
+        return sym
+    }
+
+    // ------------------------------------------------------------------ program
+    fn generate(self) -> Image {
+        let a = self.a
+        let prog = self.prog
+        for f in prog.funcs { f.label = a.new_label() }
+        // entry point
+        let entry_off = a.here()
+        a.sub(RSP, oimm(40))
+        a.call(prog.entry!.label)
+        a.ud2()
+        for f in prog.funcs { self.gen_func(f) }
+        // data layout for globals
+        var off = 0
+        for g in prog.globals {
+            self.img.symbols[g.sym] = Symbol("data", off)
+            off += 8
+        }
+        self.img.data_size = max(off, 16)
+        self.img.symbols["data_start"] = Symbol("data", 0)
+        self.img.symbols["data_end"] = Symbol("data", off)
+        self.img.text = a.finish()
+        self.img.text_relocs = a.relocs
+        self.build_traceback_table()
+        self.img.symbols["text_start"] = Symbol("text", 0)
+        self.img.entry = entry_off
+        return self.img
+    }
+
+    fn build_traceback_table(self) {
+        let a = self.a
+        var funcs: [FnInst] = self.prog.funcs.copy()
+        funcs.sort_by(|x, y| cmp_int(a.label_off(x.label), a.label_off(y.label)))
+        var fidx: {int: int} = {}
+        for i in 0..funcs.len() { fidx[funcs[i].uid] = i }
+        let np = NamePool{ names: bytes_new(), pool: {} }
+
+        // words = [len(callsites), len(funcs), names_off, len(code)]
+        var calls: [(int, int)] = []
+        for cs in self.callsites {
+            var flag = 0
+            var fi = 0
+            if cs.inst == nil {
+                flag = 1 << 62
+            } else {
+                if cs.inst!.is_prelude { flag = 1 << 62 }
+                fi = fidx.get(cs.inst!.uid, 0)
+            }
+            calls.push((cs.off, cs.line | (fi << 32) | flag))
+        }
+        calls.sort_by(|x, y| {
+            if x.0 != y.0 { return cmp_int(x.0, y.0) }
+            return cmp_int(x.1, y.1)
+        })
+        var fwords: [int] = []
+        for f in funcs {
+            fwords.push(a.label_off(f.label))
+            fwords.push(np.intern(f.name))
+            var file = "?"
+            if f.pos.file.len() > 0 { file = cg_basename(f.pos.file) }
+            fwords.push(np.intern(file))
+        }
+        let blob = bytes_new()
+        let names_off = (4 + 2 * calls.len() + 3 * funcs.len()) * 8
+        blob.u64(self.callsites.len())
+        blob.u64(funcs.len())
+        blob.u64(names_off)
+        blob.u64(a.buf.len())
+        for c in calls {
+            blob.u64(c.0)
+            blob.u64(c.1)
+        }
+        for w in fwords { blob.u64(w) }
+        blob.append(np.names)
+        let rd = self.img.rdata
+        while rd.len() % 8 != 0 { rd.u8(0) }
+        self.img.symbols["tb"] = Symbol("rdata", rd.len())
+        rd.append(blob)
+    }
+
+    // ------------------------------------------------------------------ per-function
+    fn gen_func(self, inst: FnInst) {
+        let a = self.a
+        self.cur_inst = inst
+        self.loop_end = []
+        self.loop_cont = []
+        self.stubs = []
+        self.free_tmps = []
+        self.ret_label = a.new_label()
+        a.align_int3(16)
+        a.bind(inst.label)
+        let body = inst.body!
+        // ---- usage weights -> register assignment
+        let w = Walk{ w: {} }
+        w.stmts(body, 0)
+        for p in inst.params { w.use_var(p, 0) }
+        self.cur = 0
+        self.maxoff = 0
+        var used_int: [int] = []
+        var used_flt: [int] = []
+        var cands: [Var] = inst.vars.copy()
+        cands.sort_by(|x, y| w.w.get(y.uid, 0) - w.w.get(x.uid, 0))        // heaviest first, stable
+        var ni = 0
+        var nf = 0
+        for v in cands { v.loc = Loc.NoLoc }
+        for v in cands {
+            let wt = w.w.get(v.uid, 0)
+            if v.boxed() or wt < 2 { continue }
+            if cg_is_flt(v.ty) {
+                if nf < FLT_REGS.len() {
+                    v.loc = Loc.XReg(FLT_REGS[nf])
+                    used_flt.push(FLT_REGS[nf])
+                    nf += 1
+                }
+            } else {
+                if ni < INT_REGS.len() {
+                    v.loc = Loc.Reg(INT_REGS[ni])
+                    used_int.push(INT_REGS[ni])
+                    ni += 1
+                }
+            }
+        }
+        // frame layout
+        self.save_i = {}
+        self.save_x = {}
+        for r in used_int { self.save_i[r] = self.alloc_slot(8) }
+        for r in used_flt { self.save_x[r] = self.alloc_slot(16) }
+        self.env_slot = 0
+        if inst.is_lambda { self.env_slot = self.alloc_slot(8) }
+        for i in 0..inst.params.len() {
+            let p = inst.params[i]
+            if loc_is_none(p.loc) and not p.boxed() {
+                if i >= 4 { p.loc = Loc.Stack(48 + 8 * (i - 4)) }
+            }
+        }
+        for v in inst.vars {
+            if loc_is_none(v.loc) { v.loc = Loc.Stack(self.alloc_slot(8)) }
+        }
+        self.max_out = 32
+        // ---- prologue
+        a.push(RBP)
+        a.mov(RBP, RSP)
+        a.buf.u8(0x48)                                  // sub rsp, imm32 (patched)
+        a.buf.u8(0x81)
+        a.buf.u8(0xEC)
+        a.buf.u32(0)
+        let frame_patch = a.buf.len() - 4
+        for r in used_int { a.mov(mem_b(RBP, self.save_i[r]), REGS[r]) }
+        for r in used_flt { a.movups_store(mem_b(RBP, self.save_x[r]), XMM[r]) }
+        if inst.is_lambda { a.mov(mem_b(RBP, self.env_slot), R10) }
+        // parameters: first park every register argument, then box the ones that need cells
+        var boxed_p: [Var] = []
+        var boxed_t: [int] = []
+        for i in 0..inst.params.len() {
+            let p = inst.params[i]
+            if p.boxed() {
+                let t = self.tmp()
+                if i < 4 {
+                    if cg_is_flt(p.ty) {
+                        a.movsd(mem_b(RBP, t), ARG_XREGS[i])
+                    } else {
+                        a.mov(mem_b(RBP, t), ARG_REGS[i])
+                    }
+                } else {
+                    a.mov(RAX, mem_b(RBP, 48 + 8 * (i - 4)))
+                    a.mov(mem_b(RBP, t), RAX)
+                }
+                boxed_p.push(p)
+                boxed_t.push(t)
+            } else {
+                self.prologue_param(p, i)
+            }
+        }
+        for k in 0..boxed_p.len() {
+            let p = boxed_p[k]
+            let t = boxed_t[k]
+            a.mov_imm(RCX, 8)
+            a.call(self.prog.alloc!.label)
+            a.mov(RCX, mem_b(RBP, t))
+            a.mov(mem_b(RAX, 0), RCX)
+            a.mov(loc_op(p.loc), RAX)
+            self.untmp(t)
+        }
+        if inst.is_lambda {
+            for i in 0..inst.captures.len() {
+                let outer = inst.captures[i]
+                let inner = inst.capture_inner[outer.uid]
+                a.mov(RAX, mem_b(RBP, self.env_slot))
+                a.mov(RAX, mem_b(RAX, 8 + 8 * i))
+                if inner.boxed() {
+                    a.mov(loc_op(inner.loc), RAX)
+                } else if cg_is_flt(inner.ty) {
+                    if loc_is_xreg(inner.loc) {
+                        a.movq_to_x(loc_op(inner.loc), RAX)
+                    } else {
+                        a.mov(loc_op(inner.loc), RAX)
+                    }
+                } else {
+                    a.mov(loc_op(inner.loc), RAX)
+                }
+            }
+        }
+        // ---- body
+        self.gen_stmts(body)
+        // fall off the end
+        a.bind(self.ret_label)
+        for r in used_int { a.mov(REGS[r], mem_b(RBP, self.save_i[r])) }
+        for r in used_flt { a.movups_load(XMM[r], mem_b(RBP, self.save_x[r])) }
+        a.leave()
+        a.ret()
+        // stubs (cold paths)
+        for st in self.stubs {
+            a.bind(st.label)
+            if st.kind == "bounds" {
+                match st.extra {
+                    Operand.Imm(v) => a.mov_imm(RDX, v)
+                    _ => a.mov(RDX, st.extra)
+                }
+                a.mov(R8, mem_b(RAX, 8))
+                a.mov_imm(RCX, st.line)
+                a.call(self.prog.rt["bounds_fail"].label)
+                self.mark_call(st.line)
+            } else if st.kind == "bounds_c" {
+                a.mov(R8, mem_b(RCX, 8))
+                a.mov_imm(RCX, st.line)
+                a.call(self.prog.rt["bounds_fail"].label)
+                self.mark_call(st.line)
+            } else if st.kind == "div" {
+                a.mov_imm(RCX, st.line)
+                a.call(self.prog.rt["div_fail"].label)
+                self.mark_call(st.line)
+            }
+            a.ud2()
+        }
+        var total = self.maxoff + self.max_out
+        total = (total + 15) & ~15
+        a.buf.set_u32(frame_patch, total)
+    }
+
+    fn alloc_slot(self, size: int) -> int {
+        self.cur += size
+        if self.cur % 8 != 0 { self.cur += 8 - self.cur % 8 }
+        if self.cur > self.maxoff { self.maxoff = self.cur }
+        return -self.cur
+    }
+
+    fn tmp(self) -> int {
+        if self.free_tmps.len() > 0 { return self.free_tmps.pop() }
+        return self.alloc_slot(8)
+    }
+
+    fn untmp(self, off: int) {
+        self.free_tmps.push(off)
+    }
+
+    fn prologue_param(self, p: Var, i: int) {
+        let a = self.a
+        if i < 4 {
+            if cg_is_flt(p.ty) {
+                let src = ARG_XREGS[i]
+                match p.loc {
+                    Loc.XReg(n) => {
+                        if n != src.n() { a.movsd(loc_op(p.loc), src) }
+                    }
+                    _ => a.movsd(loc_op(p.loc), src)
+                }
+            } else {
+                a.mov(loc_op(p.loc), ARG_REGS[i])
+            }
+        } else {
+            let disp = 48 + 8 * (i - 4)
+            match p.loc {
+                Loc.Stack(d) => {
+                    if d == disp { return }
+                }
+                _ => {}
+            }
+            let m = mem_b(RBP, disp)
+            if cg_is_flt(p.ty) {
+                a.movsd(loc_op(p.loc), m)
+            } else {
+                a.mov(loc_op(p.loc), m)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ statements
+    fn gen_stmts(self, ss: [TStmt]) {
+        for s in ss { self.gen_stmt(s) }
+    }
+
+    fn gen_stmt(self, s: TStmt) {
+        let a = self.a
+        match s.k {
+            SK.ExprS(x) => self.gen(x)
+            SK.Decl(v, init) => self.gen_decl(v, init)
+            SK.Set(t, val) => self.gen_set(t, val)
+            SK.If(c, th, el) => self.gen_if(c, th, el)
+            SK.While(c, body, stp) => self.gen_while(c, body, stp)
+            SK.Ret(x) => {
+                if x != nil { self.gen(x!) }
+                a.jmp(self.ret_label)
+            }
+            SK.Break => a.jmp(self.loop_end[self.loop_end.len() - 1])
+            SK.Continue => a.jmp(self.loop_cont[self.loop_cont.len() - 1])
+            SK.BreakN(n) => a.jmp(self.loop_end[self.loop_end.len() - 1 - n])
+            SK.ContinueN(n) => a.jmp(self.loop_cont[self.loop_cont.len() - 1 - n])
+            SK.Blk(ss) => self.gen_stmts(ss)
+        }
+    }
+
+    fn gen_if(self, c: TExpr, th: [TStmt], el: [TStmt]) {
+        let a = self.a
+        let cv = cg_const_iv(c)
+        if cv != nil {
+            if cv! != 0 { self.gen_stmts(th) } else { self.gen_stmts(el) }
+            return
+        }
+        let lelse = a.new_label()
+        self.branch(c, lelse, false)
+        self.gen_stmts(th)
+        if el.len() > 0 {
+            let lend = a.new_label()
+            a.jmp(lend)
+            a.bind(lelse)
+            self.gen_stmts(el)
+            a.bind(lend)
+        } else {
+            a.bind(lelse)
+        }
+    }
+
+    fn gen_while(self, c: TExpr, body: [TStmt], stp: [TStmt]) {
+        let a = self.a
+        let lbody = a.new_label()
+        let lcont = a.new_label()
+        let lcond = a.new_label()
+        let lend = a.new_label()
+        self.loop_end.push(lend)
+        self.loop_cont.push(lcont)
+        let cv = cg_const_iv(c)
+        var const_true = false
+        if cv != nil and cv! != 0 { const_true = true }
+        if not const_true { a.jmp(lcond) }
+        a.align_nop(16)                  // the loop head is reached by the backward jump; the padding is skipped
+        a.bind(lbody)
+        self.gen_stmts(body)
+        a.bind(lcont)
+        self.gen_stmts(stp)
+        a.bind(lcond)
+        if cv != nil {
+            if cv! != 0 { a.jmp(lbody) }
+        } else {
+            self.branch(c, lbody, true)
+        }
+        a.bind(lend)
+        self.loop_end.pop()
+        self.loop_cont.pop()
+    }
+
+    fn gen_decl(self, v: Var, init: TExpr?) {
+        let a = self.a
+        if v.boxed() {
+            // allocate the cell first, then evaluate the initializer
+            var t = 0
+            if init != nil {
+                self.gen(init!)
+                t = self.tmp()
+                if cg_is_flt(v.ty) {
+                    a.movsd(mem_b(RBP, t), XMM[0])
+                } else {
+                    a.mov(mem_b(RBP, t), RAX)
+                }
+            }
+            a.mov_imm(RCX, 8)
+            a.call(self.prog.alloc!.label)
+            a.mov(loc_op(v.loc), RAX)
+            if init != nil {
+                a.mov(RCX, mem_b(RBP, t))
+                a.mov(mem_b(RAX, 0), RCX)
+                self.untmp(t)
+            }
+            return
+        }
+        if init == nil {
+            self.zero_var(v)
+            return
+        }
+        self.store_var(v, init!)
+    }
+
+    fn zero_var(self, v: Var) {
+        let a = self.a
+        let lo = loc_op(v.loc)
+        match v.loc {
+            Loc.Reg(n) => a.mov_imm(lo, 0)
+            Loc.XReg(n) => a.xorpd(lo, lo)
+            _ => a.mov(lo, oimm(0))
+        }
+    }
+
+    // v = e for a non-boxed variable
+    fn store_var(self, v: Var, e: TExpr) {
+        let a = self.a
+        let loc = loc_op(v.loc)
+        if cg_is_flt(v.ty) {
+            match e.k {
+                TK.VarRef(ev) => {
+                    if not ev.boxed() and loc_is_xreg(ev.loc) and loc.is_xreg() {
+                        a.movsd(loc, loc_op(ev.loc))
+                        return
+                    }
+                }
+                _ => {}
+            }
+            self.gen(e)
+            if loc.is_xreg() {
+                if loc.n() != 0 { a.movsd(loc, XMM[0]) }
+            } else {
+                a.movsd(loc, XMM[0])
+            }
+            return
+        }
+        let op = self.operand(e)
+        if loc.is_reg() {
+            if op != nil {
+                match op! {
+                    Operand.Imm(iv) => a.mov_imm(loc, iv)
+                    _ => a.mov(loc, op!)
+                }
+            } else {
+                self.gen_to_reg(e, loc)
+            }
+            return
+        }
+        // memory destination
+        if opt_is_imm(op) {
+            a.mov(loc, op!)
+        } else if opt_is_reg(op) {
+            a.mov(loc, op!)
+        } else {
+            self.gen(e)
+            a.mov(loc, RAX)
+        }
+    }
+
+    fn gen_to_reg(self, e: TExpr, reg: Operand) {
+        self.gen(e)
+        self.a.mov(reg, RAX)
+    }
+
+    fn gen_set(self, tgt: TExpr, val: TExpr) {
+        let a = self.a
+        match tgt.k {
+            TK.VarRef(v) => {
+                if v.boxed() {
+                    self.gen(val)
+                    a.mov(RCX, loc_op(v.loc))
+                    if cg_is_flt(v.ty) {
+                        a.movsd(mem_b(RCX, 0), XMM[0])
+                    } else {
+                        a.mov(mem_b(RCX, 0), RAX)
+                    }
+                    return
+                }
+                // in-place update  x = x op y
+                match val.k {
+                    TK.Bin(bop, bl, br) => {
+                        if (bop == "add" or bop == "sub" or bop == "and" or bop == "or" or bop == "xor") and not cg_is_flt(v.ty) {
+                            var same = false
+                            match bl.k {
+                                TK.VarRef(lv) => {
+                                    if lv.uid == v.uid { same = true }
+                                }
+                                _ => {}
+                            }
+                            if same {
+                                let ro = self.operand(br)
+                                if ro != nil and not (loc_op(v.loc).is_mem() and ro!.is_mem()) {
+                                    a.alu(bop, loc_op(v.loc), ro!)
+                                    return
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                self.store_var(v, val)
+                return
+            }
+            TK.GlobalRef(g) => {
+                self.gen(val)
+                let m = mem_sym(g.sym, 0)
+                if cg_is_flt(tgt.ty) {
+                    a.movsd(m, XMM[0])
+                } else {
+                    a.mov(m, RAX)
+                }
+                return
+            }
+            _ => {}
+        }
+        // memory places: field / array element / raw pointer element
+        let fl = cg_is_flt(tgt.ty)
+        var vop: Operand? = nil
+        if not fl { vop = self.operand(val) }
+        match tgt.k {
+            TK.Load(obj, idx) => {
+                if self.is_cheap(obj) {
+                    if vop == nil or opt_is_mem(vop) {
+                        self.gen(val)
+                        vop = nil
+                    }
+                    self.load_cheap(RCX, obj)
+                } else {
+                    self.gen(val)
+                    let t = self.tmp()
+                    self.spill(t, fl)
+                    self.gen(obj)
+                    a.mov(RCX, RAX)
+                    self.reload(t, fl)
+                    self.untmp(t)
+                    vop = nil
+                }
+                self.store_to(mem_b(RCX, 8 * idx), tgt.ty, vop)
+            }
+            TK.ArrIdx(arr, idx, esize) => self.set_elem(tgt, arr, idx, esize, true, val, vop, fl)
+            TK.PtrIdx(base, idx, esize) => self.set_elem(tgt, base, idx, esize, false, val, vop, fl)
+            _ => panic("codegen: bad assignment target")
+        }
+    }
+
+    fn set_elem(self, tgt: TExpr, arr: TExpr, idx: TExpr, esize: int, checked: bool, val: TExpr, vop0: Operand?, fl: bool) {
+        let a = self.a
+        var vop = vop0
+        if self.is_cheap(arr) and self.is_cheap(idx) {
+            if vop == nil or opt_is_mem(vop) {
+                self.gen(val)
+                vop = nil
+            }
+            self.load_cheap(RCX, arr)
+            self.load_cheap(RDX, idx)
+        } else {
+            self.gen(val)
+            let t = self.tmp()
+            self.spill(t, fl)
+            self.gen(arr)
+            let t2 = self.tmp()
+            a.mov(mem_b(RBP, t2), RAX)
+            self.gen(idx)
+            a.mov(RDX, RAX)
+            a.mov(RCX, mem_b(RBP, t2))
+            self.untmp(t2)
+            self.reload(t, fl)
+            self.untmp(t)
+            vop = nil
+        }
+        if checked {
+            let stub = a.new_label()
+            self.stubs.push(Stub(stub, "bounds_c", tgt.pos.line, oimm(0)))
+            a.cmp(RDX, mem_b(RCX, 8))
+            a.jcc(CC_AE, stub)
+            a.mov(RCX, mem_b(RCX, 0))
+        }
+        if esize == 1 {
+            if opt_is_imm(vop) {
+                self.store8_imm(mem_bi(RCX, RDX, 1, 0), vop!.imm_val())
+            } else {
+                if vop != nil { a.mov(RAX, vop!) }
+                a.mov_mem_reg8(mem_bi(RCX, RDX, 1, 0), RAX)
+            }
+        } else {
+            self.store_to(mem_bi(RCX, RDX, 8, 0), tgt.ty, vop)
+        }
+    }
+
+    fn store8_imm(self, m: Operand, v: int) {
+        self.a.emit(0, 0xC6, 0, m, 0, 1, v & 255, false)
+    }
+
+    fn store_to(self, m: Operand, ty: Type, vop: Operand?) {
+        let a = self.a
+        if cg_is_flt(ty) {
+            a.movsd(m, XMM[0])
+        } else if vop == nil {
+            a.mov(m, RAX)
+        } else if vop!.is_imm() {
+            a.mov(m, vop!)
+        } else if vop!.is_reg() {
+            a.mov(m, vop!)
+        } else {
+            a.mov(RAX, vop!)
+            a.mov(m, RAX)
+        }
+    }
+
+    fn spill(self, off: int, fl: bool) {
+        if fl {
+            self.a.movsd(mem_b(RBP, off), XMM[0])
+        } else {
+            self.a.mov(mem_b(RBP, off), RAX)
+        }
+    }
+
+    fn reload(self, off: int, fl: bool) {
+        if fl {
+            self.a.movsd(XMM[0], mem_b(RBP, off))
+        } else {
+            self.a.mov(RAX, mem_b(RBP, off))
+        }
+    }
+
+    // ------------------------------------------------------------------ operands
+    // Reg / Mem / int immediate usable directly as a source operand (int class), else nil
+    fn operand(self, e: TExpr) -> Operand? {
+        match e.k {
+            TK.Const(ck, iv, fv, sv) => {
+                if ck == CK.Int or ck == CK.Bool or ck == CK.Nil {
+                    if cg_fits32(iv) { return oimm(iv) }
+                }
+                return nil
+            }
+            TK.VarRef(v) => {
+                if v.boxed() or cg_is_flt(v.ty) { return nil }
+                if loc_is_none(v.loc) { return nil }
+                return loc_op(v.loc)
+            }
+            TK.GlobalRef(g) => {
+                if not cg_is_flt(e.ty) { return mem_sym(g.sym, 0) }
+                return nil
+            }
+            TK.Cvt(kind, x) => {
+                if kind == "nop" and not cg_is_flt(x.ty) {
+                    let o = self.operand(x)
+                    if o != nil and (o!.is_reg() or o!.is_imm()) { return o }
+                }
+                return nil
+            }
+            _ => return nil
+        }
+    }
+
+    fn foperand(self, e: TExpr) -> Operand? {
+        match e.k {
+            TK.Const(ck, iv, fv, sv) => {
+                if ck == CK.Float { return mem_sym(self.flt_sym(fv), 0) }
+                return nil
+            }
+            TK.VarRef(v) => {
+                if v.boxed() { return nil }
+                if loc_is_none(v.loc) { return nil }
+                return loc_op(v.loc)
+            }
+            TK.GlobalRef(g) => return mem_sym(g.sym, 0)
+            _ => return nil
+        }
+    }
+
+    // a field of an object whose pointer sits in a variable register: usable directly as [reg + disp]
+    fn field_mem(self, e: TExpr) -> Operand? {
+        match e.k {
+            TK.Load(obj, idx) => {
+                match obj.k {
+                    TK.VarRef(v) => {
+                        if v.boxed() or cg_is_flt(v.ty) { return nil }
+                        match v.loc {
+                            Loc.Reg(n) => return mem_b(REGS[n], 8 * idx)
+                            _ => return nil
+                        }
+                    }
+                    _ => return nil
+                }
+            }
+            _ => return nil
+        }
+    }
+
+    // operand for the RIGHT side of a binary operation (evaluated after the left side, so reading
+    // a field there keeps the evaluation order)
+    fn operand_r(self, e: TExpr) -> Operand? {
+        let o = self.operand(e)
+        if o != nil { return o }
+        if cg_is_flt(e.ty) { return nil }
+        return self.field_mem(e)
+    }
+
+    fn foperand_r(self, e: TExpr) -> Operand? {
+        let o = self.foperand(e)
+        if o != nil { return o }
+        if not cg_is_flt(e.ty) { return nil }
+        return self.field_mem(e)
+    }
+
+    // can be loaded into a register without clobbering anything
+    fn is_cheap(self, e: TExpr) -> bool {
+        match e.k {
+            TK.Cvt(kind, x) => {
+                if kind == "nop" { return self.is_cheap(x) }
+            }
+            _ => {}
+        }
+        return self.operand(e) != nil
+    }
+
+    fn load_cheap(self, reg: Operand, e: TExpr) {
+        let op = self.operand(e)
+        if op == nil { panic("codegen: load_cheap of a non-operand expression") }
+        match op! {
+            Operand.Imm(v) => self.a.mov_imm(reg, v)
+            Operand.R(n) => {
+                if not reg.is_reg_n(n) { self.a.mov(reg, op!) }
+            }
+            _ => self.a.mov(reg, op!)
+        }
+    }
+
+    // ------------------------------------------------------------------ expressions
+    // evaluate e: int-class results in RAX, floats in XMM0, void: nothing
+    fn gen(self, e: TExpr) {
+        match e.k {
+            TK.Const(ck, iv, fv, sv) => self.g_Const(e, ck, iv, fv, sv)
+            TK.VarRef(v) => self.g_VarRef(v)
+            TK.GlobalRef(g) => self.g_GlobalRef(e, g)
+            TK.FnRef(f) => self.g_FnRef(f)
+            TK.Un(op, x) => self.g_Un(op, x)
+            TK.Bin(op, l, r) => self.g_Bin(e, op, l, r)
+            TK.And(l, r) => self.bool_value(e)
+            TK.Or(l, r) => self.bool_value(e)
+            TK.Cvt(kind, x) => self.g_Cvt(kind, x)
+            TK.Call(f, args) => self.g_Call(e, f, args)
+            TK.CallExt(ext, args) => self.g_CallExt(e, ext, args)
+            TK.CallInd(f, args) => self.g_CallInd(e, f, args)
+            TK.Load(obj, idx) => self.g_Load(e, obj, idx)
+            TK.PtrIdx(base, idx, esize) => self.g_PtrIdx(e, base, idx, esize)
+            TK.ArrIdx(arr, idx, esize) => self.g_ArrIdx(e, arr, idx, esize)
+            TK.NewObj(vals) => self.g_NewObj(vals)
+            TK.Intr(name, args) => self.g_Intr(name, args)
+            TK.Cond(c, x, y) => self.g_Cond(c, x, y)
+            TK.Seq(ss, x) => self.g_Seq(ss, x)
+            TK.MkClosure(f, caps) => self.g_MkClosure(f, caps)
+        }
+    }
+
+    fn g_Const(self, e: TExpr, ck: CK, iv: int, fv: float, sv: str) {
+        let a = self.a
+        if ck == CK.Float {
+            if i64_to_bits(fv) == 0 {
+                a.xorpd(XMM[0], XMM[0])
+            } else {
+                a.movsd(XMM[0], mem_sym(self.flt_sym(fv), 0))
+            }
+        } else if ck == CK.Str {
+            a.lea(RAX, mem_sym(self.str_sym(sv), 0))
+        } else {
+            if cg_is_void(e.ty) { return }
+            a.mov_imm(RAX, iv)
+        }
+    }
+
+    fn g_VarRef(self, v: Var) {
+        let a = self.a
+        if v.boxed() {
+            a.mov(RAX, loc_op(v.loc))
+            if cg_is_flt(v.ty) {
+                a.movsd(XMM[0], mem_b(RAX, 0))
+            } else {
+                a.mov(RAX, mem_b(RAX, 0))
+            }
+            return
+        }
+        if cg_is_flt(v.ty) {
+            match v.loc {
+                Loc.XReg(n) => {
+                    if n != 0 { a.movsd(XMM[0], loc_op(v.loc)) }
+                }
+                _ => a.movsd(XMM[0], loc_op(v.loc))
+            }
+        } else {
+            a.mov(RAX, loc_op(v.loc))
+        }
+    }
+
+    fn g_GlobalRef(self, e: TExpr, g: GlobalVar) {
+        let a = self.a
+        if cg_is_flt(e.ty) {
+            a.movsd(XMM[0], mem_sym(g.sym, 0))
+        } else {
+            a.mov(RAX, mem_sym(g.sym, 0))
+        }
+    }
+
+    fn g_FnRef(self, f: FnInst) {
+        let a = self.a
+        a.mov_imm(RCX, 8)
+        a.call(self.prog.alloc!.label)
+        a.lea_label(RCX, f.label)
+        a.mov(mem_b(RAX, 0), RCX)
+    }
+
+    fn g_MkClosure(self, f: FnInst, caps: [Var]) {
+        let a = self.a
+        let n = caps.len()
+        a.mov_imm(RCX, 8 * (1 + n))
+        a.call(self.prog.alloc!.label)
+        a.lea_label(RCX, f.label)
+        a.mov(mem_b(RAX, 0), RCX)
+        for i in 0..n {
+            let c = caps[i]
+            if c.boxed() {
+                a.mov(RCX, loc_op(c.loc))
+            } else if cg_is_flt(c.ty) {
+                if loc_is_xreg(c.loc) {
+                    a.movq_to_r(RCX, loc_op(c.loc))
+                } else {
+                    a.mov(RCX, loc_op(c.loc))
+                }
+            } else {
+                a.mov(RCX, loc_op(c.loc))
+            }
+            a.mov(mem_b(RAX, 8 + 8 * i), RCX)
+        }
+    }
+
+    fn g_Seq(self, ss: [TStmt], x: TExpr) {
+        self.gen_stmts(ss)
+        self.gen(x)
+    }
+
+    fn g_Cond(self, c: TExpr, x: TExpr, y: TExpr) {
+        let a = self.a
+        let lelse = a.new_label()
+        let lend = a.new_label()
+        self.branch(c, lelse, false)
+        self.gen(x)
+        a.jmp(lend)
+        a.bind(lelse)
+        self.gen(y)
+        a.bind(lend)
+    }
+
+    fn g_Cvt(self, k: str, x: TExpr) {
+        let a = self.a
+        if k == "nop" {
+            self.gen(x)
+        } else if k == "i2f" {
+            let op = self.operand(x)
+            if opt_is_reg(op) or opt_is_mem(op) {
+                a.xorpd(XMM[0], XMM[0])
+                a.cvtsi2sd(XMM[0], op!)
+            } else {
+                self.gen(x)
+                a.xorpd(XMM[0], XMM[0])
+                a.cvtsi2sd(XMM[0], RAX)
+            }
+        } else if k == "f2i" {
+            self.gen(x)
+            a.cvttsd2si(RAX, XMM[0])
+        } else if k == "trunc8" {
+            self.gen(x)
+            a.movzx8(RAX, RAX)
+        } else {
+            panic("cvt " + k)
+        }
+    }
+
+    fn g_Un(self, op: str, x: TExpr) {
+        let a = self.a
+        self.gen(x)
+        if op == "neg" {
+            a.neg(RAX)
+        } else if op == "not" {
+            a.xor(RAX, oimm(1))
+        } else if op == "bnot" {
+            a.not_(RAX)
+        } else if op == "fneg" {
+            a.mov_imm(RAX, 1 << 63)
+            a.movq_to_x(XMM[1], RAX)
+            a.xorpd(XMM[0], XMM[1])
+        } else {
+            panic("un " + op)
+        }
+    }
+
+    fn bool_value(self, e: TExpr) {
+        let a = self.a
+        let lf = a.new_label()
+        let lend = a.new_label()
+        self.branch(e, lf, false)
+        a.mov_imm_keepflags(RAX, 1)
+        a.jmp(lend)
+        a.bind(lf)
+        a.mov_imm(RAX, 0)
+        a.bind(lend)
+    }
+
+    fn g_Load(self, e: TExpr, obj: TExpr, idx: int) {
+        let a = self.a
+        var base = RAX
+        if self.is_cheap(obj) {
+            let op = self.operand(obj)
+            if opt_is_reg(op) {
+                base = op!
+            } else {
+                self.load_cheap(RAX, obj)
+                base = RAX
+            }
+        } else {
+            self.gen(obj)
+            base = RAX
+        }
+        let m = mem_b(base, 8 * idx)
+        if cg_is_flt(e.ty) {
+            a.movsd(XMM[0], m)
+        } else {
+            a.mov(RAX, m)
+        }
+    }
+
+    fn g_PtrIdx(self, e: TExpr, base: TExpr, idx: TExpr, esize: int) {
+        let bi = self.base_idx(base, idx)
+        var m = mem_b(bi.rb, bi.imm * esize)
+        if bi.ri != nil { m = mem_bi(bi.rb, bi.ri!, esize, bi.imm * esize) }
+        self.load_elem(m, e.ty, esize)
+    }
+
+    fn load_elem(self, m: Operand, ty: Type, esize: int) {
+        let a = self.a
+        if cg_is_flt(ty) {
+            a.movsd(XMM[0], m)
+        } else if esize == 1 {
+            a.movzx8(RAX, m)
+        } else {
+            a.mov(RAX, m)
+        }
+    }
+
+    // Put the base pointer in a register `rb` and the index in a register `ri` (or an immediate).
+    fn base_idx(self, base: TExpr, idx: TExpr) -> BaseIdx {
+        let a = self.a
+        let bop = self.operand(base)
+        let iop = self.operand(idx)
+        var rb = RAX
+        if bop != nil and iop != nil {
+            if bop!.is_reg() {
+                rb = bop!
+            } else {
+                self.load_cheap(RAX, base)
+                rb = RAX
+            }
+        } else if iop != nil {
+            self.gen(base)
+            rb = RAX
+        } else if bop != nil {
+            self.gen(idx)
+            a.mov(RCX, RAX)
+            if bop!.is_reg() {
+                rb = bop!
+            } else {
+                self.load_cheap(RAX, base)
+                rb = RAX
+            }
+            return BaseIdx(rb, RCX, 0)
+        } else {
+            self.gen(base)
+            let t = self.tmp()
+            a.mov(mem_b(RBP, t), RAX)
+            self.gen(idx)
+            a.mov(RCX, RAX)
+            a.mov(RAX, mem_b(RBP, t))
+            self.untmp(t)
+            return BaseIdx(RAX, RCX, 0)
+        }
+        match iop! {
+            Operand.Imm(v) => return BaseIdx(rb, nil, v)
+            Operand.R(n) => return BaseIdx(rb, iop, 0)
+            _ => {
+                a.mov(RCX, iop!)
+                return BaseIdx(rb, RCX, 0)
+            }
+        }
+    }
+
+    fn g_ArrIdx(self, e: TExpr, arr: TExpr, idx: TExpr, esize: int) {
+        let a = self.a
+        let bi = self.base_idx(arr, idx)
+        let stub = a.new_label()
+        if not bi.rb.is_reg_n(0) { a.mov(RAX, bi.rb) }
+        if bi.ri == nil {
+            self.stubs.push(Stub(stub, "bounds", e.pos.line, oimm(bi.imm)))
+            a.cmp(mem_b(RAX, 8), oimm(bi.imm))
+            a.jcc(CC_BE, stub)
+            a.mov(RAX, mem_b(RAX, 0))
+            self.load_elem(mem_b(RAX, bi.imm * esize), e.ty, esize)
+            return
+        }
+        let ri = bi.ri!
+        self.stubs.push(Stub(stub, "bounds", e.pos.line, ri))
+        a.cmp(ri, mem_b(RAX, 8))
+        a.jcc(CC_AE, stub)
+        a.mov(RAX, mem_b(RAX, 0))
+        self.load_elem(mem_bi(RAX, ri, esize, 0), e.ty, esize)
+    }
+
+    fn g_NewObj(self, vals: [TExpr]) {
+        let a = self.a
+        let n = vals.len()
+        var pending: [int] = []                  // 0: simple value stored after the allocation
+        for v in vals {
+            var simple = false
+            match v.k {
+                TK.Const(ck, iv, fv, sv) => simple = true
+                TK.VarRef(vv) => {
+                    if not vv.boxed() { simple = true }
+                }
+                _ => {}
+            }
+            if simple {
+                pending.push(0)
+                continue
+            }
+            self.gen(v)
+            let t = self.tmp()
+            self.spill(t, cg_is_flt(v.ty))
+            pending.push(t)
+        }
+        a.mov_imm(RCX, 8 * n)
+        a.call(self.prog.alloc!.label)
+        for i in 0..n {
+            let v = vals[i]
+            let m = mem_b(RAX, 8 * i)
+            let t = pending[i]
+            if t != 0 {
+                a.mov(RCX, mem_b(RBP, t))
+                a.mov(m, RCX)
+                self.untmp(t)
+            } else {
+                self.store_simple(m, v)
+            }
+        }
+    }
+
+    fn store_simple(self, m: Operand, v: TExpr) {
+        let a = self.a
+        match v.k {
+            TK.Const(ck, iv, fv, sv) => {
+                if ck == CK.Float {
+                    a.mov_imm(RCX, i64_to_bits(fv))
+                    a.mov(m, RCX)
+                } else if ck == CK.Str {
+                    a.lea(RCX, mem_sym(self.str_sym(sv), 0))
+                    a.mov(m, RCX)
+                } else {
+                    if cg_fits32(iv) {
+                        a.mov(m, oimm(iv))
+                    } else {
+                        a.mov_imm(RCX, iv)
+                        a.mov(m, RCX)
+                    }
+                }
+            }
+            TK.VarRef(vr) => {
+                let lo = loc_op(vr.loc)
+                if cg_is_flt(vr.ty) {
+                    if lo.is_xreg() {
+                        a.movsd(m, lo)
+                    } else {
+                        a.mov(RCX, lo)
+                        a.mov(m, RCX)
+                    }
+                } else if lo.is_reg() {
+                    a.mov(m, lo)
+                } else {
+                    a.mov(RCX, lo)
+                    a.mov(m, RCX)
+                }
+            }
+            _ => panic("codegen: store_simple of a complex value")
+        }
+    }
+
+    // ------------------------------------------------------------------ arithmetic
+    fn g_Bin(self, e: TExpr, op: str, l: TExpr, r: TExpr) {
+        let a = self.a
+        if op == "fadd" or op == "fsub" or op == "fmul" or op == "fdiv" {
+            self.fbin(op, l, r)
+            return
+        }
+        if is_int_cmp_op(op) or op == "feq" or op == "fne" or op == "flt" or op == "fle" or op == "fgt" or op == "fge" {
+            self.compare_value(e, op, l, r)
+            return
+        }
+        if op == "div" or op == "mod" {
+            self.divmod(e, op, l, r)
+            return
+        }
+        if op == "shl" or op == "shr" or op == "ushr" {
+            self.shift(op, l, r)
+            return
+        }
+        // add sub mul and or xor
+        let ro = self.operand_r(r)
+        let lo = self.operand(l)
+        if op == "mul" {
+            if opt_is_imm(ro) {
+                self.gen_operand_to(RAX, l)
+                a.imul3(RAX, RAX, ro!.imm_val())
+                return
+            }
+            if opt_is_imm(lo) {
+                self.gen_operand_to(RAX, r)
+                a.imul3(RAX, RAX, lo!.imm_val())
+                return
+            }
+            if ro != nil {
+                self.gen(l)
+                a.imul(RAX, ro!)
+                return
+            }
+            if lo != nil {
+                self.gen(r)
+                a.imul(RAX, lo!)
+                return
+            }
+        } else {
+            if ro != nil {
+                self.gen(l)
+                a.alu(op, RAX, ro!)
+                return
+            }
+            if lo != nil and (op == "add" or op == "and" or op == "or" or op == "xor") {
+                self.gen(r)
+                a.alu(op, RAX, lo!)
+                return
+            }
+        }
+        // general case: both operands need code
+        if lo != nil {
+            self.gen(r)
+            a.mov(RCX, RAX)
+            self.load_cheap(RAX, l)
+        } else {
+            self.gen(l)
+            let t = self.tmp()
+            a.mov(mem_b(RBP, t), RAX)
+            self.gen(r)
+            a.mov(RCX, RAX)
+            a.mov(RAX, mem_b(RBP, t))
+            self.untmp(t)
+        }
+        if op == "mul" {
+            a.imul(RAX, RCX)
+        } else {
+            a.alu(op, RAX, RCX)
+        }
+    }
+
+    fn gen_operand_to(self, reg: Operand, e: TExpr) {
+        let op = self.operand(e)
+        if op != nil {
+            match op! {
+                Operand.Imm(v) => self.a.mov_imm(reg, v)
+                _ => self.a.mov(reg, op!)
+            }
+        } else {
+            self.gen(e)
+            if not reg.is_reg_n(0) { self.a.mov(reg, RAX) }
+        }
+    }
+
+    // evaluate l into rax and r into rcx
+    fn two_operands(self, l: TExpr, r: TExpr) {
+        let a = self.a
+        let lo = self.operand(l)
+        let ro = self.operand_r(r)
+        if ro != nil {
+            self.gen_operand_to(RAX, l)
+            match ro! {
+                Operand.Imm(v) => a.mov_imm(RCX, v)
+                _ => a.mov(RCX, ro!)
+            }
+        } else if lo != nil {
+            self.gen(r)
+            a.mov(RCX, RAX)
+            match lo! {
+                Operand.Imm(v) => a.mov_imm(RAX, v)
+                _ => a.mov(RAX, lo!)
+            }
+        } else {
+            self.gen(l)
+            let t = self.tmp()
+            a.mov(mem_b(RBP, t), RAX)
+            self.gen(r)
+            a.mov(RCX, RAX)
+            a.mov(RAX, mem_b(RBP, t))
+            self.untmp(t)
+        }
+    }
+
+    fn divmod(self, e: TExpr, op: str, l: TExpr, r: TExpr) {
+        let a = self.a
+        let rv = cg_const_iv(r)
+        if rv != nil and rv! >= 2 and rv! <= (1 << 30) and (rv! & (rv! - 1)) == 0 {
+            var k = 0
+            while (1 << (k + 1)) <= rv! { k += 1 }                // bit_length - 1
+            self.gen(l)
+            // signed division by 2^k, rounding toward zero
+            a.mov(RCX, RAX)
+            a.shift("sar", RCX, oimm(63))
+            a.shift("shr", RCX, oimm(64 - k))
+            if op == "div" {
+                a.add(RAX, RCX)
+                a.shift("sar", RAX, oimm(k))
+            } else {
+                a.add(RCX, RAX)
+                a.and_(RCX, oimm(-(1 << k)))
+                a.sub(RAX, RCX)
+            }
+            return
+        }
+        if rv != nil and rv! == -1 {
+            // x / -1 == -x (wrapping for INT_MIN), x % -1 == 0; idiv would trap on INT_MIN / -1
+            self.gen(l)
+            if op == "div" { a.neg(RAX) } else { a.mov_imm(RAX, 0) }
+            return
+        }
+        self.two_operands(l, r)
+        if not (rv != nil and rv! != 0) {
+            let stub = a.new_label()
+            self.stubs.push(Stub(stub, "div", e.pos.line, oimm(0)))
+            a.test(RCX, RCX)
+            a.jcc(CC_E, stub)
+        }
+        var ldone = -1
+        if rv == nil {
+            let lnorm = a.new_label()
+            ldone = a.new_label()
+            a.cmp(RCX, oimm(-1))
+            a.jcc(CC_NE, lnorm)
+            if op == "div" { a.neg(RAX) } else { a.mov_imm(RAX, 0) }
+            a.jmp(ldone)
+            a.bind(lnorm)
+        }
+        a.cqo()
+        a.idiv(RCX)
+        if op == "mod" { a.mov(RAX, RDX) }
+        if ldone >= 0 { a.bind(ldone) }
+    }
+
+    fn shift(self, op: str, l: TExpr, r: TExpr) {
+        let a = self.a
+        var kind = "shl"
+        if op == "shr" { kind = "sar" } else if op == "ushr" { kind = "shr" }
+        let rv = cg_const_iv(r)
+        if rv != nil {
+            self.gen(l)
+            a.shift(kind, RAX, oimm(rv! & 63))
+            return
+        }
+        self.two_operands(l, r)
+        a.shift(kind, RAX, RCX)
+    }
+
+    fn fbin(self, fop: str, l: TExpr, r: TExpr) {
+        let a = self.a
+        var op = "divsd"
+        if fop == "fadd" { op = "addsd" } else if fop == "fsub" { op = "subsd" } else if fop == "fmul" { op = "mulsd" }
+        let ro = self.foperand_r(r)
+        if ro != nil {
+            self.gen(l)
+            a.sse(op, XMM[0], ro!)
+            return
+        }
+        let lo = self.foperand(l)
+        if lo != nil and (fop == "fadd" or fop == "fmul") {
+            self.gen(r)
+            a.sse(op, XMM[0], lo!)
+            return
+        }
+        self.gen(l)
+        let t = self.tmp()
+        a.movsd(mem_b(RBP, t), XMM[0])
+        self.gen(r)
+        a.movsd(XMM[1], XMM[0])
+        a.movsd(XMM[0], mem_b(RBP, t))
+        self.untmp(t)
+        a.sse(op, XMM[0], XMM[1])
+    }
+
+    // ------------------------------------------------------------------ comparisons / branches
+    fn compare_value(self, e: TExpr, op: str, l: TExpr, r: TExpr) {
+        let a = self.a
+        if op.starts_with("f") {
+            let lt = a.new_label()
+            let lend = a.new_label()
+            self.branch(e, lt, true)
+            a.mov_imm(RAX, 0)
+            a.jmp(lend)
+            a.bind(lt)
+            a.mov_imm_keepflags(RAX, 1)
+            a.bind(lend)
+            return
+        }
+        let cc = self.int_cmp(op, l, r)
+        a.setcc(cc, RAX)
+        a.movzx8(RAX, RAX)
+    }
+
+    // emit cmp for an integer comparison, return the condition code that means `e` is true
+    fn int_cmp(self, op: str, l: TExpr, r: TExpr) -> int {
+        let a = self.a
+        let cc = cc_int(op)
+        let lo = self.operand(l)
+        let ro = self.operand_r(r)
+        let rv = cg_const_iv(r)
+        if rv != nil and rv! == 0 and (op == "eq" or op == "ne") and opt_is_reg(lo) {
+            a.test(lo!, lo!)
+            return cc
+        }
+        if ro != nil and lo != nil and not lo!.is_imm() {
+            if lo!.is_mem() and ro!.is_mem() {
+                a.mov(RAX, lo!)
+                a.cmp(RAX, ro!)
+            } else {
+                a.cmp(lo!, ro!)
+            }
+            return cc
+        }
+        if ro != nil {
+            self.gen_operand_to(RAX, l)
+            a.cmp(RAX, ro!)
+            return cc
+        }
+        if lo != nil {
+            self.gen(r)
+            if lo!.is_imm() {
+                a.cmp(RAX, lo!)
+                return cc_swap(cc)
+            }
+            a.cmp(lo!, RAX)
+            return cc
+        }
+        self.gen(l)
+        let t = self.tmp()
+        a.mov(mem_b(RBP, t), RAX)
+        self.gen(r)
+        a.mov(RCX, RAX)
+        a.mov(RAX, mem_b(RBP, t))
+        self.untmp(t)
+        a.cmp(RAX, RCX)
+        return cc
+    }
+
+    fn float_cmp_branch(self, fop: str, l: TExpr, r: TExpr, target: int, jump_if: bool) {
+        let a = self.a
+        let op = fop[1..]
+        let lo_unused = self.foperand(l)         // (no effect except for creating the constant pool entry, as in codegen.py)
+        // operands into xmm0 / xmm1 (left in xmm0)
+        var ro = self.foperand_r(r)
+        if ro != nil {
+            self.gen(l)
+            if ro!.is_mem() {
+                a.movsd(XMM[1], ro!)
+                ro = XMM[1]
+            }
+        } else {
+            self.gen(l)
+            let t = self.tmp()
+            a.movsd(mem_b(RBP, t), XMM[0])
+            self.gen(r)
+            a.movsd(XMM[1], XMM[0])
+            a.movsd(XMM[0], mem_b(RBP, t))
+            self.untmp(t)
+            ro = XMM[1]
+        }
+        let x0 = XMM[0]
+        let x1 = ro!
+        var cc = CC_A
+        // lt/le: compare (b, a) and use above / above-or-equal; unordered -> false
+        if op == "lt" or op == "le" {
+            a.ucomisd(x1, x0)
+            if op == "lt" { cc = CC_A } else { cc = CC_AE }
+        } else if op == "gt" or op == "ge" {
+            a.ucomisd(x0, x1)
+            if op == "gt" { cc = CC_A } else { cc = CC_AE }
+        } else {
+            a.ucomisd(x0, x1)
+            if op == "eq" {
+                // true iff ZF=1 and PF=0
+                if jump_if {
+                    let skip = a.new_label()
+                    a.jcc(CC_P, skip)
+                    a.jcc(CC_E, target)
+                    a.bind(skip)
+                } else {
+                    a.jcc(CC_P, target)
+                    a.jcc(CC_NE, target)
+                }
+                return
+            } else {
+                // ne: true iff ZF=0 or PF=1
+                if jump_if {
+                    a.jcc(CC_P, target)
+                    a.jcc(CC_NE, target)
+                } else {
+                    let skip = a.new_label()
+                    a.jcc(CC_P, skip)
+                    a.jcc(CC_E, target)
+                    a.bind(skip)
+                }
+                return
+            }
+        }
+        if jump_if {
+            a.jcc(cc, target)
+        } else {
+            a.jcc(cc_inv(cc), target)
+        }
+    }
+
+    fn branch(self, e: TExpr, target: int, jump_if: bool) {
+        let a = self.a
+        match e.k {
+            TK.Const(ck, iv, fv, sv) => {
+                var truth = iv != 0
+                if ck == CK.Float { truth = fv != 0.0 }
+                if ck == CK.Str { truth = sv.len() > 0 }
+                if truth == jump_if { a.jmp(target) }
+                return
+            }
+            TK.Un(op, x) => {
+                if op == "not" {
+                    self.branch(x, target, not jump_if)
+                    return
+                }
+            }
+            TK.And(l, r) => {
+                if not jump_if {
+                    self.branch(l, target, false)
+                    self.branch(r, target, false)
+                } else {
+                    let skip = a.new_label()
+                    self.branch(l, skip, false)
+                    self.branch(r, target, true)
+                    a.bind(skip)
+                }
+                return
+            }
+            TK.Or(l, r) => {
+                if jump_if {
+                    self.branch(l, target, true)
+                    self.branch(r, target, true)
+                } else {
+                    let skip = a.new_label()
+                    self.branch(l, skip, true)
+                    self.branch(r, target, false)
+                    a.bind(skip)
+                }
+                return
+            }
+            TK.Bin(op, l, r) => {
+                if is_int_cmp_op(op) {
+                    let cc = self.int_cmp(op, l, r)
+                    if jump_if { a.jcc(cc, target) } else { a.jcc(cc_inv(cc), target) }
+                    return
+                }
+                if op == "feq" or op == "fne" or op == "flt" or op == "fle" or op == "fgt" or op == "fge" {
+                    self.float_cmp_branch(op, l, r, target, jump_if)
+                    return
+                }
+            }
+            TK.Seq(ss, x) => {
+                self.gen_stmts(ss)
+                self.branch(x, target, jump_if)
+                return
+            }
+            _ => {}
+        }
+        let op = self.operand(e)
+        if opt_is_reg(op) {
+            a.test(op!, op!)
+        } else {
+            self.gen(e)
+            a.test(RAX, RAX)
+        }
+        if jump_if { a.jcc(CC_NE, target) } else { a.jcc(CC_E, target) }
+    }
+
+    // ------------------------------------------------------------------ calls
+    fn mark_call(self, line: int) {
+        self.callsites.push(CallSite(self.a.here(), line, self.cur_inst))
+    }
+
+    fn g_Call(self, e: TExpr, f: FnInst, args: [TExpr]) {
+        self.call_common(args, CallTarget.Inst(f), e.pos.line)
+    }
+
+    fn g_CallExt(self, e: TExpr, ext: Extern, args: [TExpr]) {
+        let sym = self.img.import_sym(ext.dll, ext.name)
+        self.call_common(args, CallTarget.Sym(sym), e.pos.line)
+        if ext.ret32 { self.a.movsx32(RAX, RAX) }
+    }
+
+    fn g_CallInd(self, e: TExpr, f: TExpr, args: [TExpr]) {
+        let a = self.a
+        self.gen(f)
+        let t = self.tmp()
+        a.mov(mem_b(RBP, t), RAX)
+        self.call_common(args, CallTarget.Ind(t), e.pos.line)
+        self.untmp(t)
+    }
+
+    fn emit_call(self, target: CallTarget, line: int) {
+        let a = self.a
+        match target {
+            CallTarget.Inst(f) => {
+                a.call(f.label)
+                self.mark_call(line)
+            }
+            CallTarget.Sym(s) => a.call_sym(s)
+            CallTarget.Ind(t) => {
+                a.mov(R10, mem_b(RBP, t))
+                a.emit(0, 0xFF, 2, mem_b(R10, 0), 0, 0, 0, false)          // call [r10]
+            }
+        }
+    }
+
+    fn call_common(self, args: [TExpr], target: CallTarget, line: int) {
+        let a = self.a
+        let n = args.len()
+        self.max_out = max(self.max_out, 32 + 8 * max(0, n - 4))
+        // classify: trivial args can be loaded last, others are evaluated into temps (last one directly)
+        var trivial: [bool] = []
+        for x in args {
+            var tv = false
+            var is_glob = false
+            match x.k {
+                TK.GlobalRef(g) => is_glob = true
+                _ => {}
+            }
+            if is_glob {
+                tv = false
+            } else if cg_is_flt(x.ty) {
+                tv = self.foperand(x) != nil
+            } else {
+                tv = self.operand(x) != nil or cg_is_str_const(x)
+            }
+            trivial.push(tv)
+        }
+        var nontriv: [int] = []
+        for i in 0..n {
+            if not trivial[i] { nontriv.push(i) }
+        }
+        var temps: {int: int} = {}
+        for k in 0..nontriv.len() - 1 {
+            let i = nontriv[k]
+            self.gen(args[i])
+            let t = self.tmp()
+            self.spill(t, cg_is_flt(args[i].ty))
+            temps[i] = t
+        }
+        var last = -1
+        if nontriv.len() > 0 { last = nontriv[nontriv.len() - 1] }
+        var last_in_reg = false
+        if last >= 0 {
+            self.gen(args[last])
+            if last < 4 {
+                if cg_is_flt(args[last].ty) {
+                    if last != 0 { a.movsd(ARG_XREGS[last], XMM[0]) }
+                } else {
+                    if not ARG_REGS[last].is_reg_n(0) { a.mov(ARG_REGS[last], RAX) }
+                }
+                last_in_reg = true
+            } else {
+                let t = self.tmp()
+                self.spill(t, cg_is_flt(args[last].ty))
+                temps[last] = t
+            }
+        }
+        // stack args first (they use rax as scratch)
+        for i in 4..n {
+            let x = args[i]
+            let m = mem_b(RSP, 32 + 8 * (i - 4))
+            if i in temps {
+                a.mov(RAX, mem_b(RBP, temps[i]))
+                a.mov(m, RAX)
+            } else {
+                if cg_is_flt(x.ty) {
+                    let fo = self.foperand(x)
+                    a.movsd(XMM[0], fo!)
+                    a.movsd(m, XMM[0])
+                } else {
+                    self.load_cheap_any(RAX, x)
+                    a.mov(m, RAX)
+                }
+            }
+        }
+        for i in 0..min(n, 4) {
+            if i == last and last_in_reg { continue }
+            let x = args[i]
+            if i in temps {
+                if cg_is_flt(x.ty) {
+                    a.movsd(ARG_XREGS[i], mem_b(RBP, temps[i]))
+                } else {
+                    a.mov(ARG_REGS[i], mem_b(RBP, temps[i]))
+                }
+            } else {
+                if cg_is_flt(x.ty) {
+                    let fo = self.foperand(x)
+                    if fo!.is_xreg() {
+                        if fo!.n() != ARG_XREGS[i].n() { a.movsd(ARG_XREGS[i], fo!) }
+                    } else {
+                        a.movsd(ARG_XREGS[i], fo!)
+                    }
+                } else {
+                    self.load_cheap_any(ARG_REGS[i], x)
+                }
+            }
+        }
+        for t in temps.values() { self.untmp(t) }
+        self.emit_call(target, line)
+    }
+
+    fn load_cheap_any(self, reg: Operand, x: TExpr) {
+        let a = self.a
+        match x.k {
+            TK.Const(ck, iv, fv, sv) => {
+                if ck == CK.Str {
+                    a.lea(reg, mem_sym(self.str_sym(sv), 0))
+                    return
+                }
+            }
+            TK.VarRef(v) => {
+                if not v.boxed() {
+                    a.mov(reg, loc_op(v.loc))
+                    return
+                }
+            }
+            _ => {}
+        }
+        self.load_cheap(reg, x)
+    }
+
+    // ------------------------------------------------------------------ intrinsics
+    fn g_Intr(self, n: str, args: [TExpr]) {
+        let a = self.a
+        if n == "sqrt" or n == "floor" or n == "ceil" or n == "trunc" {
+            self.gen(args[0])
+            if n == "sqrt" {
+                a.sse("sqrtsd", XMM[0], XMM[0])
+            } else if n == "floor" {
+                a.roundsd(XMM[0], XMM[0], 1)
+            } else if n == "ceil" {
+                a.roundsd(XMM[0], XMM[0], 2)
+            } else {
+                a.roundsd(XMM[0], XMM[0], 3)
+            }
+        } else if n == "fabs" {
+            self.gen(args[0])
+            a.movq_to_r(RAX, XMM[0])
+            a.shift("shl", RAX, oimm(1))
+            a.shift("shr", RAX, oimm(1))
+            a.movq_to_x(XMM[0], RAX)
+        } else if n == "f2bits" {
+            self.gen(args[0])
+            a.movq_to_r(RAX, XMM[0])
+        } else if n == "bits2f" {
+            self.gen(args[0])
+            a.movq_to_x(XMM[0], RAX)
+        } else if n == "sp" {
+            a.mov(RAX, RSP)
+        } else if n == "setjmp" {
+            self.gen(args[0])
+            let jregs = [3, 6, 7, 12, 13, 14, 15, 5, 4]              // rbx rsi rdi r12 r13 r14 r15 rbp rsp
+            for i in 0..jregs.len() { a.mov(mem_b(RAX, 8 * i), REGS[jregs[i]]) }
+            for i in 6..16 { a.movups_store(mem_b(RAX, 80 + 16 * (i - 6)), XMM[i]) }
+            let lres = a.new_label()
+            let ldone = a.new_label()
+            a.lea_label(RCX, lres)
+            a.mov(mem_b(RAX, 72), RCX)
+            a.mov_imm(RAX, 0)
+            a.jmp(ldone)
+            a.bind(lres)
+            a.mov_imm(RAX, 1)
+            a.bind(ldone)
+        } else if n == "longjmp" {
+            self.gen(args[0])
+            for i in 6..16 { a.movups_load(XMM[i], mem_b(RAX, 80 + 16 * (i - 6))) }
+            let jregs = [3, 6, 7, 12, 13, 14, 15, 5]                 // rbx rsi rdi r12 r13 r14 r15 rbp
+            for i in 0..jregs.len() { a.mov(REGS[jregs[i]], mem_b(RAX, 8 * i)) }
+            a.mov(RDX, mem_b(RAX, 72))
+            a.mov(RSP, mem_b(RAX, 64))
+            a.jmp_reg(RDX)
+        } else if n == "tb" {
+            a.lea(RAX, mem_sym("tb", 0))
+        } else if n == "text_start" {
+            a.lea(RAX, mem_sym("text_start", 0))
+        } else if n == "fp" {
+            a.mov(RAX, RBP)
+        } else if n == "data_start" {
+            a.lea(RAX, mem_sym("data_start", 0))
+        } else if n == "data_end" {
+            a.lea(RAX, mem_sym("data_end", 0))
+        } else if n == "popcnt" {
+            self.gen(args[0])
+            a.popcnt(RAX, RAX)
+        } else if n == "ctz" {
+            self.gen(args[0])
+            a.bsf(RAX, RAX)
+        } else if n == "clz" {
+            self.gen(args[0])
+            a.bsr(RAX, RAX)
+            a.xor(RAX, oimm(63))
+        } else if n == "trap" {
+            a.ud2()
+        } else if n == "memcpy" {
+            self.three(args)
+            a.mov(R10, RSI)
+            a.mov(R11, RDI)
+            a.mov(RDI, R8)
+            a.mov(RSI, R9)
+            a.rep_movsb()
+            a.mov(RSI, R10)
+            a.mov(RDI, R11)
+        } else if n == "memset" {
+            self.three(args)
+            a.mov(R10, RDI)
+            a.mov(RDI, R8)
+            a.mov(RAX, R9)
+            a.rep_stosb()
+            a.mov(RDI, R10)
+        } else if n == "save_regs" {
+            self.gen(args[0])
+            for i in 0..SAVE_REGS.len() { a.mov(mem_b(RAX, 8 * i), REGS[SAVE_REGS[i]]) }
+        } else {
+            panic("intrinsic " + n)
+        }
+    }
+
+    // rcx = args[2], r8 = args[0], r9 = args[1]
+    fn three(self, args: [TExpr]) {
+        let a = self.a
+        var ts: [int] = []
+        for x in args {
+            self.gen(x)
+            let t = self.tmp()
+            a.mov(mem_b(RBP, t), RAX)
+            ts.push(t)
+        }
+        a.mov(R8, mem_b(RBP, ts[0]))
+        a.mov(R9, mem_b(RBP, ts[1]))
+        a.mov(RCX, mem_b(RBP, ts[2]))
+        for t in ts { self.untmp(t) }
+    }
+}

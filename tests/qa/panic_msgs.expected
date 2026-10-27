@@ -1,0 +1,45 @@
+index: index 5 is out of range (length 3)
+negative index: index -1 is out of range (length 3)
+index assign: index 3 is out of range (length 3)
+str index: index 5 is out of range (length 5)
+str negative index: index -1 is out of range (length 5)
+byte_at: index 99 is out of range (length 5)
+div: division by zero
+mod: division by zero
+div assign: division by zero
+inf
+float div is fine: <no panic>
+key: key not found: "nope"
+int key: key not found: 2
+unwrap: tried to unwrap a nil value (use  x ?? default  or  if let v = x )
+5
+unwrap ok: <no panic>
+pop: pop from an empty array
+first: first() of an empty array
+last: last() of an empty array
+min: min() of an empty array
+max: max() of an empty array
+insert: insert index 9 is out of range
+insert neg: insert index -1 is out of range
+remove: remove index 3 is out of range
+swap: index 7 is out of range (length 3)
+panic: custom 5
+assert: i should be zero
+assert no msg: assertion failed
+assert ok: <no panic>
+to_int: cannot convert "12x" to an int
+int(): cannot convert "x" to an int
+to_float: cannot convert "1.2.3" to a float
+parse_int_base: invalid digit in "12g"
+ord: ord() needs a non-empty string
+int pow: negative exponent in integer power; use floats
+unwrap result: called unwrap() on an Err: "bad thing"
+expect: needed it: "bad thing"
+rand_int: rand_int: empty range
+rand_choice: rand_choice of an empty array
+3 1
+match guard: <no panic>
+nested arr: index 2 is out of range (length 2)
+struct field arr: index 1 is out of range (length 1)
+unreachable: unreachable code was reached
+still running

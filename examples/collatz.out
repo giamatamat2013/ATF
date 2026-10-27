@@ -1,0 +1,11 @@
+chain of 6: [6, 3, 10, 5, 16, 8, 4, 2, 1]
+chain of 27 has 112 numbers, the highest is 9232
+steps(1) = 0
+steps(2) = 1
+steps(3) = 7
+steps(7) = 16
+steps(27) = 111
+steps(97) = 118
+steps(871) = 178
+below one million the longest chain starts at 837799 and takes 524 steps
+(checked directly: 524)
