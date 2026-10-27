@@ -8,6 +8,16 @@ __pycache__/
 *.exe
 !bin/atf.exe
 
+# Live state of the release dashboard (rewritten every few seconds while it runs).
+# The finished releases are kept in tools/release_status/archive/, which stays tracked.
+tools/release_status/status-data.js
+tools/release_status/activity.json
+tools/release_status/todo.json
+tools/release_status/local-tests.json
+tools/release_status/local-tests-history.json
+tools/release_status/local-single.json
+tools/release_status/cycle.json
+
 # Editor and OS files
 .vscode/
 Thumbs.db

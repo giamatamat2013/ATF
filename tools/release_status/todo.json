@@ -1,5 +1,0 @@
-[{"text": "Add std modules regex, path, fs, process, toml, http, test", "state": "done"},
- {"text": "Docs, tutorials, skill, snippets, example", "state": "done"},
- {"text": "Local tests + rebuild fixed point", "state": "done"},
- {"text": "Push and dispatch release v1.1.0", "state": "done"},
- {"text": "Verify release assets", "state": "done"}]
