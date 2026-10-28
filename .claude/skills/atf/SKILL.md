@@ -61,12 +61,12 @@ Operators: `+ - * / %` `**` (power, right-assoc, `-2 ** 2 == -4`), `== !=` (stru
 
 ### Strings
 `"{expr}"` interpolation with format specs: `{x:.2f}` `{x:8.3f}` `{n:5}` `{n:<5}` `{n:>5}` `{n:^5}` `{n:05}` `{n:x}` `{n:X}` `{n:b}` `{n:08b}`. Escapes `\n \t \" \\ \{ \} \xHH \u{263A}`. Multi-line `"""..."""`, raw `r"..."`.
-Methods: `len trim upper lower reverse find contains starts_with ends_with replace count split join lines split_whitespace repeat strip_prefix strip_suffix pad_left pad_right byte_at parse_int parse_float to_int to_float`; slicing `s[a..b]`, `s[a..]`, `s[..b]`; `"ab" * 3`; `", ".join(arr)`. `strip_prefix(p)` / `strip_suffix(p)` return `str?` (nil when no match). `parse_int()` returns `int?`; `to_int()` panics on bad input. Use `str_builder()` (`add`, `add_byte`, `finish`) instead of `s = s + x` in loops.
+Methods: `len trim upper lower reverse find contains starts_with ends_with replace count split join lines split_whitespace repeat strip_prefix strip_suffix pad_left pad_right byte_at parse_int parse_float to_int to_float`; slicing `s[a..b]`, `s[a..]`, `s[..b]`; `"ab" * 3`; `", ".join(arr)`. Python names work next to them and do the same: `startswith endswith strip lstrip rstrip ljust rjust isdigit splitlines` (also `zfill(w)`; byte `isdigit isalpha isspace`). `strip_prefix(p)` / `strip_suffix(p)` return `str?` (nil when no match). `parse_int()` returns `int?`; `to_int()` panics on bad input. Use `str_builder()` (`add`, `add_byte`, `finish`) instead of `s = s + x` in loops.
 
 ### Collections
-- Array: `push pop insert(i,x) remove(i) first last contains index_of len is_empty sort sort_by(|a,b| a-b) sorted reversed reverse map filter reduce(init, |acc,x| ..) any all find count sum min max extend copy for_each take(n) skip(n) chunks(n) windows(n) partition(f) unique`, slicing, `+` concatenation. Empty needs a type: `var w: [str] = []`. Create sized: `array_make::<int>(n)`. Arrays, maps, structs are **references**; use `copy(x)` for a shallow copy.
-- Map: `var m: {str: int} = {}`; `m[k] = v`, `m.get(k, default)`, `m.try_get(k)` (optional), `k in m`, `m.has(k)`, `m.keys() values() items() remove(k) len()`. A missing key panics. Insertion order is kept.
-- Set: `let s = set_new::<int>()`; `add has remove len items`; `x in s`; iterate with `for x in s.items()`.
+- Array: `push` (also `append`) `pop insert(i,x) remove(i) first last contains index_of len is_empty sort sort_by(|a,b| a-b) sorted reversed reverse map filter reduce(init, |acc,x| ..) any all find count sum min max extend copy for_each take(n) skip(n) chunks(n) windows(n) partition(f) unique`, slicing, `+` concatenation. Empty needs a type: `var w: [str] = []`. Create sized: `array_make::<int>(n)`. Arrays, maps, structs are **references**; use `copy(x)` for a shallow copy.
+- Map: `var m: {str: int} = {}`; `m[k] = v`, `m.get(k, default)`, `m.try_get(k)` (optional), `k in m`, `m.has(k)`, `m.keys() values() items() remove(k) len() update(other)`. A missing key panics. Insertion order is kept.
+- Set: `let s = set_new::<int>()`; `add has remove (also `discard`) len items`; `x in s`; iterate with `for x in s.items()`.
 - Comprehensions: `[x * x for x in 1..=6 if x % 2 == 0]`, `[... for i, w in arr]`, nested allowed.
 - Tuples: `t.0`, `let (a, _) = t`, immutable, compare field by field.
 

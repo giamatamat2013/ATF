@@ -630,6 +630,38 @@ cake      12.00
 
 </details>
 
+### שמות מ-Python
+
+מי שמכיר Python יכול להשתמש גם בשמות של Python. הם עובדים לצד שמות ATF ועושים בדיוק אותו דבר, ואפשר לבחור את
+מה שנוח:
+
+| ATF | השם ב-Python |
+|---|---|
+| `s.starts_with(p)`, `s.ends_with(p)` | `s.startswith(p)`, `s.endswith(p)` |
+| `s.trim()`, `trim_start()`, `trim_end()` | `s.strip()`, `lstrip()`, `rstrip()` |
+| `s.pad_right(w)`, `s.pad_left(w)` | `s.ljust(w)`, `s.rjust(w)` |
+| `s.is_digits()`, `s.lines()` | `s.isdigit()`, `s.splitlines()` |
+| `a.push(x)` | `a.append(x)` |
+| `set.remove(x)` | `set.discard(x)` |
+
+`s.zfill(w)` משלים אפסים משמאל (`"42".zfill(5)` הוא `00042`), ו-`m.update(other)` מעתיק מפה אחת לתוך אחרת.
+
+```atf
+fn main() {
+    let s = "  Hello  "
+    let n = "7"
+    println("[{s.strip()}] {s.strip().startswith("He")} {n.zfill(3)}")
+    var a: [int] = []
+    a.append(1)
+    a.push(2)
+    println("{a}")
+}
+```
+```output
+[Hello] true 007
+[1, 2]
+```
+
 ---
 
 ## 7. קלט מהמשתמש

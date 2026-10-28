@@ -67,6 +67,7 @@ total: 5.25
   wrap, title, snake_case, templates, tables), number theory and statistics (`std/math`), and algorithms from
   C++, itertools and JavaScript (`std/algo`: binary search, permutations, combinations, group_by, flatten, set operations), Python's `random` extras
   (`std/random`: sample, weighted choice, gauss, UUID) and C++ bit tricks (`std/bits`: rotate, reverse, power of two, Gray code).
+  Python method names work next to the ATF ones (`strip`, `startswith`, `endswith`, `ljust`, `rjust`, `zfill`, `isdigit`, `splitlines`, `append`, `update`, `discard`).
 - **Windows and design.** `std/ui` builds graphical programs the way HTML and CSS do, written as ATF code: a view function
   returns a tree of elements (`column`, `row`, `text`, `button`, `textbox`, ...), styled with chained methods
   (`.padding(8, 16).bg(hex("#4f46e5")).radius(12).shadow(..)`). It supports flexbox and grid layout, gradients, soft shadows,

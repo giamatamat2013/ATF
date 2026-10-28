@@ -498,6 +498,38 @@ fn main() {
 > `chr(955)` creates the text `λ` and `ord("A")` gives 65. `s[i]` gives a one-letter `str`; `s.byte_at(i)` gives
 > the raw `byte` (a number), which is handy for comparisons like `s.byte_at(i) == 'a'`.
 
+### Python names
+
+If you know Python, the Python names work too. They sit next to the ATF names and do exactly the same thing,
+so use whichever you like:
+
+| ATF | Python name |
+|---|---|
+| `s.starts_with(p)`, `s.ends_with(p)` | `s.startswith(p)`, `s.endswith(p)` |
+| `s.trim()`, `trim_start()`, `trim_end()` | `s.strip()`, `lstrip()`, `rstrip()` |
+| `s.pad_right(w)`, `s.pad_left(w)` | `s.ljust(w)`, `s.rjust(w)` |
+| `s.is_digits()`, `s.lines()` | `s.isdigit()`, `s.splitlines()` |
+| `a.push(x)` | `a.append(x)` |
+| `set.remove(x)` | `set.discard(x)` |
+
+`s.zfill(w)` pads with zeros (`"42".zfill(5)` is `00042`), and `m.update(other)` copies one map into another.
+
+```atf
+fn main() {
+    let s = "  Hello  "
+    let n = "7"
+    println("[{s.strip()}] {s.strip().startswith("He")} {n.zfill(3)}")
+    var a: [int] = []
+    a.append(1)
+    a.push(2)
+    println("{a}")
+}
+```
+```output
+[Hello] true 007
+[1, 2]
+```
+
 ---
 
 ## 7. Printing

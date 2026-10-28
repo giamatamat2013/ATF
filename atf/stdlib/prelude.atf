@@ -1088,6 +1088,12 @@ impl byte {
     fn is_alpha(self) -> bool { return (self >= 'a' and self <= 'z') or (self >= 'A' and self <= 'Z') }
     // true for space, tab, newline (10) and carriage return (13)
     fn is_space(self) -> bool { return self == ' ' or self == 9 or self == 10 or self == 13 }
+    // Python name for is_digit
+    fn isdigit(self) -> bool { return self.is_digit() }
+    // Python name for is_alpha
+    fn isalpha(self) -> bool { return self.is_alpha() }
+    // Python name for is_space
+    fn isspace(self) -> bool { return self.is_space() }
 }
 
 // ---------------------------------------------------------------- strings
@@ -1775,6 +1781,12 @@ impl str {
     }
     // a copy without spaces, tabs, newlines and carriage returns at both ends: " a b ".trim() == "a b"
     fn trim(self) -> str { return self.trim_start().trim_end() }
+    // Python name for trim: " a ".strip() == "a"
+    fn strip(self) -> str { return self.trim_start().trim_end() }
+    // Python name for trim_start
+    fn lstrip(self) -> str { return self.trim_start() }
+    // Python name for trim_end
+    fn rstrip(self) -> str { return self.trim_end() }
     // every occurrence of old replaced by new, left to right without overlaps; unchanged when old is "": "aaa".replace("a", "bb") == "bbbbbb"
     fn replace(self, old: str, new: str) -> str {
         let m = str_len(old)
@@ -1904,6 +1916,19 @@ impl str {
     fn pad_left(self, w: int) -> str { return pad_left(self, w) }
     // padded with spaces on the right to w bytes: "7".pad_right(3) == "7  "
     fn pad_right(self, w: int) -> str { return pad_right(self, w) }
+    // Python name for pad_right: "7".ljust(3) == "7  "
+    fn ljust(self, w: int) -> str { return pad_right(self, w) }
+    // Python name for pad_left: "7".rjust(3) == "  7"
+    fn rjust(self, w: int) -> str { return pad_left(self, w) }
+    // padded with zeros on the left to w bytes, after a leading sign: "42".zfill(5) == "00042", "-42".zfill(5) == "-0042"
+    fn zfill(self, w: int) -> str {
+        let n = str_len(self)
+        if n >= w { return self }
+        if self.starts_with("-") or self.starts_with("+") {
+            return self.substr(0, 1) + "0".repeat(w - n) + self.substr(1, n - 1)
+        }
+        return "0".repeat(w - n) + self
+    }
     // true when the string is not empty and every byte is 0 to 9 (no sign, no spaces)
     fn is_digits(self) -> bool {
         let n = str_len(self)
@@ -1913,6 +1938,14 @@ impl str {
         }
         return true
     }
+    // Python name for is_digits
+    fn isdigit(self) -> bool { return self.is_digits() }
+    // Python name for starts_with
+    fn startswith(self, pre: str) -> bool { return self.starts_with(pre) }
+    // Python name for ends_with
+    fn endswith(self, suf: str) -> bool { return self.ends_with(suf) }
+    // Python name for lines
+    fn splitlines(self) -> [str] { return self.lines() }
     // a non-negative hash of the text (FNV-1a)
     fn hash(self) -> int { return str_hash(self) }
 }
@@ -2022,6 +2055,8 @@ impl<T> Array<T> {
         self.data[self.len] = x
         self.len += 1
     }
+    // Python name for push: a.append(x)
+    fn append(self, x: T) { self.push(x) }
     // removes and returns the last element; panics when the array is empty
     fn pop(self) -> T {
         if self.len == 0 { panic("pop from an empty array") }
@@ -2619,6 +2654,12 @@ impl<K, V> Map<K, V> {
         }
         return r
     }
+    // copies every key and value of other into this map, replacing the values of keys that are already there (Python update)
+    fn update(self, other: {K: V}) {
+        for i in 0..other.used {
+            if other.hashes[i] >= 0 { self.set(other.keys[i], other.vals[i]) }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- sets
@@ -2641,6 +2682,8 @@ impl<T> Set<T> {
     fn op_contains(self, x: T) -> bool { return self.m.has(x) }
     // removes x; false when it was not there
     fn remove(self, x: T) -> bool { return self.m.remove(x) }
+    // Python name for remove: removes x when it is there (the result tells whether it was)
+    fn discard(self, x: T) -> bool { return self.m.remove(x) }
     // number of elements
     fn len(self) -> int { return self.m.len() }
     // the elements, in insertion order

@@ -193,6 +193,9 @@ These are part of the language itself (they accept values of any printable type 
 - `.is_digit() -> bool` - true for the ASCII digits 0 to 9
 - `.is_alpha() -> bool` - true for the ASCII letters a-z and A-Z (false for all other bytes)
 - `.is_space() -> bool` - true for space, tab, newline (10) and carriage return (13)
+- `.isdigit() -> bool` - Python name for is_digit
+- `.isalpha() -> bool` - Python name for is_alpha
+- `.isspace() -> bool` - Python name for is_space
 
 ## Strings
 
@@ -244,6 +247,9 @@ These are part of the language itself (they accept values of any printable type 
 - `.trim_start() -> str` - a copy without the spaces, tabs, newlines and carriage returns at the start
 - `.trim_end() -> str` - a copy without the spaces, tabs, newlines and carriage returns at the end
 - `.trim() -> str` - a copy without spaces, tabs, newlines and carriage returns at both ends: " a b ".trim() == "a b"
+- `.strip() -> str` - Python name for trim: " a ".strip() == "a"
+- `.lstrip() -> str` - Python name for trim_start
+- `.rstrip() -> str` - Python name for trim_end
 - `.replace(old: str, new: str) -> str` - every occurrence of old replaced by new, left to right without overlaps; unchanged when old is "": "aaa".replace("a", "bb") == "bbbbbb"
 - `.split(sep: str) -> [str]` - the pieces between the occurrences of sep: "a,b,,c".split(",") == ["a", "b", "", "c"]; an empty sep splits into single bytes; "".split(",") == [""]
 - `.split_whitespace() -> [str]` - the words between runs of spaces, tabs, newlines and carriage returns (never empty strings): " a  b ".split_whitespace() == ["a", "b"]
@@ -261,7 +267,14 @@ These are part of the language itself (they accept values of any printable type 
 - `.to_float() -> float` - the text as a float (same forms as parse_float); panics when it is not a number: "2.5".to_float() == 2.5
 - `.pad_left(w: int) -> str` - padded with spaces on the left to w bytes: "7".pad_left(3) == "  7"
 - `.pad_right(w: int) -> str` - padded with spaces on the right to w bytes: "7".pad_right(3) == "7  "
+- `.ljust(w: int) -> str` - Python name for pad_right: "7".ljust(3) == "7  "
+- `.rjust(w: int) -> str` - Python name for pad_left: "7".rjust(3) == "  7"
+- `.zfill(w: int) -> str` - padded with zeros on the left to w bytes, after a leading sign: "42".zfill(5) == "00042", "-42".zfill(5) == "-0042"
 - `.is_digits() -> bool` - true when the string is not empty and every byte is 0 to 9 (no sign, no spaces)
+- `.isdigit() -> bool` - Python name for is_digits
+- `.startswith(pre: str) -> bool` - Python name for starts_with
+- `.endswith(suf: str) -> bool` - Python name for ends_with
+- `.splitlines() -> [str]` - Python name for lines
 - `.hash() -> int` - a non-negative hash of the text (FNV-1a)
 
 ## Arrays
@@ -283,6 +296,7 @@ These are part of the language itself (they accept values of any printable type 
 - `.len() -> int` - number of elements
 - `.is_empty() -> bool` - true when the array has no elements
 - `.push(x: T)` - appends x at the end
+- `.append(x: T)` - Python name for push: a.append(x)
 - `.pop() -> T` - removes and returns the last element; panics when the array is empty
 - `.last() -> T` - the last element; panics when the array is empty
 - `.first() -> T` - the first element; panics when the array is empty
@@ -348,6 +362,7 @@ These are part of the language itself (they accept values of any printable type 
 - `.values() -> [V]` - the values, in the insertion order of their keys
 - `.items() -> [(K, V)]` - the (key, value) pairs, in insertion order
 - `.copy() -> {K: V}` - a new map with the same keys and values (a shallow copy)
+- `.update(other: {K: V})` - copies every key and value of other into this map, replacing the values of keys that are already there (Python update)
 
 ## Sets
 
@@ -362,6 +377,7 @@ These are part of the language itself (they accept values of any printable type 
 - `.has(x: T) -> bool` - true when x is in the set (same as  x in s)
 - `.contains(x: T) -> bool` - same as has(x)
 - `.remove(x: T) -> bool` - removes x; false when it was not there
+- `.discard(x: T) -> bool` - Python name for remove: removes x when it is there (the result tells whether it was)
 - `.len() -> int` - number of elements
 - `.items() -> [T]` - the elements, in insertion order
 - `.to_str() -> str` - the elements written like an array, for example [3, 1]

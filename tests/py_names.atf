@@ -1,0 +1,36 @@
+// Python-style names that work next to the ATF names
+fn main() {
+    let sp = "  ab  "
+    println("[{sp.strip()}] [{sp.lstrip()}] [{sp.rstrip()}]")
+    let h = "hello"
+    println("{h.startswith("he")} {h.endswith("lo")} {h.startswith("lo")}")
+    let seven = "7"
+    let n42 = "42"
+    let m42 = "-42"
+    let long = "12345"
+    println("[{seven.ljust(3)}] [{seven.rjust(3)}] {n42.zfill(5)} {m42.zfill(5)} {long.zfill(3)}")
+    let d = "123"
+    let e = "12a"
+    let z = ""
+    println("{d.isdigit()} {e.isdigit()} {z.isdigit()}")
+    let text = "a\nb\nc"
+    println("{text.splitlines()}")
+
+    var a: [int] = []
+    a.append(1)
+    a.push(2)
+    a.append(3)
+    println("{a}")
+
+    let m: {str: int} = {"x": 1}
+    m.update({"x": 5, "y": 6})
+    println("{m["x"]} {m["y"]} {m.len()}")
+
+    let s = set_new::<int>()
+    s.add(1)
+    println("{s.discard(1)} {s.discard(1)} {s.len()}")
+
+    let c: byte = '7'
+    let sp1: byte = ' '
+    println("{c.isdigit()} {c.isalpha()} {sp1.isspace()}")
+}
