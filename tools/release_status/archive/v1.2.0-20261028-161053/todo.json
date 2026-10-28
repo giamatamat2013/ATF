@@ -1,0 +1,9 @@
+[{"text": "גרסה 1.2.0 בחמשת מקומות הגרסה ובכל הסקריפטים", "state": "done"},
+ {"text": "קובץ הערות השחרור docs/release-notes-v1.2.0.md", "state": "done"},
+ {"text": "בנייה מחדש של הקומפיילר לנקודה קבועה", "state": "done"},
+ {"text": "commit ו-push ל-master (49b5819)", "state": "done"},
+ {"text": "בדיקות מקומיות: qa נחסם על ידי Windows Defender, ממתין להחלטה", "state": "run"},
+ {"text": "הפעלת release.yml ומעקב אחרי ה-workflow", "state": "todo"},
+ {"text": "בדיקת שני קבצי הנכסים בפרסום", "state": "todo"},
+ {"text": "סגירת נושאים שהגרסה תיקנה (לא נמצאו)", "state": "todo"},
+ {"text": "סיום הלוח", "state": "todo"}]
