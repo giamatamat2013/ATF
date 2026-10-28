@@ -32,13 +32,13 @@ let KEYWORDS: {str: bool} = make_set([
 let CONTINUERS: {str: bool} = make_set([
     "+", "-", "*", "/", "%", "=", "&", "|", "^", ",", "(", "[", ".", "==", "!=", "<=", ">=", "&&", "||",
     "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "->", "=>", "..", "::", "??", "**", "..=", "<<=", ">>=",
-    "**=", "and", "or", "not", "in", "as", ":"
+    "**=", "and", "or", "not", "in", "as", ":", "|>"
 ])
 
 let OPS3: {str: bool} = make_set(["..=", "<<=", ">>>", ">>=", "**="])
 let OPS2: {str: bool} = make_set([
     "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
-    "<<", ">>", "->", "=>", "..", "::", "??", "**"
+    "<<", ">>", "->", "=>", "..", "::", "??", "**", "|>"
 ])
 let OPS1: {str: bool} = make_set([
     "+", "-", "*", "/", "%", "=", "<", ">", "!", "&", "|", "^", "~", "(", ")", "[", "]", "\{", "}", ",", ":", ";",
@@ -217,7 +217,7 @@ fn tokenize(src: str, file: str) -> [Token] {
             } else if (last!.kind == TokKind.Op or last!.kind == TokKind.Kw) and last!.val in CONTINUERS {
                 sig = false
             } else {
-                if starts_at(src, "&&", i) or starts_at(src, "||", i) or starts_at(src, "??", i) { sig = false }
+                if starts_at(src, "&&", i) or starts_at(src, "||", i) or starts_at(src, "??", i) or starts_at(src, "|>", i) { sig = false }
                 if c == '.' and not starts_at(src, "..", i) { sig = false }
             }
             if sig and last != nil and last!.kind != TokKind.Newline {

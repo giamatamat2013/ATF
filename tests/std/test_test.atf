@@ -23,8 +23,24 @@ fn main() -> int {
         println(1 / z)
     })
     expect_panics("no panic here", || { println("quiet") })
+
+    // property tests: random values, so the seed keeps the output the same on every run
+    rand_seed(7)
+    test_property("reversing twice gives the list back", any_int_list(), |a| a.reversed().reversed() == a)
+    test_property("sorted is in order", any_int_list(max_len: 30), |a| {
+        let s = a.sorted()
+        for i in 1..s.len() { if s[i - 1] > s[i] { return false } }
+        return true
+    })
+    test_property("upper keeps the length", any_str(), |s| s.upper().len() == s.len())
+    test_property("floats stay in range", any_float(0.0, 1.0), |f| f >= 0.0 and f < 1.0, runs: 500)
+    test_property("not of not", any_bool(), |b| (not not b) == b)
+    test_property("any_of picks from the list", any_of(["a", "b"]), |s| s == "a" or s == "b")
+    test_property("every int is small (fails)", any_int(0, 1000), |n| n < 500)
+    test_property("a panic is a failure", any_int(0, 0), |n| 10 / n > 0)
+
     println("count:", test_count, "failed:", test_failed_count)
     let code = test_report()
-    if test_count == 6 and test_failed_count == 3 and code == 1 { return 0 }
+    if test_count == 14 and test_failed_count == 5 and code == 1 { return 0 }
     return 1
 }

@@ -55,14 +55,18 @@ total: 5.25
   A "hello world" program is a 17 KB `.exe`.
 - **Many features.** Structs with methods and field defaults, enums with data and `match` (checked for
   missing cases), generics, closures, interfaces, optional values (`int?`) and `Result` errors with `?`,
-  operator overloading, string interpolation with formatting, list comprehensions, modules, `defer`,
+  operator overloading, string interpolation with formatting, list comprehensions, the pipe
+  (`text |> str.trim |> parse`, where `x |> f(a)` means `f(x, a)`), modules, `defer`,
   labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
   XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`),
-  file name patterns (`std/glob`), a test framework (`std/test`), and the Python-style tools for whole programs:
+  file name patterns (`std/glob`), a test framework with property tests on random values (`std/test`),
+  colors, progress bars and boxes in the console (`std/term`), Markdown to HTML (`std/markdown`),
+  version numbers and rules like `^1.2` (`std/semver`), questions to Claude, Anthropic's AI model (`std/ai`),
+  and the Python-style tools for whole programs:
   command-line parsing (`std/args`, like argparse), leveled logging (`std/log`), text helpers (`std/text`:
   wrap, title, snake_case, templates, tables), number theory and statistics (`std/math`), and algorithms from
   C++, itertools and JavaScript (`std/algo`: binary search, permutations, combinations, group_by, flatten, set operations), Python's `random` extras

@@ -865,6 +865,10 @@
           "match": "->|=>"
         },
         {
+          "name": "keyword.operator.pipe.atf",
+          "match": "\\|>"
+        },
+        {
           "name": "keyword.operator.nil-coalescing.atf",
           "match": "\\?\\?"
         },

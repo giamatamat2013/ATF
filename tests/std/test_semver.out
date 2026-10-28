@@ -1,0 +1,48 @@
+ok   plain: 1.4.2
+ok   leading v: 2.0.0
+ok   pre-release: 1.0.0-beta.2
+ok   build ignored: 1.0.0
+ok   pre and build: 3.1.4-rc.1
+ok   two parts: Err('1.2' is not a version: write MAJOR.MINOR.PATCH, like 1.4.2)
+ok   letters: Err('a' in '1.a.3' is not a whole number)
+ok   empty pre: Err(empty pre-release after '-' in '1.2.3-')
+ok   valid: true
+ok   not valid: false
+ok   numbers not text: true
+ok   patch: true
+ok   equal: true
+ok   pre before release: true
+ok   alpha before beta: true
+ok   pre numbers: true
+ok   number before word: true
+ok   shorter pre first: true
+ok   sort: 1.0.0-rc.1, 1.0.0, 1.2.0, 1.10.0, 2.0.0
+ok   is_prerelease: true
+ok   bump major: 2.0.0
+ok   bump minor: 1.5.0
+ok   bump patch: 1.4.3
+ok   '1.4.2' fits '^1.2': true
+ok   '2.0.0' fits '^1.2': false
+ok   '1.1.9' fits '^1.2': false
+ok   '0.2.5' fits '^0.2.1': true
+ok   '0.3.0' fits '^0.2.1': false
+ok   '0.0.3' fits '^0.0.3': true
+ok   '0.0.4' fits '^0.0.3': false
+ok   '1.4.9' fits '~1.4.2': true
+ok   '1.5.0' fits '~1.4.2': false
+ok   '1.9.0' fits '~1': true
+ok   '1.5.0' fits '>=1.0 <2.0': true
+ok   '2.0.0' fits '>=1.0 <2.0': false
+ok   '1.0.0' fits '>1.0.0': false
+ok   '1.4.7' fits '1.4.x': true
+ok   '1.5.0' fits '1.x': true
+ok   '2.0.0' fits '1.x': false
+ok   '1.4.2' fits '1.4.2': true
+ok   '1.4.3' fits '=1.4.2': false
+ok   '9.9.9' fits '*': true
+ok   '2.1.0' fits '^1.0 || ^2.0': true
+ok   '3.0.0' fits '^1.0 || ^2.0': false
+ok   '1.0.0' fits '<=1.0.0': true
+ok   'bad' fits '*': false
+ok   '1.0.0' fits '^bad': false
+all passed

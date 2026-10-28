@@ -1,0 +1,34 @@
+// the pipe operator:  x |> f(a)  is  f(x, a)
+
+fn double(x: int) -> int => x * 2
+fn add(x: int, y: int) -> int => x + y
+fn keep_even(a: [int]) -> [int] => a.filter(|x| x % 2 == 0)
+fn total(a: [int]) -> int => a.sum()
+fn greet(name: str, greeting: str = "Hello") -> str => "{greeting}, {name}!"
+
+fn main() {
+    println(5 |> double)
+    println(5 |> add(10))
+    println(5 |> double |> add(1) |> double)
+
+    // a pipeline over several lines reads top to bottom
+    let result = [1, 2, 3, 4, 5, 6]
+        |> keep_even
+        |> total
+    println(result)
+
+    // methods and named arguments work too
+    println("ada" |> greet(greeting: "Hi"))
+    println("  padded  " |> str.trim)
+    let words = ["b", "a", "c"]
+    println(words |> sorted)
+
+    // a closure on the right
+    let triple = |x: int| x * 3
+    println(4 |> triple)
+
+    // binds looser than everything else
+    println(2 + 3 |> double)
+    let n: int? = nil
+    println(n ?? 7 |> double)
+}

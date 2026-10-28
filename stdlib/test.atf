@@ -9,6 +9,7 @@
 //       })
 //       test("a panic is a failure", || { expect_eq([1, 2][0], 1) })
 //       expect_panics("division by zero", || { let z = 0; println(1 / z) })
+//       test_property("abs is never negative", any_int(), |n| abs(n) >= 0)   // 100 random values
 //       return test_report()          // prints a summary, returns 0 when everything passed (else 1)
 //   }
 //
@@ -67,6 +68,61 @@ fn expect_panics(name: str, f: fn()) {
     } else {
         println("ok   {name}")
     }
+}
+
+// Runs a test called name that makes `runs` random values with make and checks that holds is true
+// for every one. The first value that breaks it (holds is false or panics) fails the test and is shown.
+//   test_property("reversing twice gives the list back", any_int_list(), |a| a.reversed().reversed() == a)
+fn test_property<T>(name: str, make: fn() -> T, holds: fn(T) -> bool, runs: int = 100) {
+    test(name, || {
+        for i in 0..runs {
+            let value = make()
+            var ok = false
+            let p = catch_panic(|| { ok = holds(value) })
+            if p != nil {
+                test_fail("run {i + 1}: panic for {value}: {p!}")
+                return
+            }
+            if not ok {
+                test_fail("run {i + 1}: not true for {value}")
+                return
+            }
+        }
+    })
+}
+
+// makes random ints from lo to hi (both included), for test_property
+fn any_int(lo: int = -1000, hi: int = 1000) -> fn() -> int {
+    return || rand_int(lo, hi)
+}
+
+// makes random true / false values, for test_property
+fn any_bool() -> fn() -> bool {
+    return || rand_int(0, 1) == 1
+}
+
+// makes random floats from lo up to hi, for test_property
+fn any_float(lo: float = -1000.0, hi: float = 1000.0) -> fn() -> float {
+    return || lo + rand_float() * (hi - lo)
+}
+
+// makes random text up to max_len letters long, using the letters in `letters`, for test_property
+fn any_str(max_len: int = 10, letters: str = "abcdefghijklmnopqrstuvwxyz ") -> fn() -> str {
+    return || {
+        var sb = str_builder()
+        for _ in 0..rand_int(0, max_len) { sb.add(letters[rand_int(0, letters.len() - 1)]) }
+        return sb.finish()
+    }
+}
+
+// makes random int lists up to max_len long, with ints from lo to hi, for test_property
+fn any_int_list(max_len: int = 10, lo: int = -100, hi: int = 100) -> fn() -> [int] {
+    return || [rand_int(lo, hi) for _ in 0..rand_int(0, max_len)]
+}
+
+// makes random values by picking one from the list, for test_property
+fn any_of<T>(choices: [T]) -> fn() -> T {
+    return || choices[rand_int(0, choices.len() - 1)]
 }
 
 // prints how many tests ran and failed; returns 0 when all passed and 1 otherwise (use it as the exit code of main)

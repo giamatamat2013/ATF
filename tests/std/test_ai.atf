@@ -1,0 +1,50 @@
+// tests for std/ai (offline: they check the request text and the reading of answers, never the network)
+import "std/ai"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}")
+    } else {
+        failures += 1
+        println("FAIL {label}:\n  got  {got}\n  want {want}")
+    }
+}
+
+fn show(r: Result<str, str>) -> str {
+    return match r {
+        Result.Ok(v) => "Ok(" + v + ")"
+        Result.Err(e) => "Err(" + e + ")"
+    }
+}
+
+fn main() -> int {
+    // the request
+    check("simple request", ai_request_body("claude-haiku-5-5", "", [AiMessage("user", "Hi")], 100),
+        "\{\"model\":\"claude-haiku-5-5\",\"max_tokens\":100,\"messages\":[\{\"role\":\"user\",\"content\":\"Hi\"}]}")
+    check("system and history", ai_request_body("claude-haiku-5-5", "Be brief.",
+            [AiMessage("user", "a \"q\""), AiMessage("assistant", "b"), AiMessage("user", "שלום")], 50),
+        "\{\"model\":\"claude-haiku-5-5\",\"max_tokens\":50,\"system\":\"Be brief.\",\"messages\":[" +
+        "\{\"role\":\"user\",\"content\":\"a \\\"q\\\"\"},\{\"role\":\"assistant\",\"content\":\"b\"},\{\"role\":\"user\",\"content\":\"שלום\"}]}")
+    check("default model has fallbacks", ai_request_body("claude-opus-5-5", "", [AiMessage("user", "x")], 10),
+        "\{\"model\":\"claude-opus-5-5\",\"max_tokens\":10,\"messages\":[\{\"role\":\"user\",\"content\":\"x\"}],\"fallbacks\":\"default\"}")
+
+    // reading answers
+    let reply = "\{\"type\":\"message\",\"role\":\"assistant\",\"content\":[" +
+        "\{\"type\":\"thinking\",\"thinking\":\"\"},\{\"type\":\"text\",\"text\":\"Paris\"},\{\"type\":\"text\",\"text\":\" is it.\"}]," +
+        "\"stop_reason\":\"end_turn\"}"
+    check("text blocks joined", show(ai_read_reply(200, reply)), "Ok(Paris is it.)")
+    check("api error", show(ai_read_reply(401, "\{\"type\":\"error\",\"error\":\{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}")),
+        "Err(HTTP 401: authentication_error: invalid x-api-key)")
+    check("not json", show(ai_read_reply(502, "Bad Gateway")), "Err(HTTP 502: the answer is not JSON: Bad Gateway)")
+    check("refusal", show(ai_read_reply(200, "\{\"content\":[],\"stop_reason\":\"refusal\"}")), "Err(Claude declined to answer this request)")
+    check("empty content", show(ai_read_reply(200, "\{\"content\":[],\"stop_reason\":\"end_turn\"}")), "Ok()")
+
+    // a new conversation
+    let chat = ai_chat("Be kind.")
+    check("chat starts empty", "{chat.messages.len()} {chat.model} {chat.system}", "0 claude-opus-5-5 Be kind.")
+
+    if failures > 0 { println("{failures} FAILED") } else { println("all passed") }
+    return if failures > 0 { 1 } else { 0 }
+}

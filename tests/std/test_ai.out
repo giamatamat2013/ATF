@@ -1,0 +1,10 @@
+ok   simple request
+ok   system and history
+ok   default model has fallbacks
+ok   text blocks joined
+ok   api error
+ok   not json
+ok   refusal
+ok   empty content
+ok   chat starts empty
+all passed

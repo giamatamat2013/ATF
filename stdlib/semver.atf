@@ -1,0 +1,168 @@
+// std/semver - version numbers like 1.4.2 (semantic versioning): read, compare, raise and match.
+//
+//   import "std/semver"
+//   let v = semver_parse("1.4.2").unwrap()
+//   println(v.bump_minor())                          // 1.5.0
+//   println(v < semver_parse("1.10.0").unwrap())     // true (numbers, not text, are compared)
+//   println(semver_matches("1.4.2", "^1.2"))         // true: 1.2.0 or newer, but below 2.0.0
+//   println(semver_matches("2.0.0", ">=1.0 <2.0"))   // false
+//
+// A version is MAJOR.MINOR.PATCH, optionally with a leading "v", a pre-release ("-beta.1", which comes
+// before the release itself) and build data ("+abc", which is ignored).
+
+struct SemVer {
+    major: int,
+    minor: int,
+    patch: int,
+    pre: str = ""                 // the pre-release part without the "-", "" for a release
+}
+
+impl SemVer {
+    fn to_str(self) -> str {
+        if self.pre == "" { return "{self.major}.{self.minor}.{self.patch}" }
+        return "{self.major}.{self.minor}.{self.patch}-{self.pre}"
+    }
+
+    // negative, 0 or positive as self is older than, the same as, or newer than other
+    fn cmp(self, other: SemVer) -> int {
+        if self.major != other.major { return self.major - other.major }
+        if self.minor != other.minor { return self.minor - other.minor }
+        if self.patch != other.patch { return self.patch - other.patch }
+        return semver_cmp_pre(self.pre, other.pre)
+    }
+
+    fn is_prerelease(self) -> bool => self.pre != ""
+
+    // the next major version: 1.4.2 -> 2.0.0
+    fn bump_major(self) -> SemVer => SemVer(self.major + 1, 0, 0)
+    // the next minor version: 1.4.2 -> 1.5.0
+    fn bump_minor(self) -> SemVer => SemVer(self.major, self.minor + 1, 0)
+    // the next patch version: 1.4.2 -> 1.4.3
+    fn bump_patch(self) -> SemVer => SemVer(self.major, self.minor, self.patch + 1)
+}
+
+// compares two pre-release parts: "" (a release) is newest, number parts compare as numbers
+fn semver_cmp_pre(a: str, b: str) -> int {
+    if a == b { return 0 }
+    if a == "" { return 1 }
+    if b == "" { return -1 }
+    let pa = a.split(".")
+    let pb = b.split(".")
+    for i in 0..min(pa.len(), pb.len()) {
+        if pa[i] == pb[i] { continue }
+        let na = pa[i].parse_int()
+        let nb = pb[i].parse_int()
+        if na != nil and nb != nil { return na! - nb! }
+        if na != nil { return -1 }              // a number comes before a word
+        if nb != nil { return 1 }
+        return if pa[i] < pb[i] { -1 } else { 1 }
+    }
+    return pa.len() - pb.len()
+}
+
+// a whole number with no sign, or nil
+fn semver_number(s: str) -> int? {
+    if s == "" { return nil }
+    for i in 0..s.len() {
+        if not s.byte_at(i).is_digit() { return nil }
+    }
+    return s.parse_int()
+}
+
+// reads a version such as "1.4.2", "v2.0.0-beta.1" or "1.0.0+build.5"
+fn semver_parse(text: str) -> Result<SemVer, str> {
+    var s = text.trim()
+    if s.starts_with("v") or s.starts_with("V") { s = s[1..] }
+    let plus = s.find("+")
+    if plus >= 0 { s = s[..plus] }
+    var pre = ""
+    let dash = s.find("-")
+    if dash >= 0 {
+        pre = s[dash + 1..]
+        s = s[..dash]
+        if pre == "" { return Result.Err("empty pre-release after '-' in '{text}'") }
+    }
+    let parts = s.split(".")
+    if parts.len() != 3 { return Result.Err("'{text}' is not a version: write MAJOR.MINOR.PATCH, like 1.4.2") }
+    var nums: [int] = []
+    for p in parts {
+        let n = semver_number(p)
+        if n == nil { return Result.Err("'{p}' in '{text}' is not a whole number") }
+        nums.push(n!)
+    }
+    return Result.Ok(SemVer(nums[0], nums[1], nums[2], pre))
+}
+
+// true when the version text is a valid version
+fn semver_valid(text: str) -> bool => semver_parse(text).is_ok()
+
+// Reads the version in a rule, where parts may be missing or x / *: "1.2" or "1.x".
+// Returns the version (missing parts are 0) and how many parts were given.
+fn semver_partial(text: str) -> Result<(SemVer, int), str> {
+    var s = text.trim()
+    if s.starts_with("v") { s = s[1..] }
+    if s == "" or s == "*" or s == "x" or s == "X" { return Result.Ok((SemVer(0, 0, 0), 0)) }
+    let full = semver_parse(s)
+    if full.is_ok() { return Result.Ok((full.unwrap(), 3)) }
+    let parts = s.split(".")
+    if parts.len() > 3 { return Result.Err("'{text}' has too many parts") }
+    var nums = [0, 0, 0]
+    var given = 0
+    for p in parts {
+        if p == "x" or p == "X" or p == "*" { break }
+        let n = semver_number(p)
+        if n == nil { return Result.Err("'{p}' in '{text}' is not a whole number") }
+        nums[given] = n!
+        given += 1
+    }
+    return Result.Ok((SemVer(nums[0], nums[1], nums[2]), given))
+}
+
+// true when v fits one rule such as "^1.2", "~1.4.0", ">=2.0.0", "<3", "1.x" or "1.4.2"
+fn semver_fits(v: SemVer, rule: str) -> Result<bool, str> {
+    var op = ""
+    for o in [">=", "<=", ">", "<", "=", "^", "~"] {
+        if rule.starts_with(o) {
+            op = o
+            break
+        }
+    }
+    let (base, given) = semver_partial(rule[op.len()..])?
+    if given == 0 { return Result.Ok(op == "" or op == "=" or op == ">=" or op == "<=") }
+    if op == ">=" { return Result.Ok(v >= base) }
+    if op == ">" { return Result.Ok(v > base) }
+    if op == "<=" { return Result.Ok(v <= base) }
+    if op == "<" { return Result.Ok(v < base) }
+    var upper = base.bump_major()
+    if op == "^" {
+        // the same left-most number that is not zero
+        if base.major == 0 and given >= 2 {
+            upper = if base.minor == 0 and given == 3 { base.bump_patch() } else { base.bump_minor() }
+        }
+    } else if op == "~" {
+        if given >= 2 { upper = base.bump_minor() }
+    } else {
+        // "1.4.2" is that exact version; "1.4" and "1.x" are every version that starts that way
+        if given == 3 { return Result.Ok(v == base) }
+        if given == 2 { upper = base.bump_minor() }
+    }
+    return Result.Ok(v >= base and v < upper)
+}
+
+// True when the version fits the rule. Rules separated by spaces must all fit (">=1.2 <2"), and
+// "||" gives alternatives ("^1.0 || ^2.0"). A version or a rule that cannot be read gives false.
+fn semver_matches(version: str, rule: str) -> bool {
+    let v = semver_parse(version)
+    if v.is_err() { return false }
+    for alternative in rule.split("||") {
+        var all = true
+        for part in alternative.split_whitespace() {
+            match semver_fits(v.unwrap(), part) {
+                Result.Ok(fits) => { if not fits { all = false } }
+                Result.Err(_) => return false
+            }
+        }
+        if all { return true }
+    }
+    return false
+}

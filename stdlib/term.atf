@@ -1,0 +1,134 @@
+// std/term - colors, bold text, progress bars and boxes for programs that run in a terminal.
+//
+//   import "std/term"
+//   println(red("error:") + " file not found")
+//   println(bold(green("done")))
+//   println(progress_bar(3, 10))                // [######--------------]  30%
+//   print(boxed("Hello\nWorld"))
+//   for i in 0..=100 { print_same_line(progress_bar(i, 100)) }   // one bar that fills up
+//
+// Colors are ANSI escape codes. The first colored call turns them on in the Windows console.
+// They are left out (plain text) when the output goes to a file or a pipe, or when the NO_COLOR
+// environment variable is set. term_use_colors(true / false) decides it yourself.
+
+extern "kernel32" fn term_get_std_handle(which: int) -> int as "GetStdHandle"
+extern "kernel32" fn term_get_console_mode(h: int, mode: ptr<int>) -> i32 as "GetConsoleMode"
+extern "kernel32" fn term_set_console_mode(h: int, mode: int) -> i32 as "SetConsoleMode"
+
+var term_colors_state = -1              // -1 not decided yet, 0 off, 1 on
+
+// turns colors on or off for every function in this module
+fn term_use_colors(on: bool) { term_colors_state = if on { 1 } else { 0 } }
+
+// true when the functions in this module add colors
+fn term_colors_on() -> bool {
+    if term_colors_state < 0 {
+        term_colors_state = 0
+        let no_color = getenv("NO_COLOR") ?? ""
+        if no_color == "" {
+            let h = term_get_std_handle(-11)                 // the standard output
+            let mode = __alloc(8) as ptr<int>
+            mode[0] = 0
+            if term_get_console_mode(h, mode) != 0 {          // fails when the output is a file or a pipe
+                term_set_console_mode(h, (mode[0] & 0xFFFFFFFF) | 4)   // 4 = ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                term_colors_state = 1
+            }
+        }
+    }
+    return term_colors_state == 1
+}
+
+// text wrapped in the ANSI code `code` (for example "1" for bold, "31" for red)
+fn term_paint(text: str, code: str) -> str {
+    if not term_colors_on() { return text }
+    return "\x1b[" + code + "m" + text + "\x1b[0m"
+}
+
+fn red(text: str) -> str => term_paint(text, "31")
+fn green(text: str) -> str => term_paint(text, "32")
+fn yellow(text: str) -> str => term_paint(text, "33")
+fn blue(text: str) -> str => term_paint(text, "34")
+fn magenta(text: str) -> str => term_paint(text, "35")
+fn cyan(text: str) -> str => term_paint(text, "36")
+fn gray(text: str) -> str => term_paint(text, "90")
+fn bold(text: str) -> str => term_paint(text, "1")
+fn dim(text: str) -> str => term_paint(text, "2")
+fn italic(text: str) -> str => term_paint(text, "3")
+fn underline(text: str) -> str => term_paint(text, "4")
+
+// text in one of the 256 terminal colors (0-15 the basic ones, 16-231 a 6x6x6 color cube, 232-255 grays)
+fn color(text: str, n: int) -> str => term_paint(text, "38;5;{n}")
+
+// text in an exact color, given as red, green and blue from 0 to 255
+fn color_rgb(text: str, r: int, g: int, b: int) -> str => term_paint(text, "38;2;{r};{g};{b}")
+
+// text on a background in one of the 256 terminal colors
+fn background(text: str, n: int) -> str => term_paint(text, "48;5;{n}")
+
+// the text without any ANSI codes
+fn strip_colors(s: str) -> str {
+    var sb = str_builder()
+    let n = s.len()
+    var i = 0
+    while i < n {
+        let c = s.byte_at(i)
+        if c == 27 and i + 1 < n and s.byte_at(i + 1) == '[' {
+            i += 2
+            while i < n and not (s.byte_at(i) >= 64 and s.byte_at(i) <= 126) { i += 1 }
+            i += 1
+            continue
+        }
+        sb.add_byte(c)
+        i += 1
+    }
+    return sb.finish()
+}
+
+// how many letters the text shows on the screen: ANSI codes are not counted and a UTF-8 letter counts once
+fn visible_len(s: str) -> int {
+    let plain = strip_colors(s)
+    var count = 0
+    for i in 0..plain.len() {
+        let c = plain.byte_at(i)
+        if c < 128 or c >= 192 { count += 1 }
+    }
+    return count
+}
+
+// A bar that shows how much of a job is done: progress_bar(3, 10) is "[######--------------]  30%".
+// width is the number of characters between the brackets.
+fn progress_bar(done: int, total: int, width: int = 20) -> str {
+    var part = 0.0
+    if total > 0 { part = float(done) / float(total) }
+    if part < 0.0 { part = 0.0 }
+    if part > 1.0 { part = 1.0 }
+    let filled = int(part * float(width))
+    let percent = int(part * 100.0)
+    return "[" + "#" * filled + "-" * (width - filled) + "] " + "{percent:>3}%"
+}
+
+// prints text over the current line (use it to redraw a progress bar in place)
+fn print_same_line(text: str) {
+    if term_colors_on() {
+        print("\r" + text + "\x1b[K")
+    } else {
+        print("\r" + text)
+    }
+    flush()
+}
+
+// the text inside a frame drawn with + - and |, one frame line per text line, ending with a newline
+fn boxed(text: str, padding: int = 1) -> str {
+    let rows = text.lines()
+    var widest = 0
+    for r in rows { widest = max(widest, visible_len(r)) }
+    let pad = " " * padding
+    let edge = "+" + "-" * (widest + padding * 2) + "+\n"
+    var sb = str_builder()
+    sb.add(edge)
+    for r in rows {
+        sb.add("|" + pad + r + " " * (widest - visible_len(r)) + pad + "|\n")
+    }
+    sb.add(edge)
+    return sb.finish()
+}

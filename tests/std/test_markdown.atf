@@ -1,0 +1,53 @@
+// tests for std/markdown
+import "std/markdown"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}")
+    } else {
+        failures += 1
+        println("FAIL {label}:\n  got  {quote_str(got)}\n  want {quote_str(want)}")
+    }
+}
+
+fn main() -> int {
+    // inline
+    check("plain", markdown_inline("hello"), "hello")
+    check("bold", markdown_inline("a **b** c"), "a <strong>b</strong> c")
+    check("bold underscores", markdown_inline("__b__"), "<strong>b</strong>")
+    check("italic", markdown_inline("*i* and _j_"), "<em>i</em> and <em>j</em>")
+    check("snake_case stays", markdown_inline("my_var_name"), "my_var_name")
+    check("bold italic", markdown_inline("**a *b* c**"), "<strong>a <em>b</em> c</strong>")
+    check("code", markdown_inline("use `a < b` here"), "use <code>a &lt; b</code> here")
+    check("code keeps stars", markdown_inline("`**x**`"), "<code>**x**</code>")
+    check("link", markdown_inline("see [the **docs**](https://x.org/a?b=1&c=2)"),
+        "see <a href=\"https://x.org/a?b=1&amp;c=2\">the <strong>docs</strong></a>")
+    check("image", markdown_inline("![a cat](cat.png)"), "<img src=\"cat.png\" alt=\"a cat\">")
+    check("escape html", markdown_inline("<b> & \"q\""), "&lt;b&gt; &amp; &quot;q&quot;")
+    check("backslash", markdown_inline("\\*not italic\\*"), "*not italic*")
+    check("lone star", markdown_inline("2 * 3"), "2 * 3")
+    check("unclosed link", markdown_inline("[x"), "[x")
+
+    // blocks
+    check("empty", markdown_to_html(""), "")
+    check("heading", markdown_to_html("# Title"), "<h1>Title</h1>\n")
+    check("h3", markdown_to_html("### Small *one*"), "<h3>Small <em>one</em></h3>\n")
+    check("not a heading", markdown_to_html("#hashtag"), "<p>#hashtag</p>\n")
+    check("paragraphs", markdown_to_html("one\ntwo\n\nthree"), "<p>one\ntwo</p>\n<p>three</p>\n")
+    check("rule", markdown_to_html("a\n\n---\n\nb"), "<p>a</p>\n<hr>\n<p>b</p>\n")
+    check("list", markdown_to_html("- a\n- **b**\n* c"), "<ul>\n<li>a</li>\n<li><strong>b</strong></li>\n<li>c</li>\n</ul>\n")
+    check("numbered", markdown_to_html("1. first\n2. second"), "<ol>\n<li>first</li>\n<li>second</li>\n</ol>\n")
+    check("list after text", markdown_to_html("Items:\n- a\n- b"), "<p>Items:</p>\n<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n")
+    check("two lists", markdown_to_html("- a\n1. b"), "<ul>\n<li>a</li>\n</ul>\n<ol>\n<li>b</li>\n</ol>\n")
+    check("code block", markdown_to_html("```atf\nlet x = 1 < 2\n\n**no**\n```\nafter"),
+        "<pre><code class=\"language-atf\">let x = 1 &lt; 2\n\n**no**</code></pre>\n<p>after</p>\n")
+    check("quote", markdown_to_html("> said **this**\n> and that"),
+        "<blockquote>\n<p>said <strong>this</strong>\nand that</p>\n</blockquote>\n")
+    check("crlf", markdown_to_html("# A\r\n\r\nb\r\n"), "<h1>A</h1>\n<p>b</p>\n")
+    check("hebrew", markdown_to_html("## שלום **עולם**"), "<h2>שלום <strong>עולם</strong></h2>\n")
+
+    if failures > 0 { println("{failures} FAILED") } else { println("all passed") }
+    return if failures > 0 { 1 } else { 0 }
+}

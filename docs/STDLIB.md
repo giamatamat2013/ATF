@@ -22,6 +22,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [Sets](#sets)
   - [Files, time, random](#files-time-random)
 - Modules
+  - [std/ai](#stdai)
   - [std/algo](#stdalgo)
   - [std/app](#stdapp)
   - [std/args](#stdargs)
@@ -40,12 +41,15 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/ini](#stdini)
   - [std/json](#stdjson)
   - [std/log](#stdlog)
+  - [std/markdown](#stdmarkdown)
   - [std/math](#stdmath)
   - [std/net](#stdnet)
   - [std/path](#stdpath)
   - [std/process](#stdprocess)
   - [std/random](#stdrandom)
   - [std/regex](#stdregex)
+  - [std/semver](#stdsemver)
+  - [std/term](#stdterm)
   - [std/test](#stdtest)
   - [std/text](#stdtext)
   - [std/toml](#stdtoml)
@@ -407,6 +411,68 @@ These are part of the language itself (they accept values of any printable type 
 - `fn rand_float() -> float` - random float in [0, 1)
 - `fn rand_choice<T>(a: [T]) -> T` - a random element of a; panics when a is empty
 - `fn shuffle<T>(a: [T])` - puts the elements of a in random order, in place
+
+## std/ai
+
+Ask Claude (Anthropic's AI model) a question from an ATF program.
+
+```text
+import "std/ai"
+
+match ai_ask("Write a haiku about compilers") {
+    Result.Ok(answer) => println(answer)
+    Result.Err(e) => println("failed: " + e)
+}
+
+let chat = ai_chat("You are a short, friendly helper.")    // a conversation that remembers
+println(chat.say("My name is Dana.") ?? "")
+println(chat.say("What is my name?") ?? "")
+```
+
+It needs an API key in the ANTHROPIC_API_KEY environment variable (get one at console.anthropic.com).
+Every call goes over the internet and costs money on that key. The default model is claude-opus-5-5.
+
+**Constants**
+
+- `AI_URL = "https://api.anthropic.com/v1/messages"`
+- `AI_API_VERSION = "2026-10-21"`
+- `AI_DEFAULT_MODEL = "claude-opus-5-5"`
+
+**Types**
+
+one turn of a conversation: role is "user" (you) or "assistant" (Claude)
+
+```text
+struct AiMessage {
+    role: str,
+    text: str
+}
+```
+
+a conversation that keeps its history, so Claude remembers what was said before
+
+```text
+struct AiChat {
+    system: str,
+    model: str,
+    messages: [AiMessage]
+}
+```
+
+
+**Functions**
+
+- `fn ai_request_body(model: str, system: str, messages: [AiMessage], max_tokens: int = 16000) -> str` - The JSON text of a request to the Messages API. system may be "". Exposed so a program (or a test) can see exactly what would be sent.
+- `fn ai_has_fallback(model: str) -> bool` - true for the models that accept "fallbacks": "default"
+- `fn ai_read_reply(status: int, body: str) -> Result<str, str>` - Reads the service's answer: Ok(the text Claude wrote) or Err(a readable reason). Exposed so it can be tested without the network.
+- `fn ai_send(messages: [AiMessage], system: str = "", model: str = AI_DEFAULT_MODEL, max_tokens: int = 16000) -> Result<str, str>` - Sends a whole conversation and returns Claude's next reply.
+- `fn ai_ask(question: str, system: str = "", model: str = AI_DEFAULT_MODEL) -> Result<str, str>` - Asks one question (no memory of earlier questions) and returns the answer.
+- `fn ai_chat(system: str = "", model: str = AI_DEFAULT_MODEL) -> AiChat` - starts a conversation; system describes how Claude should behave ("" for none)
+
+**Methods of `AiChat`**
+
+- `.say(text: str) -> str?` - sends text and returns the reply (nil when the request failed; use send for the reason)
+- `.send(text: str) -> Result<str, str>` - sends text and returns Ok(reply) or Err(reason); a failed turn is not kept in the history
 
 ## std/algo
 
@@ -1688,6 +1754,32 @@ Lines go to standard error unless log_to_stdout(true) is called. Messages below 
 - `fn log_warn(msg: str)`
 - `fn log_error(msg: str)`
 
+## std/markdown
+
+Turns Markdown text into HTML.
+
+```text
+import "std/markdown"
+let page = markdown_to_html("# Hello\n\nThis is **bold**, *italic* and `code`.")
+// <h1>Hello</h1>
+// <p>This is <strong>bold</strong>, <em>italic</em> and <code>code</code>.</p>
+```
+
+Supported: headings (#), paragraphs, **bold**, *italic*, `code`, [links](url), ![images](src),
+lists (- item, * item, 1. item), > quotes, ``` code blocks ```, --- lines, and \ before a
+character to show it as it is. Text is HTML-escaped, so < and & are safe to write.
+
+**Functions**
+
+- `fn md_escape(s: str) -> str` - < > & and " written as HTML entities
+- `fn md_is_word_byte(c: byte) -> bool`
+- `fn markdown_inline(s: str) -> str` - the HTML for one line or paragraph of Markdown text (bold, italic, code, links and images)
+- `fn md_heading_level(line: str) -> int` - the level (1-6) of a "# heading" line, or 0
+- `fn md_is_rule(line: str) -> bool` - true for a line of three or more -, * or _ (a horizontal line)
+- `fn md_list_item(line: str) -> (str, bool)?` - the text of a list item and whether the list is numbered, or nil when the line is not a list item
+- `fn md_starts_block(line: str) -> bool`
+- `fn markdown_to_html(text: str) -> str` - the HTML for a whole Markdown document, one block (heading, paragraph, list, ...) per line
+
 ## std/math
 
 Number theory helpers (like Python's math) and descriptive statistics (like Python's statistics).
@@ -2001,6 +2093,95 @@ struct RxState {
 - `.replace_with(s: str, f: fn(RxMatch) -> str) -> str` - replaces every match with whatever f returns for it
 - `.split(s: str) -> [str]` - the pieces of s between the matches
 
+## std/semver
+
+Version numbers like 1.4.2 (semantic versioning): read, compare, raise and match.
+
+```text
+import "std/semver"
+let v = semver_parse("1.4.2").unwrap()
+println(v.bump_minor())                          // 1.5.0
+println(v < semver_parse("1.10.0").unwrap())     // true (numbers, not text, are compared)
+println(semver_matches("1.4.2", "^1.2"))         // true: 1.2.0 or newer, but below 2.0.0
+println(semver_matches("2.0.0", ">=1.0 <2.0"))   // false
+```
+
+A version is MAJOR.MINOR.PATCH, optionally with a leading "v", a pre-release ("-beta.1", which comes
+before the release itself) and build data ("+abc", which is ignored).
+
+**Types**
+
+```text
+struct SemVer {
+    major: int,
+    minor: int,
+    patch: int,
+    pre: str = ""                 // the pre-release part without the "-", "" for a release
+}
+```
+
+
+**Functions**
+
+- `fn semver_cmp_pre(a: str, b: str) -> int` - compares two pre-release parts: "" (a release) is newest, number parts compare as numbers
+- `fn semver_number(s: str) -> int?` - a whole number with no sign, or nil
+- `fn semver_parse(text: str) -> Result<SemVer, str>` - reads a version such as "1.4.2", "v2.0.0-beta.1" or "1.0.0+build.5"
+- `fn semver_valid(text: str) -> bool` - true when the version text is a valid version
+- `fn semver_partial(text: str) -> Result<(SemVer, int), str>` - Reads the version in a rule, where parts may be missing or x / *: "1.2" or "1.x". Returns the version (missing parts are 0) and how many parts were given.
+- `fn semver_fits(v: SemVer, rule: str) -> Result<bool, str>` - true when v fits one rule such as "^1.2", "~1.4.0", ">=2.0.0", "<3", "1.x" or "1.4.2"
+- `fn semver_matches(version: str, rule: str) -> bool` - True when the version fits the rule. Rules separated by spaces must all fit (">=1.2 <2"), and "||" gives alternatives ("^1.0 || ^2.0"). A version or a rule that cannot be read gives false.
+
+**Methods of `SemVer`**
+
+- `.to_str() -> str`
+- `.cmp(other: SemVer) -> int` - negative, 0 or positive as self is older than, the same as, or newer than other
+- `.is_prerelease() -> bool`
+- `.bump_major() -> SemVer` - the next major version: 1.4.2 -> 2.0.0
+- `.bump_minor() -> SemVer` - the next minor version: 1.4.2 -> 1.5.0
+- `.bump_patch() -> SemVer` - the next patch version: 1.4.2 -> 1.4.3
+
+## std/term
+
+Colors, bold text, progress bars and boxes for programs that run in a terminal.
+
+```text
+import "std/term"
+println(red("error:") + " file not found")
+println(bold(green("done")))
+println(progress_bar(3, 10))                // [######--------------]  30%
+print(boxed("Hello\nWorld"))
+for i in 0..=100 { print_same_line(progress_bar(i, 100)) }   // one bar that fills up
+```
+
+Colors are ANSI escape codes. The first colored call turns them on in the Windows console.
+They are left out (plain text) when the output goes to a file or a pipe, or when the NO_COLOR
+environment variable is set. term_use_colors(true / false) decides it yourself.
+
+**Functions**
+
+- `fn term_use_colors(on: bool)` - turns colors on or off for every function in this module
+- `fn term_colors_on() -> bool` - true when the functions in this module add colors
+- `fn term_paint(text: str, code: str) -> str` - text wrapped in the ANSI code `code` (for example "1" for bold, "31" for red)
+- `fn red(text: str) -> str`
+- `fn green(text: str) -> str`
+- `fn yellow(text: str) -> str`
+- `fn blue(text: str) -> str`
+- `fn magenta(text: str) -> str`
+- `fn cyan(text: str) -> str`
+- `fn gray(text: str) -> str`
+- `fn bold(text: str) -> str`
+- `fn dim(text: str) -> str`
+- `fn italic(text: str) -> str`
+- `fn underline(text: str) -> str`
+- `fn color(text: str, n: int) -> str` - text in one of the 256 terminal colors (0-15 the basic ones, 16-231 a 6x6x6 color cube, 232-255 grays)
+- `fn color_rgb(text: str, r: int, g: int, b: int) -> str` - text in an exact color, given as red, green and blue from 0 to 255
+- `fn background(text: str, n: int) -> str` - text on a background in one of the 256 terminal colors
+- `fn strip_colors(s: str) -> str` - the text without any ANSI codes
+- `fn visible_len(s: str) -> int` - how many letters the text shows on the screen: ANSI codes are not counted and a UTF-8 letter counts once
+- `fn progress_bar(done: int, total: int, width: int = 20) -> str` - A bar that shows how much of a job is done: progress_bar(3, 10) is "[######--------------]  30%". width is the number of characters between the brackets.
+- `fn print_same_line(text: str)` - prints text over the current line (use it to redraw a progress bar in place)
+- `fn boxed(text: str, padding: int = 1) -> str` - the text inside a frame drawn with + - and |, one frame line per text line, ending with a newline
+
 ## std/test
 
 A small test framework for ATF programs.
@@ -2015,6 +2196,7 @@ fn main() -> int {
     })
     test("a panic is a failure", || { expect_eq([1, 2][0], 1) })
     expect_panics("division by zero", || { let z = 0; println(1 / z) })
+    test_property("abs is never negative", any_int(), |n| abs(n) >= 0)   // 100 random values
     return test_report()          // prints a summary, returns 0 when everything passed (else 1)
 }
 ```
@@ -2031,6 +2213,13 @@ and the next test still runs. Every test prints one line, "ok" or "FAIL" followe
 - `fn expect_ne<T>(got: T, other: T)` - fails the test when got == other
 - `fn expect_near(got: float, want: float, eps: float = 0.000001)` - fails the test when two floats differ by more than eps
 - `fn expect_panics(name: str, f: fn())` - Runs f as a test called name that passes only when f panics.
+- `fn test_property<T>(name: str, make: fn() -> T, holds: fn(T) -> bool, runs: int = 100)` - Runs a test called name that makes `runs` random values with make and checks that holds is true for every one. The first value that breaks it (holds is false or panics) fails the test and is shown. test_property("reversing twice gives the list back", any_int_list(), |a| a.reversed().reversed() == a)
+- `fn any_int(lo: int = -1000, hi: int = 1000) -> fn() -> int` - makes random ints from lo to hi (both included), for test_property
+- `fn any_bool() -> fn() -> bool` - makes random true / false values, for test_property
+- `fn any_float(lo: float = -1000.0, hi: float = 1000.0) -> fn() -> float` - makes random floats from lo up to hi, for test_property
+- `fn any_str(max_len: int = 10, letters: str = "abcdefghijklmnopqrstuvwxyz ") -> fn() -> str` - makes random text up to max_len letters long, using the letters in `letters`, for test_property
+- `fn any_int_list(max_len: int = 10, lo: int = -100, hi: int = 100) -> fn() -> [int]` - makes random int lists up to max_len long, with ints from lo to hi, for test_property
+- `fn any_of<T>(choices: [T]) -> fn() -> T` - makes random values by picking one from the list, for test_property
 - `fn test_report() -> int` - prints how many tests ran and failed; returns 0 when all passed and 1 otherwise (use it as the exit code of main)
 
 ## std/text

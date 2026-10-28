@@ -1,0 +1,42 @@
+// tests for std/term
+import "std/term"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {quote_str(got)}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {quote_str(got)}, want {quote_str(want)}")
+    }
+}
+
+fn main() -> int {
+    // the test output goes to a pipe, so colors start off
+    check("plain red", red("x"), "x")
+    check("colors off", str(term_colors_on()), "false")
+
+    term_use_colors(true)
+    check("red", red("x"), "\x1b[31mx\x1b[0m")
+    check("bold green", bold(green("ok")), "\x1b[1m\x1b[32mok\x1b[0m\x1b[0m")
+    check("color 208", color("o", 208), "\x1b[38;5;208mo\x1b[0m")
+    check("rgb", color_rgb("o", 1, 2, 3), "\x1b[38;2;1;2;3mo\x1b[0m")
+    check("background", background("o", 4), "\x1b[48;5;4mo\x1b[0m")
+    check("strip", strip_colors(bold(red("a")) + "b" + cyan("c")), "abc")
+    check("visible_len", str(visible_len(red("héllo"))), "5")
+    term_use_colors(false)
+    check("off again", underline("u"), "u")
+
+    check("bar 0", progress_bar(0, 10), "[--------------------]   0%")
+    check("bar 3/10", progress_bar(3, 10), "[######--------------]  30%")
+    check("bar full", progress_bar(10, 10), "[####################] 100%")
+    check("bar over", progress_bar(15, 10, width: 4), "[####] 100%")
+    check("bar no total", progress_bar(5, 0, width: 4), "[----]   0%")
+
+    check("boxed", boxed("Hi\nWorld"), "+-------+\n| Hi    |\n| World |\n+-------+\n")
+    check("boxed padding", boxed("a", padding: 0), "+-+\n|a|\n+-+\n")
+
+    if failures > 0 { println("{failures} FAILED") } else { println("all passed") }
+    return if failures > 0 { 1 } else { 0 }
+}

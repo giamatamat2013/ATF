@@ -7,6 +7,7 @@ const PREC_UNARY = 14
 
 // binding power of a binary operator; -1 if `op` is not a binary operator
 fn binary_prec(op: str) -> int {
+    if op == "|>" { return 1 }
     if op == "??" { return 2 }
     if op == "or" or op == "||" { return 3 }
     if op == "and" or op == "&&" { return 4 }
@@ -1101,7 +1102,13 @@ impl Parser {
             var next_prec = prec + 1
             if binary_right_assoc(op) { next_prec = prec }
             let rhs = self.parse_expr(next_prec)
-            if op == "??" {
+            if op == "|>" {
+                // x |> f(a)  is  f(x, a);   x |> f  is  f(x)
+                left = match rhs.k {
+                    ExprK.Call(callee, args) => mk_expr(ExprK.Call(callee, [Arg("", left, left.pos)] + args), rhs.pos)
+                    _ => mk_expr(ExprK.Call(rhs, [Arg("", left, left.pos)]), opos)
+                }
+            } else if op == "??" {
                 left = mk_expr(ExprK.Coalesce(left, rhs), opos)
             } else if op == "and" or op == "&&" {
                 left = mk_expr(ExprK.Binary("and", left, rhs), opos)

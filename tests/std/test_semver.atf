@@ -1,0 +1,71 @@
+// tests for std/semver
+import "std/semver"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn show(r: Result<SemVer, str>) -> str {
+    return match r {
+        Result.Ok(v) => v.to_str()
+        Result.Err(e) => "Err(" + e + ")"
+    }
+}
+
+fn v(s: str) -> SemVer => semver_parse(s).unwrap()
+
+fn main() -> int {
+    // reading
+    check("plain", show(semver_parse("1.4.2")), "1.4.2")
+    check("leading v", show(semver_parse("v2.0.0")), "2.0.0")
+    check("pre-release", show(semver_parse("1.0.0-beta.2")), "1.0.0-beta.2")
+    check("build ignored", show(semver_parse("1.0.0+sha.5")), "1.0.0")
+    check("pre and build", show(semver_parse(" 3.1.4-rc.1+x ")), "3.1.4-rc.1")
+    check("two parts", show(semver_parse("1.2")), "Err('1.2' is not a version: write MAJOR.MINOR.PATCH, like 1.4.2)")
+    check("letters", show(semver_parse("1.a.3")), "Err('a' in '1.a.3' is not a whole number)")
+    check("empty pre", show(semver_parse("1.2.3-")), "Err(empty pre-release after '-' in '1.2.3-')")
+    check("valid", str(semver_valid("0.0.1")), "true")
+    check("not valid", str(semver_valid("x")), "false")
+
+    // comparing
+    check("numbers not text", str(v("1.4.2") < v("1.10.0")), "true")
+    check("patch", str(v("1.0.1") > v("1.0.0")), "true")
+    check("equal", str(v("1.0.0") == v("v1.0.0")), "true")
+    check("pre before release", str(v("1.0.0-alpha") < v("1.0.0")), "true")
+    check("alpha before beta", str(v("1.0.0-alpha") < v("1.0.0-beta")), "true")
+    check("pre numbers", str(v("1.0.0-rc.2") < v("1.0.0-rc.10")), "true")
+    check("number before word", str(v("1.0.0-1") < v("1.0.0-a")), "true")
+    check("shorter pre first", str(v("1.0.0-a") < v("1.0.0-a.1")), "true")
+    let sorted_versions = [v("2.0.0"), v("1.0.0-rc.1"), v("1.10.0"), v("1.2.0"), v("1.0.0")].sorted()
+    check("sort", ", ".join(sorted_versions.map(|x| x.to_str())), "1.0.0-rc.1, 1.0.0, 1.2.0, 1.10.0, 2.0.0")
+    check("is_prerelease", str(v("1.0.0-x").is_prerelease()), "true")
+
+    // raising
+    check("bump major", v("1.4.2-rc.1").bump_major().to_str(), "2.0.0")
+    check("bump minor", v("1.4.2").bump_minor().to_str(), "1.5.0")
+    check("bump patch", v("1.4.2").bump_patch().to_str(), "1.4.3")
+
+    // rules
+    let cases = [
+        ("1.4.2", "^1.2", true), ("2.0.0", "^1.2", false), ("1.1.9", "^1.2", false),
+        ("0.2.5", "^0.2.1", true), ("0.3.0", "^0.2.1", false), ("0.0.3", "^0.0.3", true), ("0.0.4", "^0.0.3", false),
+        ("1.4.9", "~1.4.2", true), ("1.5.0", "~1.4.2", false), ("1.9.0", "~1", true),
+        ("1.5.0", ">=1.0 <2.0", true), ("2.0.0", ">=1.0 <2.0", false), ("1.0.0", ">1.0.0", false),
+        ("1.4.7", "1.4.x", true), ("1.5.0", "1.x", true), ("2.0.0", "1.x", false), ("1.4.2", "1.4.2", true),
+        ("1.4.3", "=1.4.2", false), ("9.9.9", "*", true), ("2.1.0", "^1.0 || ^2.0", true), ("3.0.0", "^1.0 || ^2.0", false),
+        ("1.0.0", "<=1.0.0", true), ("bad", "*", false), ("1.0.0", "^bad", false)
+    ]
+    for (version, rule, want) in cases {
+        check("'{version}' fits '{rule}'", str(semver_matches(version, rule)), str(want))
+    }
+
+    if failures > 0 { println("{failures} FAILED") } else { println("all passed") }
+    return if failures > 0 { 1 } else { 0 }
+}

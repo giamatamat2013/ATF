@@ -4,6 +4,7 @@ from .errors import CompileError, Pos
 from .lexer import tokenize, StrPart
 
 BINARY_PREC = {
+    "|>": (1, "L"),
     "??": (2, "R"),
     "or": (3, "L"), "||": (3, "L"),
     "and": (4, "L"), "&&": (4, "L"),
@@ -774,7 +775,13 @@ class Parser:
                 continue
             self.skip_nl()
             rhs = self.parse_expr(prec if assoc == "R" else prec + 1)
-            if op == "??":
+            if op == "|>":
+                # x |> f(a)  is  f(x, a);   x |> f  is  f(x)
+                if isinstance(rhs, S.Call):
+                    left = S.Call(rhs.callee, [left] + list(rhs.args), pos=rhs.pos)
+                else:
+                    left = S.Call(rhs, [left], pos=opos)
+            elif op == "??":
                 left = S.Coalesce(left, rhs, pos=opos)
             elif op in ("and", "&&"):
                 left = S.Binary("and", left, rhs, pos=opos)

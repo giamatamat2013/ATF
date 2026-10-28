@@ -1,0 +1,138 @@
+// std/ai - ask Claude (Anthropic's AI model) a question from an ATF program.
+//
+//   import "std/ai"
+//
+//   match ai_ask("Write a haiku about compilers") {
+//       Result.Ok(answer) => println(answer)
+//       Result.Err(e) => println("failed: " + e)
+//   }
+//
+//   let chat = ai_chat("You are a short, friendly helper.")    // a conversation that remembers
+//   println(chat.say("My name is Dana.") ?? "")
+//   println(chat.say("What is my name?") ?? "")
+//
+// It needs an API key in the ANTHROPIC_API_KEY environment variable (get one at console.anthropic.com).
+// Every call goes over the internet and costs money on that key. The default model is claude-opus-5-5.
+
+import "std/http"
+import "std/json"
+
+const AI_URL = "https://api.anthropic.com/v1/messages"
+const AI_API_VERSION = "2026-10-21"
+const AI_DEFAULT_MODEL = "claude-opus-5-5"
+
+// one turn of a conversation: role is "user" (you) or "assistant" (Claude)
+struct AiMessage {
+    role: str,
+    text: str
+}
+
+// The JSON text of a request to the Messages API. system may be "".
+// Exposed so a program (or a test) can see exactly what would be sent.
+fn ai_request_body(model: str, system: str, messages: [AiMessage], max_tokens: int = 16000) -> str {
+    let body = json_object()
+    body.set("model", json_str(model))
+    body.set("max_tokens", json_int(max_tokens))
+    if system != "" { body.set("system", json_str(system)) }
+    let list = json_array()
+    for m in messages {
+        let item = json_object()
+        item.set("role", json_str(m.role))
+        item.set("content", json_str(m.text))
+        list.push(item)
+    }
+    body.set("messages", list)
+    // when the newest models decline a request for safety reasons, let the service retry it on another model
+    if ai_has_fallback(model) { body.set("fallbacks", json_str("default")) }
+    return json_stringify(body)
+}
+
+// true for the models that accept "fallbacks": "default"
+fn ai_has_fallback(model: str) -> bool {
+    return model in ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]
+}
+
+// Reads the service's answer: Ok(the text Claude wrote) or Err(a readable reason).
+// Exposed so it can be tested without the network.
+fn ai_read_reply(status: int, body: str) -> Result<str, str> {
+    let parsed = json_parse(body)
+    if parsed.is_err() {
+        return Result.Err("HTTP {status}: the answer is not JSON: {body[..min(body.len(), 200)]}")
+    }
+    let doc = parsed.unwrap()
+    if status < 200 or status >= 300 or doc.get_str("type", "") == "error" {
+        // {"type": "error", "error": {"type": "...", "message": "..."}}
+        var kind = "error"
+        var msg = body
+        if let e = doc.get("error") {
+            kind = e.get_str("type", kind)
+            msg = e.get_str("message", msg)
+        }
+        return Result.Err("HTTP {status}: {kind}: {msg}")
+    }
+    if doc.get_str("stop_reason", "") == "refusal" {
+        return Result.Err("Claude declined to answer this request")
+    }
+    // the answer is a list of blocks; only the "text" blocks are the reply (others are thinking, tool calls, ...)
+    var sb = str_builder()
+    if let content = doc.get("content") {
+        for block in content.as_array() ?? [] {
+            if block.get_str("type", "") == "text" { sb.add(block.get_str("text", "")) }
+        }
+    }
+    return Result.Ok(sb.finish())
+}
+
+// Sends a whole conversation and returns Claude's next reply.
+fn ai_send(messages: [AiMessage], system: str = "", model: str = AI_DEFAULT_MODEL, max_tokens: int = 16000) -> Result<str, str> {
+    let key = getenv("ANTHROPIC_API_KEY") ?? ""
+    if key == "" { return Result.Err("set the ANTHROPIC_API_KEY environment variable to your API key") }
+    var headers = [
+        "Content-Type: application/json",
+        "x-api-key: " + key,
+        "anthropic-version: " + AI_API_VERSION
+    ]
+    if ai_has_fallback(model) { headers.push("anthropic-beta: server-side-fallback-2026-07-01") }
+    // an answer can take minutes, so wait up to 10 minutes for each step
+    let r = http_request("POST", AI_URL, ai_request_body(model, system, messages, max_tokens), headers, 600000)?
+    return ai_read_reply(r.status, r.body)
+}
+
+// Asks one question (no memory of earlier questions) and returns the answer.
+fn ai_ask(question: str, system: str = "", model: str = AI_DEFAULT_MODEL) -> Result<str, str> {
+    return ai_send([AiMessage("user", question)], system, model)
+}
+
+// a conversation that keeps its history, so Claude remembers what was said before
+struct AiChat {
+    system: str,
+    model: str,
+    messages: [AiMessage]
+}
+
+// starts a conversation; system describes how Claude should behave ("" for none)
+fn ai_chat(system: str = "", model: str = AI_DEFAULT_MODEL) -> AiChat {
+    let none: [AiMessage] = []
+    return AiChat(system, model, none)
+}
+
+impl AiChat {
+    // sends text and returns the reply (nil when the request failed; use send for the reason)
+    fn say(self, text: str) -> str? {
+        let r = self.send(text)
+        if r.is_ok() { return r.unwrap() }
+        return nil
+    }
+
+    // sends text and returns Ok(reply) or Err(reason); a failed turn is not kept in the history
+    fn send(self, text: str) -> Result<str, str> {
+        self.messages.push(AiMessage("user", text))
+        let r = ai_send(self.messages, self.system, self.model)
+        if r.is_ok() {
+            self.messages.push(AiMessage("assistant", r.unwrap()))
+        } else {
+            self.messages.pop()
+        }
+        return r
+    }
+}

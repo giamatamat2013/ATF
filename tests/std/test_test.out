@@ -9,5 +9,15 @@ ok   division
 quiet
 FAIL no panic here
        expected a panic, but there was none
-count: 6 failed: 3
-6 tests, 3 failed
+ok   reversing twice gives the list back
+ok   sorted is in order
+ok   upper keeps the length
+ok   floats stay in range
+ok   not of not
+ok   any_of picks from the list
+FAIL every int is small (fails)
+       run 4: not true for 859
+FAIL a panic is a failure
+       run 1: panic for 0: division by zero
+count: 14 failed: 5
+14 tests, 5 failed

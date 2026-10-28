@@ -503,6 +503,44 @@
       "}"
     ]
   },
+  "Property test": {
+    "prefix": "testprop",
+    "description": "A property test with std/test: checks a rule on 100 random values",
+    "body": [
+      "test_property(\"${1:reversing twice gives the list back}\", ${2:any_int_list()}, |${3:a}| ${4:a.reversed().reversed() == a})"
+    ]
+  },
+  "Pipe": {
+    "prefix": "pipe",
+    "description": "A pipeline: x |> f(a) is f(x, a)",
+    "body": [
+      "let ${1:result} = ${2:value}",
+      "\t|> ${3:f}",
+      "\t|> ${4:g}"
+    ]
+  },
+  "Ask Claude": {
+    "prefix": "aiask",
+    "description": "Ask Claude a question with std/ai (needs ANTHROPIC_API_KEY)",
+    "body": [
+      "import \"std/ai\"",
+      "",
+      "match ai_ask(\"${1:Explain recursion in one sentence}\") {",
+      "\tResult.Ok(answer) => println(answer)",
+      "\tResult.Err(e) => println(\"failed: \" + e)",
+      "}"
+    ]
+  },
+  "Colored output": {
+    "prefix": "term",
+    "description": "Colors and a progress bar with std/term",
+    "body": [
+      "import \"std/term\"",
+      "",
+      "println(green(\"ok\"), red(\"failed\"), bold(\"${1:title}\"))",
+      "println(progress_bar(${2:3}, ${3:10}))"
+    ]
+  },
   "HTTP GET": {
     "prefix": "httpget",
     "description": "Download a page with std/http",
