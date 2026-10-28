@@ -1,15 +1,17 @@
-// ATF 1.2.0 — BLOCKWORLD SURVIVAL
-// First-person voxel sandbox with procedural face textures, resource inventory,
-// crafting, survival stats, water movement, ore drops, day/night, minimap, save/load.
-// Minecraft-style controls: WASD move, mouse look, Space jump/swim, Shift crouch,
-// Ctrl sprint, left mouse mine, right mouse place/use, 1-9 hotbar, E inventory,
-// Q drop one item, Esc pause, F eat apple, M map, F3 debug, F6 save, F7 load.
+// ATF 1.2.0 — BLOCKWORLD DELUXE SURVIVAL
+// Infinite seeded voxel terrain with biomes, structures, detailed procedural textures,
+// expanded blocks/resources, durable pickaxes, chests, furnace smelting, crafting and survival.
+// Controls: WASD, mouse, Space, Shift, Ctrl, LMB mine, RMB place/open chest, E inventory,
+// 1-9 hotbar, P equip best pickaxe, H smelt at furnace, Q drop item, F eat apple, Esc pause,
+// M map, F3 debug, F6 save, F7 load.
 
 import "std/ui"
 
-const WORLD_W = 64
-const WORLD_H = 28
-const WORLD_D = 64
+const WORLD_W = 128
+const WORLD_H = 30
+const WORLD_D = 128
+const STREAM_CHUNK = 32
+const STRUCTURE_CELL = 64
 const RENDER_W = 560
 const RENDER_H = 315
 const FRAME_TIME_MS = 30
@@ -19,21 +21,25 @@ const VIEW_DISTANCE = 28.0
 const PI_VALUE = 3.141592653589793
 
 var world: [int] = array_make::<int>(WORLD_W * WORLD_H * WORLD_D)
+// Permanent edits are keyed by absolute world coordinates and survive chunk unloading.
+var world_edits: {str: int} = {}
+var world_origin_x = -64
+var world_origin_z = -64
 var frame_pixels: [int] = array_make::<int>(RENDER_W * RENDER_H)
 // Inventory slots are item IDs. 15=coal, 16=gold, 17=apple, 19=diamond.
-var inventory: [int] = array_make::<int>(21)
+var inventory: [int] = array_make::<int>(55)
 
-var player_x = 24.5
+var player_x = 64.5
 var player_y = 8.0
-var player_z = 24.5
+var player_z = 64.5
 var velocity_y = 0.0
 var grounded = false
 var crouching = false
 var yaw = 0.0
 var pitch = 0.0
-var camera_x = 24.5
+var camera_x = 64.5
 var camera_y = 9.62
-var camera_z = 24.5
+var camera_z = 64.5
 var camera_underwater = false
 
 var forward_x = 0.0
@@ -79,7 +85,7 @@ var hunger = 20.0
 var hunger_timer = 0.0
 var regen_timer = 0.0
 var starvation_timer = 0.0
-var status_message = "WASD move  |  E inventory  |  1-9 hotbar  |  Q drop"
+var status_message = "Infinite seeded world | biomes, structures, crafting and survival"
 var status_timer = 6.0
 var game_time = 0.0
 var day_light = 1.0
@@ -88,6 +94,21 @@ var last_tick_time = 0.0
 var blocks_mined = 0
 var blocks_placed = 0
 var blocks_crafted = 0
+var equipped_pickaxe = 0
+// 0=pickaxe/hand, 1=axe, 2=shovel. Pickaxe tier is kept separately.
+var equipped_tool_mode = 0
+// One durability counter per pickaxe tier: wood, stone, iron, diamond.
+var tool_durability: [int] = [59, 131, 250, 1561, 59, 59]
+var cactus_timer = 0.0
+var previous_p = false
+var previous_h = false
+var previous_r = false
+var previous_t = false
+var previous_b = false
+var previous_o = false
+var previous_l = false
+var previous_y = false
+var previous_u = false
 
 // Dropped item entities: items can be thrown out and picked up again.
 var dropped_item_ids: [int] = []
@@ -124,10 +145,38 @@ fn pack_rgb(red: int, green: int, blue: int) -> int {
 
 fn block_index(x: int, y: int, z: int) -> int => (y * WORLD_D + z) * WORLD_W + x
 
+fn biome_at(x: int, z: int) -> int {
+    // Stable climate fields from absolute coordinates: 0 plains, 1 forest, 2 desert,
+    // 3 mountains, 4 snowy taiga, 5 swamp. No random state is needed when streaming.
+    let temperature = sin_atf(float(x) * 0.018) + cos_atf(float(z) * 0.015) + sin_atf(float(x + z) * 0.009)
+    let humidity = cos_atf(float(x) * 0.024) + sin_atf(float(z) * 0.020) + cos_atf(float(x - z) * 0.010)
+    let ridge = abs(sin_atf(float(x) * 0.035) + cos_atf(float(z) * 0.031) + sin_atf(float(x - z) * 0.018))
+    if ridge > 2.48 { return 3 }
+    if temperature < -1.18 { return 4 }
+    if temperature > 1.30 and humidity < 0.45 { return 2 }
+    if humidity > 1.24 and temperature < 0.72 { return 5 }
+    if humidity > 0.30 { return 1 }
+    return 0
+}
+
+fn biome_name(biome: int) -> str {
+    if biome == 1 { return "Forest" }
+    if biome == 2 { return "Desert" }
+    if biome == 3 { return "Mountains" }
+    if biome == 4 { return "Snowy Taiga" }
+    if biome == 5 { return "Swamp" }
+    return "Plains"
+}
+
 fn terrain_height(x: int, z: int) -> int {
-    // Several low-frequency waves form broad hills instead of a checkerboard.
+    // Layered low-frequency terrain noise; biome climate shapes height and surface.
+    let biome = biome_at(x, z)
     let broad = sin_atf(float(x) * 0.105) * 2.4 + cos_atf(float(z) * 0.12) * 2.1
     let rolling = sin_atf(float(x + z) * 0.19) * 1.4 + cos_atf(float(x - z) * 0.16) * 1.0
+    if biome == 2 { return clamp(6 + int(broad * 0.24 + rolling * 0.22), 5, 8) }
+    if biome == 3 { return clamp(11 + int(abs(broad) * 1.25 + abs(rolling) * 0.82), 8, 19) }
+    if biome == 5 { return clamp(5 + int(broad * 0.48 + rolling * 0.30), 4, 8) }
+    if biome == 4 { return clamp(8 + int(broad * 0.70 + rolling * 0.65), 5, 14) }
     return clamp(7 + int(broad + rolling), 3, 13)
 }
 
@@ -145,81 +194,455 @@ fn set_block(x: int, y: int, z: int, block: int) {
 }
 
 fn build_tree(x: int, z: int, height: int) {
-    for y in (height + 1)..=(height + 4) {
-        set_block(x, y, z, 4)
+    let biome = biome_at(world_origin_x + x, world_origin_z + z)
+    let log_block = if biome == 4 or biome == 3 { 38 } else { 4 }
+    let leaf_block = if biome == 4 or biome == 3 { 39 } else { 5 }
+    let trunk_height = if log_block == 38 { 5 } else { 4 }
+    for y in (height + 1)..=(height + trunk_height) {
+        set_block(x, y, z, log_block)
     }
-    for y in (height + 3)..=(height + 5) {
+    let crown_top = height + trunk_height + (if log_block == 38 { 2 } else { 1 })
+    for y in (height + trunk_height - 1)..=crown_top {
         for tx in (x - 2)..=(x + 2) {
             for tz in (z - 2)..=(z + 2) {
                 let distance = abs(tx - x) + abs(tz - z)
-                let limit = if y == height + 5 { 2 } else { 4 }
+                let limit = if log_block == 38 { (crown_top - y) + 2 } else if y == crown_top { 2 } else { 4 }
                 if distance <= limit and get_block(tx, y, tz) == 0 {
-                    set_block(tx, y, tz, 5)
+                    set_block(tx, y, tz, leaf_block)
                 }
             }
         }
     }
 }
 
+fn world_edit_key(gx: int, y: int, gz: int) -> str => "{gx},{y},{gz}"
+
+fn set_player_block(x: int, y: int, z: int, block: int) {
+    set_block(x, y, z, block)
+    let gx = world_origin_x + x
+    let gz = world_origin_z + z
+    world_edits[world_edit_key(gx, y, gz)] = block
+}
+
+fn is_tree_site(gx: int, gz: int) -> bool {
+    let h = terrain_height(gx, gz)
+    let outside_spawn = abs(gx) >= 6 or abs(gz) >= 6
+    let tree_roll = abs(gx * 23 + gz * 41 + gx * gz) % 67
+    let biome = biome_at(gx, gz)
+    return h >= 6 and outside_spawn and (biome == 1 or biome == 3 or biome == 4) and tree_roll == 9
+}
+
+fn generate_base_column(x: int, z: int) {
+    // Coordinates are absolute even though blocks are stored in a moving local window.
+    for y in 0..WORLD_H { set_block(x, y, z, 0) }
+    let gx = world_origin_x + x
+    let gz = world_origin_z + z
+    let biome = biome_at(gx, gz)
+    let h = terrain_height(gx, gz)
+    for y in 0..WORLD_H {
+        var block = 0
+        if y == 0 {
+            block = 7
+        } else if y <= h {
+            if y == h {
+                if biome == 2 { block = 6 }
+                else if biome == 4 or h >= 15 { block = 22 }
+                else if biome == 5 { block = 41 }
+                else if biome == 3 and h > 12 { block = 3 }
+                else { block = 1 }
+            } else if biome == 2 and y >= h - 2 {
+                block = 6
+            } else if biome == 2 and y >= h - 4 {
+                block = 25
+            } else if biome == 3 and y >= h - 3 {
+                block = 3
+            } else if biome == 5 and y >= h - 3 {
+                block = 41
+            } else if y >= h - 2 {
+                block = 2
+            } else {
+                block = 3
+                let ore_roll = abs(gx * 97 + y * 53 + gz * 31 + gx * gz * 7) % 113
+                let diamond_roll = abs(gx * 71 + y * 43 + gz * 61 + gx * gz * 5) % 257
+                let iron_roll = abs(gx * 43 + y * 37 + gz * 83 + gx * gz * 3) % 71
+                let copper_roll = abs(gx * 67 + y * 29 + gz * 47 + gx * gz * 11) % 89
+                let redstone_roll = abs(gx * 59 + y * 61 + gz * 73 + gx * gz * 13) % 97
+                let gravel_roll = abs(gx * 89 + y * 23 + gz * 41 + gx * gz * 17) % 101
+                if y < 5 and diamond_roll == 19 { block = 18 }
+                else if y < 11 and redstone_roll == 7 { block = 36 }
+                else if y < 16 and iron_roll < 3 { block = 32 }
+                else if y < 13 and copper_roll < 3 { block = 34 }
+                else if y < h - 4 and gravel_roll < 3 { block = 21 }
+                else if ore_roll < 5 { block = 9 }
+                else if ore_roll == 11 and y < 8 { block = 10 }
+                if y > 2 and y < h - 3 {
+                    let cave_noise = sin_atf(float(gx) * 0.27 + float(y) * 0.34) + cos_atf(float(gz) * 0.24 - float(y) * 0.31) + sin_atf(float(gx + gz) * 0.19)
+                    let deep_cave = sin_atf(float(gx - gz) * 0.11 + float(y) * 0.47) + cos_atf(float(gx + gz) * 0.08 - float(y) * 0.39)
+                    if cave_noise > 2.15 or (y < 8 and deep_cave > 1.72) { block = 0 }
+                }
+            }
+        }
+        set_block(x, y, z, block)
+    }
+    if h < 6 {
+        for wy in (h + 1)..=6 {
+            if biome == 4 and wy == 6 { set_block(x, wy, z, 23) }
+            else { set_block(x, wy, z, 8) }
+        }
+    }
+}
+fn decorate_tree_band_x(start_x: int, end_x: int) {
+    // Generate trees whose trunks or canopies can touch the refreshed band.
+    for tx in (start_x - 2)..=(end_x + 1) {
+        for tz in -2..=(WORLD_D + 1) {
+            let gx = world_origin_x + tx
+            let gz = world_origin_z + tz
+            if is_tree_site(gx, gz) {
+                build_tree(tx, tz, terrain_height(gx, gz))
+            }
+        }
+    }
+}
+
+fn decorate_tree_band_z(start_z: int, end_z: int) {
+    for tx in -2..=(WORLD_W + 1) {
+        for tz in (start_z - 2)..=(end_z + 1) {
+            let gx = world_origin_x + tx
+            let gz = world_origin_z + tz
+            if is_tree_site(gx, gz) {
+                build_tree(tx, tz, terrain_height(gx, gz))
+            }
+        }
+    }
+}
+
+fn apply_all_edits_to_window() {
+    for key, block in world_edits {
+        let coords = key.split(",")
+        if coords.len() == 3 {
+            let gx = coords[0].parse_int()
+            let y = coords[1].parse_int()
+            let gz = coords[2].parse_int()
+            if gx != nil and y != nil and gz != nil {
+                let x = gx! - world_origin_x
+                let z = gz! - world_origin_z
+                if x >= 0 and x < WORLD_W and z >= 0 and z < WORLD_D and y! >= 0 and y! < WORLD_H {
+                    set_block(x, y!, z, block)
+                }
+            }
+        }
+    }
+}
+
+fn set_generated_block(gx: int, y: int, gz: int, block: int) {
+    set_block(gx - world_origin_x, y, gz - world_origin_z, block)
+}
+
+fn decorate_biome_features() {
+    // Deterministic decorative features are regenerated from coordinates, never from frame randomness.
+    for x in 2..(WORLD_W - 2) {
+        for z in 2..(WORLD_D - 2) {
+            let gx = world_origin_x + x
+            let gz = world_origin_z + z
+            let biome = biome_at(gx, gz)
+            let h = terrain_height(gx, gz)
+            let roll = abs(gx * 37 + gz * 71 + gx * gz * 3) % 251
+            if biome == 2 and roll < 3 and get_block(x, h, z) == 6 {
+                let cactus_height = 2 + roll % 3
+                for cy in 1..=cactus_height {
+                    if get_block(x, h + cy, z) == 0 { set_block(x, h + cy, z, 24) }
+                }
+            } else if (biome == 0 or biome == 1) and roll == 7 and get_block(x, h, z) == 1 and get_block(x, h + 1, z) == 0 {
+                set_block(x, h + 1, z, 28)
+            } else if biome == 5 and roll == 23 and get_block(x, h, z) == 1 {
+                set_block(x, h, z, 53)
+            } else if (biome == 1 or biome == 5) and roll == 13 and get_block(x, h, z) != 6 and get_block(x, h + 1, z) == 0 {
+                set_block(x, h + 1, z, 44)
+            }
+        }
+    }
+}
+
+fn flatten_structure_site(gx0: int, gz0: int, radius: int, base: int) {
+    for gx in (gx0 - radius)..=(gx0 + radius) {
+        for gz in (gz0 - radius)..=(gz0 + radius) {
+            let ground = terrain_height(gx, gz)
+            if ground < base {
+                for yy in (ground + 1)..=base { set_generated_block(gx, yy, gz, 2) }
+            } else if ground > base {
+                for yy in (base + 1)..=ground { set_generated_block(gx, yy, gz, 0) }
+            }
+            for yy in (base + 1)..=(base + 8) { set_generated_block(gx, yy, gz, 0) }
+        }
+    }
+}
+
+fn build_village_house(gx0: int, gz0: int) {
+    let base = terrain_height(gx0, gz0)
+    flatten_structure_site(gx0, gz0, 4, base)
+    for ox in -3..=3 {
+        for oz in -3..=3 {
+            set_generated_block(gx0 + ox, base + 1, gz0 + oz, 11)
+            for wy in (base + 2)..=(base + 4) {
+                if abs(ox) == 3 or abs(oz) == 3 {
+                    let doorway = oz == 3 and ox == 0 and wy <= base + 3
+                    let window = wy == base + 3 and ((abs(ox) == 3 and oz == 0) or (abs(oz) == 3 and abs(ox) == 2))
+                    if doorway { set_generated_block(gx0 + ox, wy, gz0 + oz, 0) }
+                    else if window { set_generated_block(gx0 + ox, wy, gz0 + oz, 13) }
+                    else { set_generated_block(gx0 + ox, wy, gz0 + oz, if wy == base + 2 { 4 } else { 11 }) }
+                }
+            }
+        }
+    }
+    // Layered roof gives a stepped voxel roof without using external models.
+    for layer in 0..3 {
+        let radius = 4 - layer
+        for ox in (-radius)..=radius {
+            for oz in (-radius)..=radius {
+                if abs(ox) == radius or abs(oz) == radius or layer == 2 {
+                    set_generated_block(gx0 + ox, base + 5 + layer, gz0 + oz, 11)
+                }
+            }
+        }
+    }
+    set_generated_block(gx0 - 2, base + 2, gz0 - 2, 31)
+    set_generated_block(gx0 + 1, base + 2, gz0 + 1, 29)
+    set_generated_block(gx0 + 2, base + 2, gz0 - 1, 14)
+    set_generated_block(gx0 - 1, base + 2, gz0 + 2, 54)
+}
+
+fn build_desert_temple(gx0: int, gz0: int) {
+    let base = terrain_height(gx0, gz0)
+    flatten_structure_site(gx0, gz0, 5, base)
+    for ox in -4..=4 {
+        for oz in -4..=4 {
+            set_generated_block(gx0 + ox, base + 1, gz0 + oz, 25)
+        }
+    }
+    for layer in 0..4 {
+        let radius = 4 - layer
+        for ox in (-radius)..=radius {
+            for oz in (-radius)..=radius {
+                if abs(ox) == radius or abs(oz) == radius {
+                    let door_gap = oz == 4 and ox == 0 and layer < 2
+                    if not door_gap { set_generated_block(gx0 + ox, base + 2 + layer, gz0 + oz, 25) }
+                }
+            }
+        }
+    }
+    set_generated_block(gx0, base + 2, gz0, 31)
+    set_generated_block(gx0 - 2, base + 2, gz0 - 2, 30)
+    set_generated_block(gx0, base + 5, gz0, 52)
+}
+
+fn build_ruined_watchtower(gx0: int, gz0: int) {
+    let base = terrain_height(gx0, gz0)
+    flatten_structure_site(gx0, gz0, 3, base)
+    for ox in -2..=2 {
+        for oz in -2..=2 {
+            if abs(ox) == 2 or abs(oz) == 2 { set_generated_block(gx0 + ox, base + 1, gz0 + oz, 40) }
+        }
+    }
+    for wy in 2..=6 {
+        for ox in [-2, 2] {
+            for oz in [-2, 2] {
+                let missing = abs(gx0 * 17 + gz0 * 31 + ox * 7 + oz * 11 + wy * 13) % 9 == 0
+                if not missing { set_generated_block(gx0 + ox, base + wy, gz0 + oz, 40) }
+            }
+        }
+    }
+    for ox in -2..=2 {
+        for oz in -2..=2 {
+            if abs(ox) <= 1 and abs(oz) <= 1 { set_generated_block(gx0 + ox, base + 6, gz0 + oz, 26) }
+        }
+    }
+    set_generated_block(gx0, base + 2, gz0, 31)
+    set_generated_block(gx0, base + 3, gz0, 29)
+}
+
+fn build_stone_well(gx0: int, gz0: int) {
+    let base = terrain_height(gx0, gz0)
+    flatten_structure_site(gx0, gz0, 2, base)
+    for ox in -2..=2 {
+        for oz in -2..=2 {
+            if abs(ox) == 2 or abs(oz) == 2 {
+                set_generated_block(gx0 + ox, base + 1, gz0 + oz, 26)
+                if abs(ox) == 2 and abs(oz) == 2 { set_generated_block(gx0 + ox, base + 2, gz0 + oz, 4) }
+            } else {
+                set_generated_block(gx0 + ox, base + 1, gz0 + oz, 8)
+            }
+        }
+    }
+}
+
+fn build_amethyst_geode(gx0: int, gz0: int) {
+    // Rare hollow geodes are anchored to absolute coordinates, so they remain stable while streaming.
+    let seed = abs(gx0 * 73 + gz0 * 97 + gx0 * gz0 * 11)
+    let center_y = 4 + seed % 5
+    for ox in -3..=3 {
+        for oy in -3..=3 {
+            for oz in -3..=3 {
+                let d2 = ox * ox + oy * oy + oz * oz
+                if d2 <= 10 {
+                    let wall_roll = abs(gx0 * 13 + gz0 * 17 + ox * 7 + oy * 11 + oz * 19) % 7
+                    if d2 >= 5 {
+                        set_generated_block(gx0 + ox, center_y + oy, gz0 + oz, if wall_roll == 0 { 43 } else { 42 })
+                    } else if d2 == 4 and wall_roll < 3 {
+                        set_generated_block(gx0 + ox, center_y + oy, gz0 + oz, 43)
+                    } else {
+                        set_generated_block(gx0 + ox, center_y + oy, gz0 + oz, 0)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn build_ruined_portal(gx0: int, gz0: int) {
+    // Damaged obsidian frame, a little scorched ground, and a chest beside the portal.
+    let base = terrain_height(gx0, gz0)
+    flatten_structure_site(gx0, gz0, 4, base)
+    for ox in -2..=2 {
+        for oy in 0..=5 {
+            let frame = ox == -2 or ox == 2 or oy == 0 or oy == 5
+            let crack = abs(gx0 * 19 + gz0 * 23 + ox * 7 + oy * 13) % 11 == 0
+            if frame and not crack {
+                set_generated_block(gx0 + ox, base + 1 + oy, gz0, 42)
+            } else if not frame {
+                set_generated_block(gx0 + ox, base + 1 + oy, gz0, 0)
+            }
+        }
+    }
+    for ox in -3..=3 {
+        if abs(ox) != 2 {
+            set_generated_block(gx0 + ox, base + 1, gz0 + 1, if abs(ox) == 3 { 26 } else { 42 })
+        }
+    }
+    set_generated_block(gx0 + 3, base + 1, gz0 + 1, 31)
+    set_generated_block(gx0 - 1, base + 2, gz0 + 1, 52)
+    set_generated_block(gx0 + 1, base + 2, gz0 + 1, 52)
+}
+
+fn decorate_structures_window() {
+    let min_cx = int(floor(float(world_origin_x) / float(STRUCTURE_CELL))) - 1
+    let max_cx = int(floor(float(world_origin_x + WORLD_W - 1) / float(STRUCTURE_CELL))) + 1
+    let min_cz = int(floor(float(world_origin_z) / float(STRUCTURE_CELL))) - 1
+    let max_cz = int(floor(float(world_origin_z + WORLD_D - 1) / float(STRUCTURE_CELL))) + 1
+    for cx in min_cx..=max_cx {
+        for cz in min_cz..=max_cz {
+            let seed = abs(cx * 977 + cz * 619 + cx * cz * 137 + 83)
+            let roll = seed % 13
+            let gx0 = cx * STRUCTURE_CELL + 25 + seed % 11
+            let gz0 = cz * STRUCTURE_CELL + 25 + (seed / 7) % 11
+            let biome = biome_at(gx0, gz0)
+            if roll <= 2 { build_village_house(gx0, gz0) }
+            else if roll == 3 or roll == 4 { build_ruined_watchtower(gx0, gz0) }
+            else if roll == 5 { build_stone_well(gx0, gz0) }
+            else if roll == 6 and biome == 2 { build_desert_temple(gx0, gz0) }
+            else if roll == 7 and biome != 5 { build_ruined_portal(gx0, gz0) }
+            else if roll == 8 { build_amethyst_geode(gx0, gz0) }
+        }
+    }
+}
+
 fn create_world() {
-    // Bedrock, stone, dirt, beaches and a shallow water table.
+    // Build the loaded square from absolute coordinates. New squares use the same seed,
+    // so a coordinate always generates the same terrain no matter when it is discovered.
     for x in 0..WORLD_W {
         for z in 0..WORLD_D {
-            let h = terrain_height(x, z)
-            for y in 0..=h {
-                var block = 3
-                if y == 0 {
-                    block = 7
-                } else if y == h {
-                    if h <= 5 { block = 6 } else { block = 1 }
-                } else if y >= h - 2 {
-                    block = 2
-                } else {
-                    // Coal and gold are tucked into stone layers.
-                    let ore_roll = (x * 97 + y * 53 + z * 31 + x * z * 7) % 113
-                    let diamond_roll = (x * 71 + y * 43 + z * 61 + x * z * 5) % 257
-                    if y < 6 and diamond_roll == 19 {
-                        block = 18
-                    } else if ore_roll < 5 {
-                        block = 9
-                    } else if ore_roll == 11 and y < 8 {
-                        block = 10
-                    }
-                    // Sparse underground pockets form small caves.
-                    if y > 2 and y < h - 3 {
-                        let cave_noise = sin_atf(float(x) * 0.27 + float(y) * 0.34) + cos_atf(float(z) * 0.24 - float(y) * 0.31) + sin_atf(float(x + z) * 0.19)
-                        if cave_noise > 2.15 { block = 0 }
-                    }
-                }
-                set_block(x, y, z, block)
-            }
-            if h < 6 {
-                for wy in (h + 1)..=6 {
-                    set_block(x, wy, z, 8)
-                }
+            generate_base_column(x, z)
+        }
+    }
+    for tx in -2..=(WORLD_W + 1) {
+        for tz in -2..=(WORLD_D + 1) {
+            let gx = world_origin_x + tx
+            let gz = world_origin_z + tz
+            if is_tree_site(gx, gz) {
+                build_tree(tx, tz, terrain_height(gx, gz))
             }
         }
     }
-
-    // Scattered trees outside the starting clearing.
-    for x in 3..(WORLD_W - 3) {
-        for z in 3..(WORLD_D - 3) {
-            let far_from_spawn = abs(x - WORLD_W / 2) >= 6 or abs(z - WORLD_D / 2) >= 6
-            let h = terrain_height(x, z)
-            if far_from_spawn and h >= 6 and (x * 23 + z * 41 + x * z) % 67 == 9 {
-                build_tree(x, z, h)
-            }
-        }
-    }
-
+    decorate_biome_features()
+    decorate_structures_window()
+    apply_all_edits_to_window()
     player_x = float(WORLD_W / 2) + 0.5
     player_z = float(WORLD_D / 2) + 0.5
-    player_y = float(terrain_height(WORLD_W / 2, WORLD_D / 2) + 1)
+    player_y = float(terrain_height(world_origin_x + WORLD_W / 2, world_origin_z + WORLD_D / 2) + 1)
     velocity_y = 0.0
     grounded = true
     yaw = 0.0
     pitch = 0.0
     update_camera()
+}
+
+fn shift_world_x(amount: int) {
+    let old_world = world.copy()
+    for y in 0..WORLD_H {
+        for z in 0..WORLD_D {
+            for x in 0..WORLD_W {
+                let source_x = x + amount
+                let dest = block_index(x, y, z)
+                if source_x >= 0 and source_x < WORLD_W {
+                    world[dest] = old_world[block_index(source_x, y, z)]
+                } else {
+                    world[dest] = 0
+                }
+            }
+        }
+    }
+    world_origin_x += amount
+    player_x -= float(amount)
+    for i in 0..dropped_item_xs.len() { dropped_item_xs[i] -= float(amount) }
+
+    let start_x = if amount > 0 { WORLD_W - amount } else { 0 }
+    let end_x = if amount > 0 { WORLD_W } else { -amount }
+    for x in start_x..end_x {
+        for z in 0..WORLD_D { generate_base_column(x, z) }
+    }
+    decorate_tree_band_x(start_x, end_x)
+    decorate_biome_features()
+    decorate_structures_window()
+    apply_all_edits_to_window()
+}
+
+fn shift_world_z(amount: int) {
+    let old_world = world.copy()
+    for y in 0..WORLD_H {
+        for z in 0..WORLD_D {
+            for x in 0..WORLD_W {
+                let source_z = z + amount
+                let dest = block_index(x, y, z)
+                if source_z >= 0 and source_z < WORLD_D {
+                    world[dest] = old_world[block_index(x, y, source_z)]
+                } else {
+                    world[dest] = 0
+                }
+            }
+        }
+    }
+    world_origin_z += amount
+    player_z -= float(amount)
+    for i in 0..dropped_item_zs.len() { dropped_item_zs[i] -= float(amount) }
+
+    let start_z = if amount > 0 { WORLD_D - amount } else { 0 }
+    let end_z = if amount > 0 { WORLD_D } else { -amount }
+    for z in start_z..end_z {
+        for x in 0..WORLD_W { generate_base_column(x, z) }
+    }
+    decorate_tree_band_z(start_z, end_z)
+    decorate_biome_features()
+    decorate_structures_window()
+    apply_all_edits_to_window()
+}
+
+fn stream_world_if_needed() {
+    let low = float(WORLD_W / 2 - STREAM_CHUNK / 2)
+    let high_x = float(WORLD_W / 2 + STREAM_CHUNK / 2)
+    let high_z = float(WORLD_D / 2 + STREAM_CHUNK / 2)
+    if player_x >= high_x { shift_world_x(STREAM_CHUNK) }
+    else if player_x < low { shift_world_x(-STREAM_CHUNK) }
+    if player_z >= high_z { shift_world_z(STREAM_CHUNK) }
+    else if player_z < low { shift_world_z(-STREAM_CHUNK) }
 }
 
 fn update_camera() {
@@ -258,7 +681,7 @@ fn collides_body(x: float, feet_y: float, z: float) -> bool {
         for by in min_y..=max_y {
             for bz in min_z..=max_z {
                 let block = get_block(bx, by, bz)
-                if block != 0 and block != 8 { return true }
+                if block != 0 and block != 8 and block != 24 and block != 28 and block != 29 and block != 44 { return true }
             }
         }
     }
@@ -363,9 +786,9 @@ fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: f
         u = fract_atf(hit_x)
         v = fract_atf(hit_y)
     }
-    let cell_u = int(floor(u * 8.0))
-    let cell_v = int(floor(v * 8.0))
-    let texture_hash = abs((bx * 73 + by * 31 + bz * 47 + cell_u * 19 + cell_v * 23 + block * 17) % 31)
+    let cell_u = int(floor(u * 16.0))
+    let cell_v = int(floor(v * 16.0))
+    let texture_hash = abs(((world_origin_x + bx) * 73 + by * 31 + (world_origin_z + bz) * 47 + cell_u * 19 + cell_v * 23 + block * 17) % 67)
     let grain = texture_hash % 11 - 5
 
     var red = 110
@@ -399,7 +822,7 @@ fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: f
         red = 126 + grain * 2
         green = 131 + grain * 2
         blue = 139 + grain * 2
-        if (cell_u * 7 + cell_v * 11 + bx + bz) % 19 == 0 { red -= 30; green -= 30; blue -= 29 }
+        if (cell_u * 7 + cell_v * 11 + world_origin_x + bx + world_origin_z + bz) % 19 == 0 { red -= 30; green -= 30; blue -= 29 }
         if cell_u == 0 and texture_hash % 3 == 0 { red -= 9; green -= 9; blue -= 8 }
     } else if block == 4 {
         if face == 0 or face == 3 {
@@ -438,7 +861,7 @@ fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: f
         red = 119 + grain * 2
         green = 123 + grain * 2
         blue = 132 + grain * 2
-        if (cell_u * 5 + cell_v * 7 + bx + bz) % 9 < 3 {
+        if (cell_u * 5 + cell_v * 7 + world_origin_x + bx + world_origin_z + bz) % 9 < 3 {
             if block == 9 {
                 red = 39 + grain
                 green = 42 + grain
@@ -487,13 +910,120 @@ fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: f
             red = 139 + grain * 2; green = 87 + grain; blue = 45 + grain
             if cell_v == 0 or cell_v == 7 { red -= 25; green -= 17; blue -= 8 }
         }
-    } else if block == 20 {
-        // The crafted lantern is emissive-looking and clearly legible at night.
+    } else if block == 20 or block == 29 {
+        // Lantern and torch have a warm emissive core with a darker metal/wood frame.
         red = 255
-        green = 190 + texture_hash % 30
-        blue = 62 + texture_hash % 18
-        if u < 0.13 or u > 0.87 or v < 0.13 or v > 0.87 { red = 177; green = 94; blue = 27 }
-        if day_light < 0.35 { red = 255; green = 221; blue = 118 }
+        green = 174 + texture_hash % 42
+        blue = 43 + texture_hash % 24
+        if u < 0.15 or u > 0.85 or v < 0.12 or v > 0.88 { red = 95; green = 70; blue = 48 }
+        if day_light < 0.35 { red = 255; green = 225; blue = 120 }
+    } else if block == 21 {
+        red = 132 + grain * 2; green = 128 + grain * 2; blue = 119 + grain * 2
+        if texture_hash % 4 == 0 { red -= 26; green -= 24; blue -= 21 }
+        if texture_hash % 7 == 1 { red += 17; green += 15; blue += 12 }
+    } else if block == 22 {
+        red = 235 + grain; green = 243 + grain; blue = 250
+        if texture_hash % 8 == 0 { red = 205; green = 224; blue = 241 }
+        if face != 0 { red -= 13; green -= 10; blue -= 5 }
+    } else if block == 23 {
+        red = 145 + grain; green = 208 + grain; blue = 235 + grain
+        if (cell_u + cell_v * 3 + texture_hash) % 13 == 0 { red = 210; green = 239; blue = 250 }
+        if cell_u == cell_v or cell_u + cell_v == 15 { red -= 15; green -= 9; blue -= 5 }
+    } else if block == 24 {
+        red = 49 + grain; green = 139 + grain * 2; blue = 55 + grain
+        if cell_u == 3 or cell_u == 12 { red -= 22; green -= 25; blue -= 14 }
+        if (cell_u * 5 + cell_v * 7 + texture_hash) % 17 == 0 { red = 208; green = 221; blue = 166 }
+    } else if block == 25 {
+        red = 211 + grain; green = 192 + grain; blue = 135 + grain
+        if cell_v % 4 == 0 or (cell_u + cell_v * 3) % 13 == 0 { red -= 27; green -= 24; blue -= 18 }
+    } else if block == 26 or block == 27 or block == 40 {
+        red = 118 + grain * 2; green = 121 + grain * 2; blue = 126 + grain * 2
+        let mortar = (cell_u % 5 == 0 and cell_v % 4 == 0) or texture_hash % 11 == 0
+        if mortar { red = 76 + grain; green = 79 + grain; blue = 84 + grain }
+        if block == 27 or block == 40 {
+            if (cell_u * 7 + cell_v * 11 + texture_hash) % 9 < 3 { red = 70 + grain; green = 105 + grain * 2; blue = 65 + grain }
+        }
+    } else if block == 28 or block == 44 {
+        if block == 28 {
+            red = 58 + grain; green = 132 + grain * 2; blue = 48 + grain
+            if cell_u % 5 == 0 or cell_v % 6 == 0 { red = 211; green = 55 + texture_hash % 35; blue = 112 + texture_hash % 60 }
+            if (cell_u + cell_v) % 7 == 0 { red = 247; green = 217; blue = 70 }
+        } else {
+            red = 182 + grain; green = 46 + grain; blue = 42 + grain
+            if texture_hash % 5 == 0 { red = 235; green = 223; blue = 193 }
+            if face != 0 { red = 197 + grain; green = 173 + grain; blue = 139 + grain }
+        }
+    } else if block == 30 {
+        red = 103 + grain; green = 106 + grain; blue = 111 + grain
+        if face == 1 or face == 2 { if u > 0.2 and u < 0.8 and v > 0.2 and v < 0.72 { red = 48; green = 42; blue = 40 } }
+        if face == 0 { red = 83 + grain; green = 87 + grain; blue = 92 + grain }
+        if face == 3 { red = 39; green = 35; blue = 34 }
+    } else if block == 31 {
+        red = 151 + grain * 2; green = 91 + grain; blue = 43 + grain
+        if cell_v == 3 or cell_v == 12 { red -= 37; green -= 25; blue -= 13 }
+        if u > 0.42 and u < 0.58 and v > 0.35 and v < 0.58 { red = 227; green = 179; blue = 55 }
+    } else if block == 32 or block == 34 or block == 36 {
+        red = 121 + grain * 2; green = 124 + grain * 2; blue = 132 + grain * 2
+        let fleck = (cell_u * 5 + cell_v * 7 + texture_hash + world_origin_x + bx + world_origin_z + bz) % 11 < 4
+        if fleck {
+            if block == 32 { red = 170 + grain; green = 113 + grain; blue = 80 + grain }
+            else if block == 34 { red = 190 + grain; green = 119 + grain; blue = 68 + grain }
+            else { red = 164 + grain; green = 35 + grain; blue = 43 + grain }
+        }
+    } else if block == 33 {
+        red = 198 + grain; green = 202 + grain; blue = 209 + grain
+        if cell_v < 2 or cell_v > 13 { red -= 34; green -= 34; blue -= 31 }
+    } else if block == 35 {
+        red = 190 + grain; green = 119 + grain; blue = 66 + grain
+        if cell_v < 2 or cell_v > 13 { red -= 29; green -= 19; blue -= 12 }
+    } else if block == 37 {
+        red = 160 + grain; green = 29 + grain; blue = 35 + grain
+        if cell_u % 4 == 0 and cell_v % 4 == 0 { red = 220; green = 43; blue = 49 }
+    } else if block == 38 {
+        if face == 0 or face == 3 {
+            red = 130 + grain; green = 108 + grain; blue = 75 + grain
+            if int(floor((abs(u - 0.5) + abs(v - 0.5)) * 17.0)) % 3 == 0 { red -= 22; green -= 18; blue -= 12 }
+        } else {
+            red = 91 + grain; green = 66 + grain; blue = 43 + grain
+            if cell_u % 3 == 0 { red -= 19; green -= 13; blue -= 8 }
+        }
+    } else if block == 39 {
+        red = 38 + grain; green = 91 + grain * 2; blue = 45 + grain
+        if texture_hash % 5 == 0 { red -= 16; green -= 21; blue -= 9 }
+        if texture_hash % 13 == 0 { red += 18; green += 21; blue += 8 }
+    } else if block == 41 {
+        red = 126 + grain * 2; green = 132 + grain * 2; blue = 128 + grain * 2
+        if texture_hash % 7 == 0 { red -= 21; green -= 19; blue -= 18 }
+        if cell_v == 0 { red += 12; green += 10; blue += 7 }
+    } else if block == 42 {
+        red = 33 + grain; green = 21 + grain; blue = 57 + grain * 2
+        if (cell_u + cell_v * 3) % 11 == 0 { red = 67; green = 45; blue = 99 }
+        if texture_hash % 17 == 0 { red = 81; green = 62; blue = 117 }
+    } else if block == 43 {
+        red = 120 + grain * 2; green = 61 + grain; blue = 172 + grain * 2
+        if (cell_u * 3 + cell_v * 5 + texture_hash) % 7 < 3 { red += 26; green += 15; blue += 39 }
+        if texture_hash % 13 == 0 { red = 207; green = 153; blue = 255 }
+    } else if block == 45 {
+        red = 153 + grain; green = 109 + grain; blue = 65 + grain
+        if cell_v % 3 == 0 { red -= 38; green -= 27; blue -= 15 }
+    } else if block == 52 {
+        // Glowstone: warm luminous mottling with distinct mineral clusters.
+        red = 226 + grain * 2; green = 181 + grain * 2; blue = 93 + grain
+        if texture_hash % 4 == 0 { red = 255; green = 224; blue = 137 }
+        if texture_hash % 9 == 0 { red = 183; green = 119; blue = 48 }
+    } else if block == 53 {
+        // Moss block: green flecks over damp earth.
+        red = 87 + grain * 2; green = 121 + grain * 2; blue = 63 + grain
+        if texture_hash % 4 == 0 { red = 56 + grain; green = 92 + grain * 2; blue = 43 + grain }
+        if texture_hash % 13 == 0 { red = 124; green = 148; blue = 72 }
+    } else if block == 54 {
+        // Bookshelf: alternating coloured spines and a strong wooden shelf grid.
+        red = 132 + grain; green = 84 + grain; blue = 44 + grain
+        if cell_v % 6 == 0 or cell_v % 6 == 5 { red = 173; green = 123; blue = 71 }
+        else if cell_u % 5 == 0 { red = 94; green = 61; blue = 35 }
+        else if cell_u % 7 == 1 { red = 126; green = 48; blue = 39 }
+        else if cell_u % 7 == 3 { red = 57; green = 91; blue = 139 }
+        else if cell_u % 7 == 5 { red = 201; green = 174; blue = 73 }
     } else {
         red = 54 + grain
         green = 56 + grain
@@ -506,7 +1036,7 @@ fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: f
     else if face == 2 or face == 5 { light = 0.68 }
     else { light = 0.48 }
 
-    if block == 20 {
+    if block == 20 or block == 29 or block == 43 or block == 37 or block == 52 {
         light = max(light, 1.08)
     }
     let distance_light = clamp(1.0 - distance * 0.012, 0.58, 1.0)
@@ -548,6 +1078,8 @@ fn block_ui_color(block: int) -> int {
     if block == 4 { return rgb(137, 94, 53) }
     if block == 5 { return rgb(60, 137, 56) }
     if block == 6 { return rgb(222, 205, 128) }
+    if block == 7 { return rgb(48, 48, 52) }
+    if block == 8 { return rgb(52, 129, 201) }
     if block == 9 { return rgb(61, 64, 69) }
     if block == 10 { return rgb(204, 158, 43) }
     if block == 11 { return rgb(174, 123, 71) }
@@ -555,7 +1087,37 @@ fn block_ui_color(block: int) -> int {
     if block == 13 { return rgb(140, 209, 226) }
     if block == 14 { return rgb(162, 111, 58) }
     if block == 18 { return rgb(45, 198, 220) }
-    if block == 20 { return rgb(255, 190, 62) }
+    if block == 20 or block == 29 { return rgb(255, 190, 62) }
+    if block == 21 { return rgb(132, 128, 119) }
+    if block == 22 { return rgb(235, 243, 250) }
+    if block == 23 { return rgb(145, 208, 235) }
+    if block == 24 { return rgb(49, 139, 55) }
+    if block == 25 { return rgb(211, 192, 135) }
+    if block == 26 or block == 27 or block == 40 { return rgb(118, 121, 126) }
+    if block == 28 { return rgb(215, 66, 143) }
+    if block == 30 { return rgb(103, 106, 111) }
+    if block == 31 { return rgb(151, 91, 43) }
+    if block == 32 { return rgb(170, 113, 80) }
+    if block == 33 { return rgb(198, 202, 209) }
+    if block == 34 { return rgb(190, 119, 68) }
+    if block == 35 { return rgb(190, 119, 66) }
+    if block == 36 or block == 37 { return rgb(190, 39, 45) }
+    if block == 38 { return rgb(91, 66, 43) }
+    if block == 39 { return rgb(38, 91, 45) }
+    if block == 41 { return rgb(126, 132, 128) }
+    if block == 42 { return rgb(33, 21, 57) }
+    if block == 43 { return rgb(120, 61, 172) }
+    if block == 44 { return rgb(182, 46, 42) }
+    if block == 45 { return rgb(153, 109, 65) }
+    if block == 46 { return rgb(157, 114, 61) }
+    if block == 47 { return rgb(133, 137, 141) }
+    if block == 48 { return rgb(198, 202, 209) }
+    if block == 49 { return rgb(68, 224, 232) }
+    if block == 50 { return rgb(174, 123, 71) }
+    if block == 51 { return rgb(174, 123, 71) }
+    if block == 52 { return rgb(241, 195, 99) }
+    if block == 53 { return rgb(82, 119, 58) }
+    if block == 54 { return rgb(138, 83, 46) }
     return rgb(54, 56, 61)
 }
 
@@ -579,19 +1141,53 @@ fn block_name(block: int) -> str {
     if block == 18 { return "Diamond Ore" }
     if block == 19 { return "Diamond" }
     if block == 20 { return "Lantern" }
+    if block == 21 { return "Gravel" }
+    if block == 22 { return "Snow Block" }
+    if block == 23 { return "Ice" }
+    if block == 24 { return "Cactus" }
+    if block == 25 { return "Sandstone" }
+    if block == 26 { return "Cobblestone" }
+    if block == 27 { return "Mossy Cobblestone" }
+    if block == 28 { return "Flower" }
+    if block == 29 { return "Torch" }
+    if block == 30 { return "Furnace" }
+    if block == 31 { return "Chest" }
+    if block == 32 { return "Raw Iron Ore" }
+    if block == 33 { return "Iron Ingot" }
+    if block == 34 { return "Copper Ore" }
+    if block == 35 { return "Copper Ingot" }
+    if block == 36 { return "Redstone Ore" }
+    if block == 37 { return "Redstone Dust" }
+    if block == 38 { return "Spruce Log" }
+    if block == 39 { return "Spruce Leaves" }
+    if block == 40 { return "Mossy Stone Bricks" }
+    if block == 41 { return "Clay" }
+    if block == 42 { return "Obsidian" }
+    if block == 43 { return "Amethyst Block" }
+    if block == 44 { return "Mushroom" }
+    if block == 45 { return "Stick" }
+    if block == 46 { return "Wooden Pickaxe" }
+    if block == 47 { return "Stone Pickaxe" }
+    if block == 48 { return "Iron Pickaxe" }
+    if block == 49 { return "Diamond Pickaxe" }
+    if block == 50 { return "Wooden Axe" }
+    if block == 51 { return "Wooden Shovel" }
+    if block == 52 { return "Glowstone" }
+    if block == 53 { return "Moss Block" }
+    if block == 54 { return "Bookshelf" }
     return "Bedrock"
 }
 
 fn hotbar_block(slot: int) -> int {
     if slot == 0 { return 1 }
     if slot == 1 { return 2 }
-    if slot == 2 { return 3 }
+    if slot == 2 { return 26 }
     if slot == 3 { return 4 }
     if slot == 4 { return 11 }
     if slot == 5 { return 6 }
-    if slot == 6 { return 12 }
-    if slot == 7 { return 13 }
-    return 14
+    if slot == 6 { return 29 }
+    if slot == 7 { return 14 }
+    return 30
 }
 
 fn inventory_grid_item(slot: int) -> int {
@@ -601,18 +1197,54 @@ fn inventory_grid_item(slot: int) -> int {
     if slot == 3 { return 4 }
     if slot == 4 { return 5 }
     if slot == 5 { return 6 }
-    if slot == 6 { return 9 }
-    if slot == 7 { return 10 }
-    if slot == 8 { return 18 }
-    if slot == 9 { return 11 }
-    if slot == 10 { return 12 }
-    if slot == 11 { return 13 }
-    if slot == 12 { return 14 }
-    if slot == 13 { return 20 }
+    if slot == 6 { return 7 }
+    if slot == 7 { return 8 }
+    if slot == 8 { return 9 }
+    if slot == 9 { return 10 }
+    if slot == 10 { return 11 }
+    if slot == 11 { return 12 }
+    if slot == 12 { return 13 }
+    if slot == 13 { return 14 }
     if slot == 14 { return 15 }
     if slot == 15 { return 16 }
     if slot == 16 { return 17 }
-    if slot == 17 { return 19 }
+    if slot == 17 { return 18 }
+    if slot == 18 { return 19 }
+    if slot == 19 { return 20 }
+    if slot == 20 { return 21 }
+    if slot == 21 { return 22 }
+    if slot == 22 { return 23 }
+    if slot == 23 { return 24 }
+    if slot == 24 { return 25 }
+    if slot == 25 { return 26 }
+    if slot == 26 { return 27 }
+    if slot == 27 { return 28 }
+    if slot == 28 { return 29 }
+    if slot == 29 { return 30 }
+    if slot == 30 { return 31 }
+    if slot == 31 { return 32 }
+    if slot == 32 { return 33 }
+    if slot == 33 { return 34 }
+    if slot == 34 { return 35 }
+    if slot == 35 { return 36 }
+    if slot == 36 { return 37 }
+    if slot == 37 { return 38 }
+    if slot == 38 { return 39 }
+    if slot == 39 { return 40 }
+    if slot == 40 { return 41 }
+    if slot == 41 { return 42 }
+    if slot == 42 { return 43 }
+    if slot == 43 { return 44 }
+    if slot == 44 { return 45 }
+    if slot == 45 { return 46 }
+    if slot == 46 { return 47 }
+    if slot == 47 { return 48 }
+    if slot == 48 { return 49 }
+    if slot == 49 { return 50 }
+    if slot == 50 { return 51 }
+    if slot == 51 { return 52 }
+    if slot == 52 { return 53 }
+    if slot == 53 { return 54 }
     return 0
 }
 
@@ -631,7 +1263,27 @@ fn map_color(block: int) -> int {
     if block == 13 { return rgb(140, 209, 226) }
     if block == 14 { return rgb(162, 111, 58) }
     if block == 18 { return rgb(45, 198, 220) }
-    if block == 20 { return rgb(255, 190, 62) }
+    if block == 20 or block == 29 { return rgb(255, 190, 62) }
+    if block == 21 { return rgb(132, 128, 119) }
+    if block == 22 { return rgb(235, 243, 250) }
+    if block == 23 or block == 8 { return rgb(52, 129, 201) }
+    if block == 24 { return rgb(49, 139, 55) }
+    if block == 25 or block == 6 { return rgb(211, 192, 135) }
+    if block == 26 or block == 27 or block == 40 { return rgb(118, 121, 126) }
+    if block == 28 { return rgb(215, 66, 143) }
+    if block == 30 { return rgb(103, 106, 111) }
+    if block == 31 { return rgb(151, 91, 43) }
+    if block == 32 { return rgb(170, 113, 80) }
+    if block == 34 { return rgb(190, 119, 68) }
+    if block == 36 or block == 37 { return rgb(190, 39, 45) }
+    if block == 38 { return rgb(91, 66, 43) }
+    if block == 39 { return rgb(38, 91, 45) }
+    if block == 41 { return rgb(126, 132, 128) }
+    if block == 52 { return rgb(236, 190, 84) }
+    if block == 53 { return rgb(73, 117, 56) }
+    if block == 54 { return rgb(138, 83, 46) }
+    if block == 42 { return rgb(33, 21, 57) }
+    if block == 43 { return rgb(120, 61, 172) }
     return rgb(59, 61, 66)
 }
 
@@ -666,27 +1318,143 @@ fn has_workbench_nearby() -> bool {
     return false
 }
 
+fn has_furnace_nearby() -> bool {
+    let px = int(floor(player_x))
+    let py = int(floor(player_y))
+    let pz = int(floor(player_z))
+    for bx in (px - 3)..=(px + 3) {
+        for by in (py - 2)..=(py + 3) {
+            for bz in (pz - 3)..=(pz + 3) {
+                if get_block(bx, by, bz) == 30 and abs(bx - px) + abs(by - py) + abs(bz - pz) <= 5 { return true }
+            }
+        }
+    }
+    return false
+}
+
+fn pickaxe_level() -> int {
+    if equipped_tool_mode != 0 { return 0 }
+    if equipped_pickaxe == 49 { return 4 }
+    if equipped_pickaxe == 48 { return 3 }
+    if equipped_pickaxe == 47 { return 2 }
+    if equipped_pickaxe == 46 { return 1 }
+    return 0
+}
+
+fn equip_best_pickaxe() {
+    equipped_tool_mode = 0
+    if inventory[49] > 0 { equipped_pickaxe = 49 }
+    else if inventory[48] > 0 { equipped_pickaxe = 48 }
+    else if inventory[47] > 0 { equipped_pickaxe = 47 }
+    else if inventory[46] > 0 { equipped_pickaxe = 46 }
+    else { equipped_pickaxe = 0 }
+    if equipped_pickaxe == 0 { status_message = "No pickaxe — craft one in E inventory" }
+    else { status_message = "Equipped {block_name(equipped_pickaxe)}" }
+    status_timer = 2.0
+}
+
+fn use_tool_durability() {
+    let level = pickaxe_level()
+    if level <= 0 { return }
+    let index = level - 1
+    tool_durability[index] -= 1
+    if tool_durability[index] <= 0 {
+        inventory[equipped_pickaxe] = max(0, inventory[equipped_pickaxe] - 1)
+        status_message = "{block_name(equipped_pickaxe)} broke!"
+        status_timer = 2.5
+        tool_durability[index] = if level == 1 { 59 } else if level == 2 { 131 } else if level == 3 { 250 } else { 1561 }
+        equipped_pickaxe = 0
+        equip_best_pickaxe()
+    }
+}
+
+fn use_axe_durability() {
+    tool_durability[4] -= 1
+    if tool_durability[4] <= 0 {
+        inventory[50] = max(0, inventory[50] - 1)
+        tool_durability[4] = 59
+        equipped_tool_mode = 0
+        status_message = "Wooden axe broke"
+        status_timer = 2.0
+    }
+}
+
+fn use_shovel_durability() {
+    tool_durability[5] -= 1
+    if tool_durability[5] <= 0 {
+        inventory[51] = max(0, inventory[51] - 1)
+        tool_durability[5] = 59
+        equipped_tool_mode = 0
+        status_message = "Wooden shovel broke"
+        status_timer = 2.0
+    }
+}
+
+fn smelt_ore() {
+    if not has_furnace_nearby() {
+        status_message = "Place a furnace nearby first"
+    } else if inventory[15] <= 0 {
+        status_message = "Need coal as furnace fuel"
+    } else if inventory[32] > 0 {
+        inventory[32] -= 1
+        inventory[15] -= 1
+        inventory[33] += 1
+        status_message = "Smelted raw iron into an iron ingot"
+    } else if inventory[34] > 0 {
+        inventory[34] -= 1
+        inventory[15] -= 1
+        inventory[35] += 1
+        status_message = "Smelted copper ore into a copper ingot"
+    } else {
+        status_message = "Need raw iron or copper ore to smelt"
+    }
+    status_timer = 2.5
+}
+
+fn is_placeable_item(item: int) -> bool {
+    return item == 1 or item == 2 or item == 3 or item == 4 or item == 5 or item == 6 or item == 11 or item == 12 or item == 13 or item == 14 or item == 20 or item == 21 or item == 22 or item == 23 or item == 24 or item == 25 or item == 26 or item == 27 or item == 28 or item == 29 or item == 30 or item == 31 or item == 38 or item == 39 or item == 40 or item == 41 or item == 42 or item == 43 or item == 44 or item == 52 or item == 53 or item == 54
+}
+
+fn cycle_placeable_block() {
+    for offset in 1..inventory.len() {
+        let candidate = (selected_block + offset) % inventory.len()
+        if is_placeable_item(candidate) and inventory[candidate] > 0 {
+            selected_block = candidate
+            status_message = "Selected {block_name(selected_block)}"
+            status_timer = 1.5
+            return
+        }
+    }
+    status_message = "No placeable blocks in inventory"
+    status_timer = 1.5
+}
+
 fn craft_recipe(recipe: int) {
     if recipe == 1 {
         if inventory[4] >= 1 {
             inventory[4] -= 1
             inventory[11] += 4
             blocks_crafted += 4
-            status_message = "Crafted 4 planks"
+            status_message = "Crafted 4 oak planks"
+        } else if inventory[38] >= 1 {
+            inventory[38] -= 1
+            inventory[11] += 4
+            blocks_crafted += 4
+            status_message = "Crafted 4 spruce planks"
         } else {
-            status_message = "Need 1 wood to craft planks"
+            status_message = "Need 1 wood log to craft planks"
         }
     } else if recipe == 2 {
         if not has_workbench_nearby() {
             status_message = "Place a workbench nearby first"
-        } else if inventory[3] >= 4 and inventory[15] >= 1 {
-            inventory[3] -= 4
+        } else if inventory[26] >= 4 and inventory[15] >= 1 {
+            inventory[26] -= 4
             inventory[15] -= 1
             inventory[12] += 4
             blocks_crafted += 4
-            status_message = "Crafted 4 bricks"
+            status_message = "Crafted 4 decorative bricks"
         } else {
-            status_message = "Need 4 stone and 1 coal"
+            status_message = "Need 4 cobblestone and 1 coal"
         }
     } else if recipe == 3 {
         if not has_workbench_nearby() {
@@ -701,14 +1469,20 @@ fn craft_recipe(recipe: int) {
             status_message = "Need 2 sand and 1 coal"
         }
     } else if recipe == 4 {
-        if inventory[4] >= 4 and inventory[3] >= 2 {
+        if inventory[26] >= 2 and inventory[4] >= 4 {
             inventory[4] -= 4
-            inventory[3] -= 2
+            inventory[26] -= 2
             inventory[14] += 1
             blocks_crafted += 1
-            status_message = "Crafted a workbench — press 9 to select it"
+            status_message = "Crafted a workbench"
+        } else if inventory[26] >= 2 and inventory[38] >= 4 {
+            inventory[38] -= 4
+            inventory[26] -= 2
+            inventory[14] += 1
+            blocks_crafted += 1
+            status_message = "Crafted a workbench from spruce wood"
         } else {
-            status_message = "Need 4 wood and 2 stone"
+            status_message = "Need 4 wood logs and 2 cobblestone"
         }
     } else if recipe == 5 {
         if not has_workbench_nearby() {
@@ -718,18 +1492,93 @@ fn craft_recipe(recipe: int) {
             inventory[16] -= 1
             inventory[20] += 1
             blocks_crafted += 1
-            status_message = "Crafted a lantern — press 0 to select it"
+            status_message = "Crafted a lantern"
         } else {
             status_message = "Need 2 coal and 1 gold"
         }
+    } else if recipe == 6 {
+        if not has_workbench_nearby() { status_message = "Place a workbench nearby first" }
+        else if inventory[11] >= 3 and inventory[45] >= 2 {
+            inventory[11] -= 3; inventory[45] -= 2
+            if inventory[46] == 0 { tool_durability[0] = 59 }
+            inventory[46] += 1; blocks_crafted += 1
+            status_message = "Crafted a wooden pickaxe"
+        } else { status_message = "Need 3 planks and 2 sticks" }
+    } else if recipe == 7 {
+        if not has_workbench_nearby() { status_message = "Place a workbench nearby first" }
+        else if inventory[26] >= 3 and inventory[45] >= 2 {
+            inventory[26] -= 3; inventory[45] -= 2
+            if inventory[47] == 0 { tool_durability[1] = 131 }
+            inventory[47] += 1; blocks_crafted += 1
+            status_message = "Crafted a stone pickaxe"
+        } else { status_message = "Need 3 cobblestone and 2 sticks" }
+    } else if recipe == 8 {
+        if not has_workbench_nearby() { status_message = "Place a workbench nearby first" }
+        else if inventory[26] >= 8 {
+            inventory[26] -= 8; inventory[30] += 1; blocks_crafted += 1
+            status_message = "Crafted a furnace"
+        } else { status_message = "Need 8 cobblestone" }
+    } else if recipe == 9 {
+        if inventory[15] >= 1 and inventory[45] >= 1 {
+            inventory[15] -= 1; inventory[45] -= 1; inventory[29] += 4; blocks_crafted += 4
+            status_message = "Crafted 4 torches"
+        } else { status_message = "Need 1 coal and 1 stick" }
+    } else if recipe == 10 {
+        if not has_workbench_nearby() { status_message = "Place a workbench nearby first" }
+        else if inventory[33] >= 3 and inventory[45] >= 2 {
+            inventory[33] -= 3; inventory[45] -= 2
+            if inventory[48] == 0 { tool_durability[2] = 250 }
+            inventory[48] += 1; blocks_crafted += 1
+            status_message = "Crafted an iron pickaxe"
+        } else { status_message = "Need 3 iron ingots and 2 sticks" }
+    } else if recipe == 11 {
+        if not has_workbench_nearby() { status_message = "Place a workbench nearby first" }
+        else if inventory[19] >= 3 and inventory[45] >= 2 {
+            inventory[19] -= 3; inventory[45] -= 2
+            if inventory[49] == 0 { tool_durability[3] = 1561 }
+            inventory[49] += 1; blocks_crafted += 1
+            status_message = "Crafted a diamond pickaxe"
+        } else { status_message = "Need 3 diamonds and 2 sticks" }
+    } else if recipe == 12 {
+        if inventory[4] >= 2 {
+            inventory[4] -= 2; inventory[45] += 4; blocks_crafted += 4
+            status_message = "Crafted 4 sticks"
+        } else if inventory[38] >= 2 {
+            inventory[38] -= 2; inventory[45] += 4; blocks_crafted += 4
+            status_message = "Crafted 4 sticks from spruce wood"
+        } else { status_message = "Need 2 wood logs" }
+    } else if recipe == 13 {
+        if not has_workbench_nearby() { status_message = "Place a workbench nearby first" }
+        else if inventory[50] > 0 { status_message = "You already have a wooden axe" }
+        else if inventory[11] >= 3 and inventory[45] >= 2 {
+            inventory[11] -= 3; inventory[45] -= 2; inventory[50] = 1
+            tool_durability[4] = 59; blocks_crafted += 1
+            status_message = "Crafted a wooden axe — press O to equip"
+        } else { status_message = "Need 3 planks and 2 sticks" }
+    } else if recipe == 14 {
+        if not has_workbench_nearby() { status_message = "Place a workbench nearby first" }
+        else if inventory[51] > 0 { status_message = "You already have a wooden shovel" }
+        else if inventory[11] >= 1 and inventory[45] >= 2 {
+            inventory[11] -= 1; inventory[45] -= 2; inventory[51] = 1
+            tool_durability[5] = 59; blocks_crafted += 1
+            status_message = "Crafted a wooden shovel — press L to equip"
+        } else { status_message = "Need 1 plank and 2 sticks" }
     }
     status_timer = 3.0
 }
 
 fn respawn_player() {
+    world_origin_x = -WORLD_W / 2
+    world_origin_z = -WORLD_D / 2
+    create_world()
+    dropped_item_ids.clear()
+    dropped_item_xs.clear()
+    dropped_item_ys.clear()
+    dropped_item_zs.clear()
+    dropped_item_ages.clear()
     player_x = float(WORLD_W / 2) + 0.5
     player_z = float(WORLD_D / 2) + 0.5
-    player_y = float(terrain_height(WORLD_W / 2, WORLD_D / 2) + 1)
+    player_y = float(terrain_height(0, 0) + 1)
     velocity_y = 0.0
     grounded = true
     health = 20.0
@@ -741,7 +1590,7 @@ fn respawn_player() {
 
 fn save_world() {
     let buffer = str_builder()
-    buffer.add("BW3\n")
+    buffer.add("BW6\n")
     for block in world {
         buffer.add_byte(byte(block + 48))
     }
@@ -751,9 +1600,22 @@ fn save_world() {
         buffer.add(str(inventory[i]))
     }
     buffer.add("\n")
-    buffer.add("{player_x},{player_y},{player_z},{yaw},{pitch},{health},{hunger},{game_time}")
+    buffer.add("{player_x},{player_y},{player_z},{yaw},{pitch},{health},{hunger},{game_time},{world_origin_x},{world_origin_z},{equipped_pickaxe},{equipped_tool_mode}\n")
+    buffer.add("{tool_durability[0]},{tool_durability[1]},{tool_durability[2]},{tool_durability[3]},{tool_durability[4]},{tool_durability[5]}\n")
+    if world_edits.len() == 0 {
+        buffer.add("-")
+    } else {
+        var first = true
+        for key, block in world_edits {
+            if not first { buffer.add(";") }
+            buffer.add(key)
+            buffer.add(":")
+            buffer.add(str(block))
+            first = false
+        }
+    }
     if write_file("blockworld.save", buffer.finish()) {
-        status_message = "World, inventory and stats saved"
+        status_message = "Infinite world, edits, inventory and stats saved"
     } else {
         status_message = "Save failed — check folder permissions"
     }
@@ -769,8 +1631,8 @@ fn load_world() {
     }
     let data = saved!
     let lines = data.lines()
-    if lines.len() != 4 or lines[0] != "BW3" or lines[1].len() != world.len() {
-        status_message = "Save file invalid or from an older version"
+    if lines.len() != 6 or lines[0] != "BW6" or lines[1].len() != world.len() {
+        status_message = "Save file invalid or from an older version — start a new save"
         status_timer = 4.0
         return
     }
@@ -793,7 +1655,7 @@ fn load_world() {
         inventory[i] = max(0, count!)
     }
     let stats = lines[3].split(",")
-    if stats.len() != 8 {
+    if stats.len() != 12 {
         status_message = "Save player data is invalid"
         status_timer = 4.0
         return
@@ -806,10 +1668,46 @@ fn load_world() {
     health = clamp(float(stats[5]), 0.0, 20.0)
     hunger = clamp(float(stats[6]), 0.0, 20.0)
     game_time = float(stats[7])
+    world_origin_x = int(stats[8])
+    world_origin_z = int(stats[9])
+    equipped_pickaxe = clamp(int(stats[10]), 0, 49)
+    equipped_tool_mode = clamp(int(stats[11]), 0, 2)
+    let durability_parts = lines[4].split(",")
+    if durability_parts.len() == 6 {
+        for i in 0..6 {
+            let parsed = durability_parts[i].parse_int()
+            if parsed != nil { tool_durability[i] = max(1, parsed!) }
+        }
+    }
+
+    world_edits.clear()
+    if lines[5] != "-" and not lines[5].is_empty() {
+        for entry in lines[5].split(";") {
+            let edit_parts = entry.split(":")
+            if edit_parts.len() == 2 {
+                let block = edit_parts[1].parse_int()
+                if block != nil {
+                    world_edits[edit_parts[0]] = clamp(block!, 0, 54)
+                }
+            }
+        }
+    }
+    // Reconstruct procedural scenery for the loaded coordinates, then restore player edits.
+    for x in 0..WORLD_W { for z in 0..WORLD_D { generate_base_column(x, z) } }
+    for tx in -2..=(WORLD_W + 1) {
+        for tz in -2..=(WORLD_D + 1) {
+            let gx = world_origin_x + tx
+            let gz = world_origin_z + tz
+            if is_tree_site(gx, gz) { build_tree(tx, tz, terrain_height(gx, gz)) }
+        }
+    }
+    decorate_biome_features()
+    decorate_structures_window()
+    apply_all_edits_to_window()
     velocity_y = 0.0
     grounded = false
     update_camera()
-    status_message = "World, inventory and stats loaded"
+    status_message = "Infinite world, edits and player stats loaded"
     status_timer = 4.0
 }
 
@@ -824,43 +1722,97 @@ fn handle_block_action(left_now: bool, right_now: bool) {
     if left_now and not previous_left and mouse_captured {
         let (block, bx, by, bz, _, _, _, _) = trace_ray(forward_x, forward_y, forward_z, 6.0)
         if block != 0 and block != 7 and block != 8 and bx >= 0 {
-            set_block(bx, by, bz, 0)
+            set_player_block(bx, by, bz, 0)
             blocks_mined += 1
+            let level = pickaxe_level()
             if block == 9 {
-                inventory[15] += 1 + ((bx + by + bz) % 2)
+                inventory[15] += 1
                 status_message = "Mined coal ore"
             } else if block == 10 {
-                inventory[16] += 1
-                status_message = "Mined gold ore"
+                if level >= 2 { inventory[16] += 1; status_message = "Mined gold ore" }
+                else { status_message = "Gold ore needs a stone pickaxe or better" }
             } else if block == 18 {
-                inventory[19] += 1
-                status_message = "Diamond found!"
-            } else if block >= 1 and block <= 14 or block == 20 {
+                if level >= 3 { inventory[19] += 1; status_message = "Diamond found!" }
+                else { status_message = "Diamond ore needs an iron pickaxe or better" }
+            } else if block == 32 {
+                if level >= 2 { inventory[32] += 1; status_message = "Collected raw iron — smelt it at a furnace" }
+                else { status_message = "Iron ore needs a stone pickaxe or better" }
+            } else if block == 34 {
+                if level >= 1 { inventory[34] += 1; status_message = "Collected copper ore — smelt it at a furnace" }
+                else { status_message = "Copper ore needs a pickaxe" }
+            } else if block == 36 {
+                if level >= 2 { inventory[37] += 4; status_message = "Collected 4 redstone dust" }
+                else { status_message = "Redstone ore needs a stone pickaxe or better" }
+            } else if block == 3 {
+                inventory[26] += 1
+                status_message = "Collected cobblestone"
+            } else if block == 4 {
+                inventory[4] += if equipped_tool_mode == 1 { 2 } else { 1 }
+                status_message = if equipped_tool_mode == 1 { "Axe chopped oak logs quickly" } else { "Collected oak log" }
+            } else if block == 38 {
+                inventory[38] += if equipped_tool_mode == 1 { 2 } else { 1 }
+                status_message = if equipped_tool_mode == 1 { "Axe chopped spruce logs quickly" } else { "Collected spruce log" }
+            } else if block == 5 or block == 39 {
+                let leaves_item = if block == 5 { 5 } else { 39 }
+                inventory[leaves_item] += 1
+                if abs(bx * 19 + by * 11 + bz * 7) % 7 == 0 { inventory[17] += 1; status_message = "Leaves dropped an apple!" }
+                else if abs(bx * 7 + bz * 13) % 3 == 0 { inventory[45] += 1; status_message = "Leaves dropped a stick" }
+                else { status_message = "Collected {block_name(block)}" }
+            } else if block == 27 or block == 40 {
                 inventory[block] += 1
                 status_message = "Collected {block_name(block)}"
-                if block == 5 and (bx * 19 + by * 11 + bz * 7) % 5 == 0 {
-                    inventory[17] += 1
-                    status_message = "Collected leaves and found an apple!"
-                }
+            } else if block == 30 {
+                inventory[30] += 1
+                status_message = "Collected furnace"
+            } else if block == 31 {
+                // Treasure chests from generated structures can also be mined and carried.
+                inventory[31] += 1
+                status_message = "Collected chest"
+            } else if is_placeable_item(block) {
+                inventory[block] += 1
+                if equipped_tool_mode == 2 and (block == 6 or block == 21 or block == 41) {
+                    inventory[block] += 1
+                    status_message = "Shovel collected 2 {block_name(block)}"
+                } else { status_message = "Collected {block_name(block)}" }
+                if block == 5 and abs(bx * 19 + by * 11 + bz * 7) % 5 == 0 { inventory[17] += 1 }
+            } else {
+                status_message = "Mined {block_name(block)}"
             }
-            status_timer = 1.8
+            if equipped_tool_mode == 0 {
+                if level > 0 { use_tool_durability() }
+            } else if equipped_tool_mode == 1 {
+                use_axe_durability()
+            } else if equipped_tool_mode == 2 {
+                use_shovel_durability()
+            }
+            status_timer = 2.0
         }
     }
 
     if right_now and not previous_right and mouse_captured {
         let (block, bx, by, bz, ax, ay, az, _) = trace_ray(forward_x, forward_y, forward_z, 6.0)
-        let can_place = selected_block >= 1 and selected_block <= 14 or selected_block == 20
-        let target_in_bounds = ax >= 0 and ax < WORLD_W and ay >= 0 and ay < WORLD_H and az >= 0 and az < WORLD_D
-        if block != 0 and bx >= 0 and target_in_bounds and can_place and get_block(ax, ay, az) == 0 and not overlaps_player(ax, ay, az) {
-            if inventory[selected_block] > 0 {
-                set_block(ax, ay, az, selected_block)
-                inventory[selected_block] -= 1
-                blocks_placed += 1
-                status_message = "Placed {block_name(selected_block)}"
-                status_timer = 1.2
-            } else {
-                status_message = "No {block_name(selected_block)} left — mine or craft more"
-                status_timer = 2.0
+        if block == 31 and bx >= 0 {
+            // Deterministic loot: each chest can only be opened once because it is removed.
+            set_player_block(bx, by, bz, 0)
+            inventory[33] += 1 + abs((world_origin_x + bx) * 3 + (world_origin_z + bz) * 7) % 3
+            inventory[15] += 2
+            if abs((world_origin_x + bx) * 13 + (world_origin_z + bz) * 17) % 4 == 0 { inventory[19] += 1 }
+            if abs(bx * 7 + bz * 11) % 2 == 0 { inventory[17] += 1 }
+            status_message = "Chest looted: ingots, coal and supplies!"
+            status_timer = 3.0
+        } else {
+            let target_in_bounds = ax >= 0 and ax < WORLD_W and ay >= 0 and ay < WORLD_H and az >= 0 and az < WORLD_D
+            if block != 0 and bx >= 0 and target_in_bounds and is_placeable_item(selected_block) and get_block(ax, ay, az) == 0 and not overlaps_player(ax, ay, az) {
+                if inventory[selected_block] > 0 {
+                    set_player_block(ax, ay, az, selected_block)
+                    inventory[selected_block] -= 1
+                    blocks_placed += 1
+                    status_message = "Placed {block_name(selected_block)}"
+                    status_timer = 1.2
+                } else {
+                    status_message = "No {block_name(selected_block)} left — mine or craft more"
+                    status_timer = 2.0
+                }
             }
         }
     }
@@ -999,8 +1951,48 @@ fn game_tick() {
         selected_block = 20
         status_message = "Lantern selected"
         status_timer = 1.1
+    } else if lantern_now and not previous_v and show_crafting {
+        craft_recipe(12)
     }
     previous_v = lantern_now
+
+    let equip_now = ui_key_down("p")
+    if equip_now and not previous_p { equip_best_pickaxe() }
+    previous_p = equip_now
+    let axe_now = ui_key_down("o")
+    if axe_now and not previous_o {
+        if inventory[50] > 0 { equipped_tool_mode = 1; status_message = "Equipped wooden axe" }
+        else { status_message = "Craft a wooden axe in E inventory first" }
+        status_timer = 2.0
+    }
+    previous_o = axe_now
+    let shovel_now = ui_key_down("l")
+    if shovel_now and not previous_l {
+        if inventory[51] > 0 { equipped_tool_mode = 2; status_message = "Equipped wooden shovel" }
+        else { status_message = "Craft a wooden shovel in E inventory first" }
+        status_timer = 2.0
+    }
+    previous_l = shovel_now
+    let smelt_now = ui_key_down("h")
+    if smelt_now and not previous_h and not show_crafting { smelt_ore() }
+    previous_h = smelt_now
+
+    let recipe_iron_now = ui_key_down("r")
+    if recipe_iron_now and not previous_r and show_crafting { craft_recipe(10) }
+    previous_r = recipe_iron_now
+    let recipe_diamond_now = ui_key_down("t")
+    if recipe_diamond_now and not previous_t and show_crafting { craft_recipe(11) }
+    previous_t = recipe_diamond_now
+    let recipe_axe_now = ui_key_down("y")
+    if recipe_axe_now and not previous_y and show_crafting { craft_recipe(13) }
+    previous_y = recipe_axe_now
+    let recipe_shovel_now = ui_key_down("u")
+    if recipe_shovel_now and not previous_u and show_crafting { craft_recipe(14) }
+    previous_u = recipe_shovel_now
+
+    let block_cycle_now = ui_key_down("b")
+    if block_cycle_now and not previous_b and not show_crafting { cycle_placeable_block() }
+    previous_b = block_cycle_now
 
     let map_now = ui_key_down("m")
     if map_now and not previous_m { show_map = not show_map }
@@ -1033,6 +2025,10 @@ fn game_tick() {
         if key3 and not previous_3 { craft_recipe(3) }
         if key4 and not previous_4 { craft_recipe(4) }
         if key5 and not previous_5 { craft_recipe(5) }
+        if key6 and not previous_6 { craft_recipe(6) }
+        if key7 and not previous_7 { craft_recipe(7) }
+        if key8 and not previous_8 { craft_recipe(8) }
+        if key9 and not previous_9 { craft_recipe(9) }
     } else {
         if key1 { selected_block = hotbar_block(0) }
         if key2 { selected_block = hotbar_block(1) }
@@ -1185,9 +2181,22 @@ fn game_tick() {
         velocity_y = 0.0
     }
 
+    // Cactus contact chips health once per second; plants remain non-solid enough to walk through only where intended.
+    let feet_block = get_block(int(floor(player_x)), int(floor(player_y + 0.2)), int(floor(player_z)))
+    let body_block = get_block(int(floor(player_x)), int(floor(player_y + 0.9)), int(floor(player_z)))
+    if feet_block == 24 or body_block == 24 {
+        cactus_timer += 0.03
+        if cactus_timer >= 1.0 {
+            cactus_timer = 0.0
+            health = max(0.0, health - 1.0)
+            status_message = "Cactus damage!"
+            status_timer = 1.0
+        }
+    } else { cactus_timer = 0.0 }
     if player_y < -3.0 { health = 0.0 }
     if health <= 0.0 { respawn_player() }
 
+    stream_world_if_needed()
     update_camera()
     handle_block_action(left_now, right_now)
     update_dropped_items()
@@ -1278,6 +2287,62 @@ fn draw_block_icon(c: Canvas, x: int, y: int, size: int, block: int) {
     } else if block == 19 {
         c.rect(px + inner / 2 - 2, py + inner / 2 - 2, 5, 5, rgb(71, 238, 247))
         c.rect(px + inner / 2, py + inner / 2, 3, 3, rgb(218, 255, 255))
+    } else if block == 21 {
+        for n in 0..7 { c.rect(px + (n * 7 + 3) % max(1, inner), py + (n * 11 + 2) % max(1, inner), 3, 2, rgb(183, 179, 169)) }
+    } else if block == 22 or block == 23 {
+        c.rect(px + 3, py + 3, inner - 6, inner - 6, if block == 22 { rgb(244, 249, 255) } else { rgb(170, 226, 245) })
+        c.line(px + 5, py + inner / 2, px + inner - 6, py + inner / 2 + 3, 1, rgb(201, 234, 247))
+    } else if block == 24 {
+        c.rect(px + inner / 3, py, max(3, inner / 3), inner, rgb(45, 139, 50))
+        c.line(px + inner / 3, py + 5, px + inner * 2 / 3, py + 5, 1, rgb(206, 222, 170))
+        c.line(px + inner / 3, py + inner - 7, px + inner * 2 / 3, py + inner - 7, 1, rgb(206, 222, 170))
+    } else if block == 25 {
+        c.line(px + 2, py + inner / 3, px + inner - 3, py + inner / 3, 1, rgb(166, 145, 101))
+        c.line(px + 2, py + (inner * 2) / 3, px + inner - 3, py + (inner * 2) / 3, 1, rgb(166, 145, 101))
+    } else if block == 26 or block == 27 or block == 40 {
+        for n in 0..5 { c.rect(px + (n * 7 + 2) % max(1, inner), py + (n * 9 + 3) % max(1, inner), 5, 4, if block == 27 or block == 40 { rgb(81, 126, 76) } else { rgb(155, 159, 164) }) }
+    } else if block == 28 or block == 44 {
+        c.rect(px + inner / 2 - 2, py + inner / 2, 4, inner / 2 - 2, rgb(55, 126, 46))
+        c.circle(px + inner / 2, py + inner / 3, max(3, inner / 4), if block == 28 { rgb(221, 65, 148) } else { rgb(194, 49, 43) })
+        c.circle(px + inner / 2 - 2, py + inner / 3 - 2, 2, rgb(250, 242, 208))
+    } else if block == 29 {
+        c.rect(px + inner / 3, py + 2, max(3, inner / 3), inner - 4, rgb(130, 83, 43))
+        c.rect(px + inner / 3, py + 3, max(3, inner / 3), max(5, inner / 3), rgb(255, 174, 48))
+    } else if block == 30 {
+        c.rect(px + 3, py + 3, inner - 6, inner - 6, rgb(100, 104, 110))
+        c.rect(px + inner / 3, py + inner / 3, inner / 3, inner / 3, rgb(41, 37, 36))
+        c.line(px + 4, py + inner - 5, px + inner - 5, py + inner - 5, 1, rgb(180, 180, 180))
+    } else if block == 31 {
+        c.rect(px + 3, py + 4, inner - 6, inner - 8, rgb(151, 91, 43))
+        c.line(px + 3, py + inner / 2, px + inner - 3, py + inner / 2, 2, rgb(83, 52, 28))
+        c.rect(px + inner / 2 - 2, py + inner / 2 - 2, 5, 7, rgb(230, 183, 66))
+    } else if block == 32 or block == 34 or block == 36 {
+        c.rect(px + 4, py + 4, 4, 4, if block == 32 { rgb(167, 112, 78) } else if block == 34 { rgb(199, 125, 68) } else { rgb(190, 40, 46) })
+        c.rect(px + inner - 9, py + 8, 5, 4, if block == 32 { rgb(167, 112, 78) } else if block == 34 { rgb(199, 125, 68) } else { rgb(190, 40, 46) })
+    } else if block == 33 or block == 35 {
+        c.rect(px + 4, py + inner / 3, inner - 8, inner / 3, if block == 33 { rgb(207, 211, 216) } else { rgb(190, 123, 70) })
+        c.line(px + 5, py + inner / 3, px + inner - 5, py + inner / 3, 1, rgb(245, 245, 245))
+    } else if block == 37 {
+        c.line(px + 3, py + 3, px + inner - 3, py + inner - 3, 3, rgb(196, 31, 39))
+        c.line(px + 4, py + inner - 4, px + inner - 4, py + 4, 2, rgb(220, 48, 55))
+    } else if block == 38 or block == 39 or block == 41 or block == 42 or block == 43 or block == 45 {
+        c.line(px + 4, py + 5, px + inner - 5, py + inner - 6, 2, block_ui_color(block))
+        c.line(px + 4, py + inner - 5, px + inner - 5, py + 5, 1, rgb(224, 224, 224))
+    } else if block == 52 {
+        for yy in 0..4 { for xx in 0..4 { if (xx * 5 + yy * 3) % 3 == 0 { c.rect(px + 3 + xx * max(1, inner / 5), py + 3 + yy * max(1, inner / 5), 4, 4, rgb(255, 224, 130)) } } }
+    } else if block == 53 {
+        for yy in 0..4 { for xx in 0..4 { if (xx * 7 + yy * 11) % 3 != 0 { c.rect(px + 3 + xx * max(1, inner / 5), py + 3 + yy * max(1, inner / 5), 4, 3, rgb(52, 93, 39)) } } }
+    } else if block == 54 {
+        c.line(px + 2, py + inner / 3, px + inner - 2, py + inner / 3, 2, rgb(91, 56, 31))
+        c.line(px + 2, py + (inner * 2) / 3, px + inner - 2, py + (inner * 2) / 3, 2, rgb(91, 56, 31))
+        c.rect(px + 5, py + 4, 4, 8, rgb(126, 48, 39))
+        c.rect(px + 12, py + 4, 4, 8, rgb(60, 92, 142))
+        c.rect(px + 20, py + 4, 4, 8, rgb(202, 177, 74))
+    } else if block >= 46 and block <= 51 {
+        c.line(px + 4, py + inner - 4, px + inner - 5, py + 4, 4, rgb(134, 93, 54))
+        let tool_color = if block == 46 or block == 50 or block == 51 { rgb(179, 135, 72) } else if block == 47 { rgb(156, 161, 166) } else if block == 48 { rgb(217, 220, 223) } else { rgb(64, 225, 237) }
+        c.line(px + inner / 2, py + 5, px + inner - 3, py + 5, 4, tool_color)
+        c.line(px + inner / 2 + 2, py + 5, px + inner / 2 + 2, py + 11, 3, tool_color)
     }
 }
 
@@ -1325,63 +2390,69 @@ fn draw_food(c: Canvas, x: int, y: int, amount: int) {
 
 fn draw_inventory_overlay(c: Canvas) {
     c.rect(0, 0, c.w, c.h, rgba(0, 0, 0, 0.58))
-    let panel_x = c.w / 2 - 335
-    let panel_y = c.h / 2 - 210
-    c.rect(panel_x, panel_y, 670, 420, rgb(198, 198, 198))
-    c.outline(panel_x, panel_y, 670, 420, 0, 3, rgb(35, 35, 35))
-    c.line(panel_x + 3, panel_y + 3, panel_x + 666, panel_y + 3, 2, rgb(245, 245, 245))
-    c.line(panel_x + 3, panel_y + 3, panel_x + 3, panel_y + 416, 2, rgb(245, 245, 245))
+    let panel_x = c.w / 2 - 400
+    let panel_y = c.h / 2 - 310
+    c.rect(panel_x, panel_y, 800, 620, rgb(198, 198, 198))
+    c.outline(panel_x, panel_y, 800, 620, 0, 3, rgb(35, 35, 35))
+    c.line(panel_x + 3, panel_y + 3, panel_x + 796, panel_y + 3, 2, rgb(245, 245, 245))
+    c.line(panel_x + 3, panel_y + 3, panel_x + 3, panel_y + 616, 2, rgb(245, 245, 245))
     c.text(panel_x + 22, panel_y + 14, "Inventory", rgb(55, 55, 55), 20, true)
     c.text(panel_x + 28, panel_y + 47, "Items", rgb(64, 64, 64), 13, true)
 
-    let cell = 36
+    let cell = 32
     let gap = 4
-    for row in 0..3 {
+    for row in 0..6 {
         for col in 0..9 {
             let index = row * 9 + col
             let item = inventory_grid_item(index)
-            let sx = panel_x + 27 + col * (cell + gap)
+            let sx = panel_x + 22 + col * (cell + gap)
             let sy = panel_y + 65 + row * (cell + gap)
             draw_slot(c, sx, sy, cell, false)
             if item > 0 {
-                draw_block_icon(c, sx + 5, sy + 5, cell - 10, item)
-                if inventory[item] > 0 {
-                    c.text(sx + 22, sy + 23, "{inventory[item]}", rgb(255, 255, 255), 10, true)
-                }
+                draw_block_icon(c, sx + 4, sy + 4, cell - 8, item)
+                if inventory[item] > 0 { c.text(sx + 18, sy + 20, "{inventory[item]}", rgb(255, 255, 255), 9, true) }
             }
         }
     }
 
-    c.text(panel_x + 28, panel_y + 205, "Hotbar", rgb(64, 64, 64), 13, true)
+    c.text(panel_x + 22, panel_y + 287, "Hotbar", rgb(64, 64, 64), 13, true)
     for slot in 0..9 {
         let item = hotbar_block(slot)
-        let sx = panel_x + 27 + slot * (cell + gap)
-        let sy = panel_y + 224
+        let sx = panel_x + 22 + slot * (cell + gap)
+        let sy = panel_y + 305
         draw_slot(c, sx, sy, cell, item == selected_block)
         draw_block_icon(c, sx + 5, sy + 5, cell - 10, item)
         if inventory[item] > 0 { c.text(sx + 22, sy + 23, "{inventory[item]}", rgb(255, 255, 255), 10, true) }
     }
 
-    let right_x = panel_x + 415
-    c.text(right_x, panel_y + 47, "Crafting", rgb(64, 64, 64), 14, true)
+    let right_x = panel_x + 390
+    c.text(right_x, panel_y + 47, "Crafting & smelting", rgb(64, 64, 64), 15, true)
     for row in 0..2 {
-        for col in 0..2 {
-            draw_slot(c, right_x + col * 36, panel_y + 67 + row * 36, 32, false)
-        }
+        for col in 0..2 { draw_slot(c, right_x + col * 36, panel_y + 67 + row * 36, 32, false) }
     }
     c.text(right_x + 78, panel_y + 97, "->", rgb(70, 70, 70), 18, true)
     draw_slot(c, right_x + 113, panel_y + 83, 36, false)
     c.text(right_x, panel_y + 157, "Recipe shortcuts", rgb(65, 65, 65), 13, true)
-    c.text(right_x, panel_y + 180, "1  Wood -> 4 planks", rgb(55, 55, 55), 11, false)
-    c.text(right_x, panel_y + 200, "2  Stone + coal -> bricks", rgb(55, 55, 55), 11, false)
-    c.text(right_x, panel_y + 220, "3  Sand + coal -> glass", rgb(55, 55, 55), 11, false)
-    c.text(right_x, panel_y + 240, "4  Wood + stone -> bench", rgb(55, 55, 55), 11, false)
-    c.text(right_x, panel_y + 260, "5  Coal + gold -> lantern", rgb(55, 55, 55), 11, false)
-    let bench_state = if has_workbench_nearby() { "Workbench nearby" } else { "Place a workbench for 2, 3, 5" }
-    c.text(right_x, panel_y + 286, bench_state, rgb(93, 67, 28), 11, true)
-    c.line(panel_x + 22, panel_y + 316, panel_x + 648, panel_y + 316, 1, rgb(130, 130, 130))
-    c.text(panel_x + 28, panel_y + 332, "E or Esc: close inventory  |  1-5: craft recipe", rgb(60, 60, 60), 13, true)
-    c.text(panel_x + 28, panel_y + 357, "Q drops one item  |  F eats an apple", rgb(70, 70, 70), 12, false)
+    c.text(right_x, panel_y + 180, "1 Planks  2 Bricks", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 198, "3 Glass   4 Workbench", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 216, "5 Lantern 6 Wood pick", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 234, "7 Stone pick 8 Furnace", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 252, "9 Torches  R Iron pick", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 270, "T Diamond pick", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 283, "V Sticks from logs", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 301, "Y Wood axe  U Wood shovel", rgb(55, 55, 55), 10, false)
+    c.text(right_x, panel_y + 323, "H: smelt (close inventory)", rgb(93, 67, 28), 10, true)
+    let bench_state = if has_workbench_nearby() { "Workbench nearby" } else { "Need workbench for tools" }
+    c.text(right_x, panel_y + 343, bench_state, rgb(93, 67, 28), 10, true)
+    let furnace_state = if has_furnace_nearby() { "Furnace nearby" } else { "Need furnace to smelt" }
+    c.text(right_x, panel_y + 361, furnace_state, rgb(93, 67, 28), 10, true)
+    c.line(panel_x + 22, panel_y + 388, panel_x + 778, panel_y + 388, 1, rgb(130, 130, 130))
+    c.text(panel_x + 22, panel_y + 407, "E or Esc: close  |  P: pickaxe  |  O: axe  |  L: shovel  |  H: smelt", rgb(60, 60, 60), 11, true)
+    c.text(panel_x + 22, panel_y + 430, "Q drops selected item  |  F eats apple  |  T crafts diamond pick while open", rgb(70, 70, 70), 11, false)
+    c.text(panel_x + 22, panel_y + 453, "B cycles placeable items; 1-9 selects the hotbar", rgb(70, 70, 70), 11, false)
+    c.text(panel_x + 22, panel_y + 476, "Biomes: plains, forest, desert, mountains, snowy taiga, swamp", rgb(70, 70, 70), 11, false)
+    c.text(panel_x + 22, panel_y + 499, "Structures: villages, temples, wells, towers, portals, geodes", rgb(70, 70, 70), 11, false)
+    c.text(panel_x + 22, panel_y + 522, "Use pickaxes for iron, copper, gold, redstone and diamond ore", rgb(70, 70, 70), 11, false)
 }
 
 fn draw_pause_menu(c: Canvas) {
@@ -1403,6 +2474,7 @@ fn draw_pause_menu(c: Canvas) {
     c.outline(panel_x + 38, panel_y + 172, 304, 37, 0, 2, rgb(225, 225, 225))
     c.text(panel_x + 76, panel_y + 182, "Load World (F7)", rgb(255, 255, 255), 15, true)
     c.text(panel_x + 56, panel_y + 232, "Esc or click: Back to Game", rgb(55, 55, 55), 13, false)
+    c.text(panel_x + 74, panel_y + 255, "Infinite biomes and structures", rgb(65, 65, 65), 12, false)
 }
 
 fn draw_hud(c: Canvas) {
@@ -1445,6 +2517,19 @@ fn draw_hud(c: Canvas) {
         draw_food(c, center_x + 28 + i * 18, stats_y, food)
     }
 
+    if equipped_tool_mode == 0 and equipped_pickaxe > 0 {
+        let wear_index = equipped_pickaxe - 46
+        let durability_value = tool_durability[wear_index]
+        c.rect(center_x - 125, bar_y - 25, 250, 18, rgba(0, 0, 0, 0.52))
+        c.text(center_x - 118, bar_y - 22, "Tool: {block_name(equipped_pickaxe)}  Durability: {durability_value}", rgb(245, 245, 245), 11, true)
+    } else if equipped_tool_mode == 1 {
+        c.rect(center_x - 95, bar_y - 25, 190, 18, rgba(0, 0, 0, 0.52))
+        c.text(center_x - 88, bar_y - 22, "Wooden axe  Durability: {tool_durability[4]}", rgb(245, 245, 245), 11, true)
+    } else if equipped_tool_mode == 2 {
+        c.rect(center_x - 100, bar_y - 25, 200, 18, rgba(0, 0, 0, 0.52))
+        c.text(center_x - 93, bar_y - 22, "Wooden shovel  Durability: {tool_durability[5]}", rgb(245, 245, 245), 11, true)
+    }
+
     // Compact crosshair with a dark outline, closer to the vanilla HUD.
     c.line(center_x - 7, center_y, center_x + 7, center_y, 3, rgb(20, 20, 20))
     c.line(center_x, center_y - 7, center_x, center_y + 7, 3, rgb(20, 20, 20))
@@ -1453,18 +2538,18 @@ fn draw_hud(c: Canvas) {
 
     if show_debug {
         c.rect(8, 8, 315, 98, rgba(0, 0, 0, 0.72))
-        c.text(16, 15, "Minecraft-style debug", rgb(255, 255, 255), 13, true)
-        c.text(16, 34, "XYZ {int(floor(player_x))}, {int(floor(player_y))}, {int(floor(player_z))}", rgb(255, 255, 255), 12, false)
+        c.text(16, 15, "BLOCKWORLD DELUXE | Infinite world", rgb(255, 255, 255), 13, true)
+        c.text(16, 34, "XYZ {world_origin_x + int(floor(player_x))}, {int(floor(player_y))}, {world_origin_z + int(floor(player_z))}", rgb(255, 255, 255), 12, false)
         c.text(16, 52, "FPS {int(fps_value)}  LIGHT {int(day_light * 100.0)}%", rgb(255, 255, 255), 12, false)
-        c.text(16, 70, "MINED {blocks_mined}  PLACED {blocks_placed}  CRAFTED {blocks_crafted}", rgb(255, 255, 255), 12, false)
-        c.text(16, 88, "DROPS {dropped_item_ids.len()}  DIAMONDS {inventory[19]}", rgb(255, 255, 255), 12, false)
+        c.text(16, 70, "MINED {blocks_mined}  PLACED {blocks_placed}  CRAFTED {blocks_crafted}  PICK {pickaxe_level()}", rgb(255, 255, 255), 12, false)
+        c.text(16, 88, "DROPS {dropped_item_ids.len()}  DIAMONDS {inventory[19]}  BIOME {biome_name(biome_at(world_origin_x + int(player_x), world_origin_z + int(player_z)))}", rgb(255, 255, 255), 12, false)
     }
 
     if show_map {
-        let map_size = 192
+        let map_size = WORLD_W
         let map_x = c.w - map_size - 18
         let map_y = 24
-        let cell = 3
+        let cell = 1
         c.rect(map_x - 6, map_y - 6, map_size + 12, map_size + 12, rgb(32, 32, 32))
         c.rect(map_x - 3, map_y - 3, map_size + 6, map_size + 6, rgb(190, 190, 190))
         for mx in 0..WORLD_W {
@@ -1575,5 +2660,5 @@ fn view() -> Node {
 
 fn main() {
     create_world()
-    ui_run("Blockworld — Minecraft Style", 1200, 750, view)
+    ui_run("BLOCKWORLD DELUXE — Infinite Survival World", 1200, 750, view)
 }
