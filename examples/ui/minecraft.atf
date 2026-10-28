@@ -1,406 +1,568 @@
-// minecraft.atf - a tiny first-person block world: walk, jump, break and place blocks.
-// Shows: canvas drawing, a software ray caster (voxel DDA), a timer game loop with ui_every,
-//        held keys through GetAsyncKeyState, ui_shortcut for single key presses.
-// Controls: W A S D move, the mouse (or the arrow keys) looks around, Space jump,
-//           left click (or Q) breaks the block in the crosshair, right click (or E) places the selected block,
-//           1-6 choose a block, Esc quit.
-// Run:   atf run examples/ui/minecraft.atf
+// ATF 1.2.0
+// BLOCKWORLD — a small first-person voxel sandbox written entirely in ATF.
+// Controls: WASD move, mouse look, Space jump, Shift sprint,
+// left mouse mine, right mouse place, 1-6 select blocks, Esc release mouse.
 
 import "std/ui"
 
-const MC_WIN_W = 1152     // the window starts at this size; it can be resized (or maximized) and the scene follows
-const MC_WIN_H = 648
-const MC_X = 48           // world size in blocks
-const MC_Y = 24
-const MC_Z = 48
-const MC_REACH = 6.0
-const MC_FAR = 40.0
+const WORLD_W = 48
+const WORLD_H = 22
+const WORLD_D = 48
+const RENDER_W = 256
+const RENDER_H = 144
+const FRAME_TIME_MS = 30
+const PLAYER_RADIUS = 0.27
+const PLAYER_HEIGHT = 1.70
+const RAY_STEP = 0.12
+const VIEW_DISTANCE = 20.0
+const PI_VALUE = 3.141592653589793
 
-// block ids: 0 air, 1 grass, 2 dirt, 3 stone, 4 wood, 5 leaves, 6 planks
-let MC_NAMES = ["Air", "Grass", "Dirt", "Stone", "Wood", "Leaves", "Planks"]
-let MC_R = [0, 96, 134, 125, 102, 52, 188]
-let MC_G = [0, 160, 96, 125, 81, 130, 152]
-let MC_B = [0, 56, 67, 125, 50, 40, 98]
+var world: [int] = array_make::<int>(WORLD_W * WORLD_H * WORLD_D)
+var frame_pixels: [int] = array_make::<int>(RENDER_W * RENDER_H)
 
-var mc_blocks: [int] = []
-var mc_px = 0.0
-var mc_py = 0.0
-var mc_pz = 0.0
-var mc_vy = 0.0
-var mc_on_ground = false
-var mc_yaw = 0.0
-var mc_pitch = 0.0
-var mc_sel = 1
-var mc_cool = 0.0                      // seconds until the next block can be broken or placed
-var mc_buf: [int] = []                 // the picture, 0xRRGGBB per pixel
-// The scene is ray cast at the real size of the canvas (every screen pixel is a ray), however big the window is.
-// If a frame takes too long, the resolution drops one step (mc_q = 2 means half as many rays in each direction) and
-// the picture is scaled up smoothly; when there is time to spare it climbs back to the full resolution.
-var mc_rw = 0                           // size of the picture that was last ray cast
-var mc_rh = 0
-var mc_q = 1
-var mc_ms = 0.0                         // average time of a frame in milliseconds
+var player_x = 24.5
+var player_y = 8.0
+var player_z = 24.5
+var velocity_y = 0.0
+var grounded = false
+var yaw = 0.0
+var pitch = 0.0
+var camera_x = 24.5
+var camera_y = 9.62
+var camera_z = 24.5
 
-// result of the last mc_cast: the block that was hit, the cell it is in, the empty cell in front of it,
-// the face (0 = x, 1 = y, 2 = z) and the distance
-var mc_hit = 0
-var mc_hx = 0
-var mc_hy = 0
-var mc_hz = 0
-var mc_ex = 0
-var mc_ey = 0
-var mc_ez = 0
-var mc_face = 0
-var mc_dist = 0.0
+var forward_x = 0.0
+var forward_y = 0.0
+var forward_z = 1.0
+var right_x = 1.0
+var right_y = 0.0
+var right_z = 0.0
+var up_x = 0.0
+var up_y = 1.0
+var up_z = 0.0
 
-fn mc_index(x: int, y: int, z: int) -> int { return (y * MC_Z + z) * MC_X + x }
+var selected_block = 1
+var mouse_captured = false
+var timer_started = false
+var previous_escape = false
+var previous_left = false
+var previous_right = false
 
-fn mc_inside(x: int, y: int, z: int) -> bool {
-    return x >= 0 and x < MC_X and y >= 0 and y < MC_Y and z >= 0 and z < MC_Z
-}
-
-fn mc_get(x: int, y: int, z: int) -> int {
-    if not mc_inside(x, y, z) { return 0 }
-    return mc_blocks[mc_index(x, y, z)]
-}
-
-fn mc_set(x: int, y: int, z: int, b: int) {
-    if mc_inside(x, y, z) { mc_blocks[mc_index(x, y, z)] = b }
-}
-
-fn mc_height(x: int, z: int) -> int {
-    let fx = float(x)
-    let fz = float(z)
-    let h = 8.0 + 3.0 * sin(fx * 0.25) + 3.0 * cos(fz * 0.2) + 2.0 * sin((fx + fz) * 0.13)
-    return clamp(int(h), 2, MC_Y - 8)
-}
-
-fn mc_generate() {
-    mc_blocks = array_make::<int>(MC_X * MC_Y * MC_Z)
-    for x in 0..MC_X {
-        for z in 0..MC_Z {
-            let h = mc_height(x, z)
-            for y in 0..h {
-                var b = 3
-                if y >= h - 3 { b = 2 }
-                if y == h - 1 { b = 1 }
-                mc_set(x, y, z, b)
-            }
-        }
+fn sin_atf(value: float) -> float {
+    var x = value
+    while x > PI_VALUE { x -= 2.0 * PI_VALUE }
+    while x < -PI_VALUE { x += 2.0 * PI_VALUE }
+    if x > PI_VALUE / 2.0 {
+        x = PI_VALUE - x
+    } else if x < -PI_VALUE / 2.0 {
+        x = -PI_VALUE - x
     }
-    // trees
-    rand_seed(7)
-    for i in 0..40 {
-        let tx = rand_int(3, MC_X - 4)
-        let tz = rand_int(3, MC_Z - 4)
-        let h = mc_height(tx, tz)
-        for y in h..h + 4 { mc_set(tx, y, tz, 4) }
-        for dx in -2..=2 {
-            for dz in -2..=2 {
-                for dy in 3..=5 {
-                    let corner = abs(dx) == 2 and abs(dz) == 2
-                    let top = dy == 5 and (abs(dx) > 1 or abs(dz) > 1)
-                    if not corner and not top and mc_get(tx + dx, h + dy, tz + dz) == 0 {
-                        mc_set(tx + dx, h + dy, tz + dz, 5)
-                    }
+    let x2 = x * x
+    let x4 = x2 * x2
+    let x6 = x4 * x2
+    let x8 = x4 * x4
+    let x10 = x8 * x2
+    return x * (1.0 - x2 / 6.0 + x4 / 120.0 - x6 / 5040.0 + x8 / 362880.0 - x10 / 39916800.0)
+}
+
+fn cos_atf(value: float) -> float => sin_atf(PI_VALUE / 2.0 - value)
+
+fn pack_rgb(red: int, green: int, blue: int) -> int {
+    let r = clamp(red, 0, 255)
+    let g = clamp(green, 0, 255)
+    let b = clamp(blue, 0, 255)
+    return (r << 16) | (g << 8) | b
+}
+
+fn block_index(x: int, y: int, z: int) -> int => (y * WORLD_D + z) * WORLD_W + x
+
+fn terrain_height(x: int, z: int) -> int {
+    let pattern = (x / 7 + z / 8 + (x * z) / 160) % 4
+    return 4 + pattern
+}
+
+fn get_block(x: int, y: int, z: int) -> int {
+    if y < 0 { return 7 }
+    if x < 0 or x >= WORLD_W or z < 0 or z >= WORLD_D { return 3 }
+    if y >= WORLD_H { return 0 }
+    return world[block_index(x, y, z)]
+}
+
+fn set_block(x: int, y: int, z: int, block: int) {
+    if x < 0 or x >= WORLD_W or z < 0 or z >= WORLD_D { return }
+    if y < 0 or y >= WORLD_H { return }
+    world[block_index(x, y, z)] = block
+}
+
+fn build_tree(x: int, z: int, height: int) {
+    for y in (height + 1)..=(height + 4) {
+        set_block(x, y, z, 4)
+    }
+    for y in (height + 3)..=(height + 5) {
+        for tx in (x - 2)..=(x + 2) {
+            for tz in (z - 2)..=(z + 2) {
+                let distance = abs(tx - x) + abs(tz - z)
+                let limit = if y == height + 5 { 2 } else { 4 }
+                if distance <= limit and get_block(tx, y, tz) == 0 {
+                    set_block(tx, y, tz, 5)
                 }
             }
         }
     }
-    // the player starts in the middle of the world
-    mc_px = float(MC_X / 2) + 0.5
-    mc_pz = float(MC_Z / 2) + 0.5
-    mc_py = float(mc_height(MC_X / 2, MC_Z / 2)) + 0.01
-    mc_vy = 0.0
-    mc_yaw = 0.6
-    mc_pitch = -0.25
 }
 
-// walk a ray through the blocks (DDA); true when a block is hit within maxd, the details are in mc_*
-fn mc_cast(ox: float, oy: float, oz: float, dx: float, dy: float, dz: float, maxd: float) -> bool {
-    var cx = int(floor(ox))
-    var cy = int(floor(oy))
-    var cz = int(floor(oz))
-    let big = 1000000000.0
-    let ddx = if dx == 0.0 { big } else { abs(1.0 / dx) }
-    let ddy = if dy == 0.0 { big } else { abs(1.0 / dy) }
-    let ddz = if dz == 0.0 { big } else { abs(1.0 / dz) }
-    let sx = if dx < 0.0 { -1 } else { 1 }
-    let sy = if dy < 0.0 { -1 } else { 1 }
-    let sz = if dz < 0.0 { -1 } else { 1 }
-    var nx = if dx < 0.0 { (ox - float(cx)) * ddx } else { (float(cx + 1) - ox) * ddx }
-    var ny = if dy < 0.0 { (oy - float(cy)) * ddy } else { (float(cy + 1) - oy) * ddy }
-    var nz = if dz < 0.0 { (oz - float(cz)) * ddz } else { (float(cz + 1) - oz) * ddz }
-    var t = 0.0
-    var face = 0
-    while t < maxd {
-        let px = cx
-        let py = cy
-        let pz = cz
-        if nx < ny and nx < nz {
-            t = nx
-            nx += ddx
-            cx += sx
-            face = 0
-        } else if ny < nz {
-            t = ny
-            ny += ddy
-            cy += sy
-            face = 1
-        } else {
-            t = nz
-            nz += ddz
-            cz += sz
-            face = 2
-        }
-        if cx < 0 or cx >= MC_X or cz < 0 or cz >= MC_Z { return false }
-        if cy < 0 { return false }
-        if cy >= MC_Y and dy >= 0.0 { return false }
-        let b = mc_get(cx, cy, cz)
-        if b != 0 {
-            mc_hit = b
-            mc_hx = cx
-            mc_hy = cy
-            mc_hz = cz
-            mc_ex = px
-            mc_ey = py
-            mc_ez = pz
-            mc_face = face
-            mc_dist = t
-            return true
+fn create_world() {
+    for x in 0..WORLD_W {
+        for z in 0..WORLD_D {
+            let h = terrain_height(x, z)
+            for y in 0..=h {
+                var block = 3
+                if y == 0 {
+                    block = 7
+                } else if y == h {
+                    block = 1
+                } else if y >= h - 2 {
+                    block = 2
+                }
+                set_block(x, y, z, block)
+            }
         }
     }
-    return false
+
+    let center_x = WORLD_W / 2
+    let center_z = WORLD_D / 2
+    for x in 3..(WORLD_W - 3) {
+        for z in 3..(WORLD_D - 3) {
+            let far_from_spawn = abs(x - center_x) >= 5 or abs(z - center_z) >= 5
+            if far_from_spawn and (x * 23 + z * 41 + x * z) % 71 == 9 {
+                let h = terrain_height(x, z)
+                build_tree(x, z, h)
+            }
+        }
+    }
+
+    player_x = float(center_x) + 0.5
+    player_z = float(center_z) + 0.5
+    player_y = float(terrain_height(center_x, center_z) + 1)
+    velocity_y = 0.0
+    grounded = true
+    yaw = 0.0
+    pitch = 0.0
+    update_camera()
 }
 
-// ---------------------------------------------------------------- player
+fn update_camera() {
+    let sy = sin_atf(yaw)
+    let cy = cos_atf(yaw)
+    let sp = sin_atf(pitch)
+    let cp = cos_atf(pitch)
 
+    forward_x = sy * cp
+    forward_y = sp
+    forward_z = cy * cp
 
-// does a player standing with his feet at (x, y, z) overlap a block?
-fn mc_blocked(x: float, y: float, z: float) -> bool {
-    for ox in [-0.3, 0.3] {
-        for oz in [-0.3, 0.3] {
-            for h in [0.0, 0.9, 1.79] {
-                if mc_get(int(floor(x + ox)), int(floor(y + h)), int(floor(z + oz))) != 0 { return true }
-                if x + ox < 0.0 or z + oz < 0.0 or x + ox >= float(MC_X) or z + oz >= float(MC_Z) { return true }
+    right_x = cy
+    right_y = 0.0
+    right_z = -sy
+
+    up_x = -sy * sp
+    up_y = cp
+    up_z = -cy * sp
+
+    camera_x = player_x
+    camera_y = player_y + 1.58
+    camera_z = player_z
+}
+
+fn collides_body(x: float, feet_y: float, z: float) -> bool {
+    let min_x = int(floor(x - PLAYER_RADIUS))
+    let max_x = int(floor(x + PLAYER_RADIUS))
+    let min_y = int(floor(feet_y + 0.01))
+    let max_y = int(floor(feet_y + PLAYER_HEIGHT - 0.02))
+    let min_z = int(floor(z - PLAYER_RADIUS))
+    let max_z = int(floor(z + PLAYER_RADIUS))
+
+    for bx in min_x..=max_x {
+        for by in min_y..=max_y {
+            for bz in min_z..=max_z {
+                if get_block(bx, by, bz) != 0 { return true }
             }
         }
     }
     return false
 }
 
-fn mc_step() {
-    let dt = 0.03
-    let (mdx, mdy) = ui_mouse_delta()
-    mc_yaw += float(mdx) * 0.0025
-    mc_pitch -= float(mdy) * 0.0025
-    if ui_key_down("left") { mc_yaw -= 1.8 * dt }
-    if ui_key_down("right") { mc_yaw += 1.8 * dt }
-    if ui_key_down("up") { mc_pitch += 1.4 * dt }
-    if ui_key_down("down") { mc_pitch -= 1.4 * dt }
-    mc_cool -= dt
-    if mc_cool <= 0.0 {
-        if ui_mouse_held(0) {
-            mc_break()
-            mc_cool = 0.22
-        } else if ui_mouse_held(1) {
-            mc_place()
-            mc_cool = 0.22
+fn move_horizontal(dx: float, dz: float) {
+    let next_x = player_x + dx
+    if not collides_body(next_x, player_y, player_z) {
+        player_x = next_x
+    } else if grounded and not collides_body(next_x, player_y + 1.0, player_z) {
+        player_x = next_x
+        player_y += 1.0
+    }
+
+    let next_z = player_z + dz
+    if not collides_body(player_x, player_y, next_z) {
+        player_z = next_z
+    } else if grounded and not collides_body(player_x, player_y + 1.0, next_z) {
+        player_z = next_z
+        player_y += 1.0
+    }
+}
+
+fn trace_ray(dx0: float, dy0: float, dz0: float, max_distance: float) -> (int, int, int, int, int, int, int, float) {
+    let length = sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0)
+    let dx = dx0 / length
+    let dy = dy0 / length
+    let dz = dz0 / length
+
+    var previous_x = int(floor(camera_x))
+    var previous_y = int(floor(camera_y))
+    var previous_z = int(floor(camera_z))
+    var t = 0.08
+
+    while t < max_distance {
+        let wx = camera_x + dx * t
+        let wy = camera_y + dy * t
+        let wz = camera_z + dz * t
+        let bx = int(floor(wx))
+        let by = int(floor(wy))
+        let bz = int(floor(wz))
+        let block = get_block(bx, by, bz)
+        if block != 0 {
+            return (block, bx, by, bz, previous_x, previous_y, previous_z, t)
         }
+        previous_x = bx
+        previous_y = by
+        previous_z = bz
+        t += RAY_STEP
     }
-    mc_pitch = clamp(mc_pitch, -1.4, 1.4)
+    return (0, -1, -1, -1, -1, -1, -1, max_distance)
+}
 
-    var fwd = 0.0
-    var side = 0.0
-    if ui_key_down("w") { fwd += 1.0 }
-    if ui_key_down("s") { fwd -= 1.0 }
-    if ui_key_down("d") { side += 1.0 }
-    if ui_key_down("a") { side -= 1.0 }
-    let speed = 4.5 * dt
-    let mx = (sin(mc_yaw) * fwd + cos(mc_yaw) * side) * speed
-    let mz = (cos(mc_yaw) * fwd - sin(mc_yaw) * side) * speed
-    if not mc_blocked(mc_px + mx, mc_py, mc_pz) { mc_px += mx }
-    if not mc_blocked(mc_px, mc_py, mc_pz + mz) { mc_pz += mz }
-
-    if ui_key_down("space") and mc_on_ground { mc_vy = 7.5 }
-    mc_vy -= 22.0 * dt
-    let ny = mc_py + mc_vy * dt
-    mc_on_ground = false
-    if mc_blocked(mc_px, ny, mc_pz) {
-        if mc_vy < 0.0 {
-            mc_on_ground = true
-            mc_py = floor(ny) + 1.001
-        }
-        mc_vy = 0.0
-    } else {
-        mc_py = ny
+fn face_from_hit(bx: int, by: int, bz: int, px: int, py: int, pz: int, dx: float, dy: float, dz: float) -> int {
+    if by != py {
+        if dy < 0.0 { return 0 }
+        return 3
     }
-    if mc_py < -10.0 { mc_py = float(MC_Y) }   // fell out of the world
-}
-
-fn mc_look() -> bool {
-    let cp = cos(mc_pitch)
-    return mc_cast(mc_px, mc_py + 1.6, mc_pz, sin(mc_yaw) * cp, sin(mc_pitch), cos(mc_yaw) * cp, MC_REACH)
-}
-
-fn mc_break() {
-    if mc_look() and mc_hy > 0 { mc_set(mc_hx, mc_hy, mc_hz, 0) }
-}
-
-fn mc_place() {
-    if mc_look() {
-        mc_set(mc_ex, mc_ey, mc_ez, mc_sel)
-        if mc_blocked(mc_px, mc_py, mc_pz) { mc_set(mc_ex, mc_ey, mc_ez, 0) }   // do not build inside yourself
+    if bx != px {
+        if dx > 0.0 { return 1 }
+        return 2
     }
+    if dz > 0.0 { return 1 }
+    return 2
 }
 
-// ---------------------------------------------------------------- drawing
+fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: float, distance: float) -> int {
+    var red = 110
+    var green = 110
+    var blue = 110
 
-// a repeatable number from a block face position, 0..15: gives every block surface some texture
-fn mc_noise(a: int, b: int, c: int, d: int) -> int {
-    var h = a * 73856093 + b * 19349663 + c * 83492791 + d * 2654435761
-    h = (h ^ (h >> 13)) * 1274126177
-    return (h >> 8) & 15
-}
-
-fn mc_shade(x: int, y: int, ox: float, oy: float, oz: float, dx: float, dy: float, dz: float) {
-    var r = 0.0
-    var g = 0.0
-    var b = 0.0
-    // sky
-    let len = sqrt(dx * dx + dy * dy + dz * dz)
-    let k = clamp(dy / len * 2.0, 0.0, 1.0)
-    let sky_r = 175.0 - 85.0 * k
-    let sky_g = 214.0 - 64.0 * k
-    let sky_b = 250.0 - 15.0 * k
-    if mc_cast(ox, oy, oz, dx, dy, dz, MC_FAR) {
-        let t = mc_dist
-        let hx = ox + dx * t
-        let hy = oy + dy * t
-        let hz = oz + dz * t
-        var u = 0.0
-        var v = 0.0
-        var light = 0.7
-        if mc_face == 0 {
-            u = hz - floor(hz)
-            v = hy - floor(hy)
-            light = 0.8
-        } else if mc_face == 1 {
-            u = hx - floor(hx)
-            v = hz - floor(hz)
-            light = if dy < 0.0 { 1.0 } else { 0.5 }
+    if block == 1 {
+        if face == 0 {
+            red = 88
+            green = 169
+            blue = 66
+        } else if sample_y - float(by) > 0.72 {
+            red = 83
+            green = 151
+            blue = 57
         } else {
-            u = hx - floor(hx)
-            v = hy - floor(hy)
-            light = 0.65
+            red = 126
+            green = 86
+            blue = 50
         }
-        var id = mc_hit
-        // grass: only the top is green, the sides are dirt with a green edge
-        if id == 1 and mc_face != 1 and v < 0.75 { id = 2 }
-        let n = mc_noise(mc_hx, mc_hy + mc_face, mc_hz, int(u * 8.0) * 8 + int(v * 8.0))
-        let tex = 0.88 + float(n) * 0.016
-        let f = light * tex
-        r = float(MC_R[id]) * f
-        g = float(MC_G[id]) * f
-        b = float(MC_B[id]) * f
-        let fog = clamp((t - 12.0) / (MC_FAR - 12.0), 0.0, 1.0)
-        r += (sky_r - r) * fog
-        g += (sky_g - g) * fog
-        b += (sky_b - b) * fog
+    } else if block == 2 {
+        red = 132
+        green = 88
+        blue = 52
+    } else if block == 3 {
+        red = 124
+        green = 128
+        blue = 134
+    } else if block == 4 {
+        if face == 0 {
+            red = 174
+            green = 128
+            blue = 73
+        } else {
+            red = 137
+            green = 94
+            blue = 53
+        }
+    } else if block == 5 {
+        red = 60
+        green = 137
+        blue = 56
+    } else if block == 6 {
+        red = 222
+        green = 205
+        blue = 128
     } else {
-        r = sky_r
-        g = sky_g
-        b = sky_b
+        red = 54
+        green = 56
+        blue = 61
     }
-    mc_buf[y * mc_rw + x] = (clamp(int(r), 0, 255) << 16) | (clamp(int(g), 0, 255) << 8) | clamp(int(b), 0, 255)
+
+    let variation = (bx * 17 + by * 31 + bz * 13) % 9 - 4
+    red = clamp(red + variation, 0, 255)
+    green = clamp(green + variation, 0, 255)
+    blue = clamp(blue + variation, 0, 255)
+
+    var light = 0.82
+    if face == 0 {
+        light = 1.0
+    } else if face == 1 {
+        light = 0.82
+    } else if face == 2 {
+        light = 0.68
+    } else {
+        light = 0.48
+    }
+    let distance_light = clamp(1.0 - distance * 0.012, 0.58, 1.0)
+    let factor = light * distance_light
+    red = int(float(red) * factor)
+    green = int(float(green) * factor)
+    blue = int(float(blue) * factor)
+
+    let fog = clamp((distance - 9.0) / 14.0, 0.0, 0.64)
+    red = int(float(red) * (1.0 - fog) + 143.0 * fog)
+    green = int(float(green) * (1.0 - fog) + 193.0 * fog)
+    blue = int(float(blue) * (1.0 - fog) + 229.0 * fog)
+    return pack_rgb(red, green, blue)
 }
 
-fn mc_draw(c: Canvas) {
-    let sy = sin(mc_yaw)
-    let cy = cos(mc_yaw)
-    let sp = sin(mc_pitch)
-    let cp = cos(mc_pitch)
-    // camera basis: forward, right, up
-    let fx = sy * cp
-    let fy = sp
-    let fz = cy * cp
-    let rx = cy
-    let rz = -sy
-    let ux = -sy * sp
-    let uy = cp
-    let uz = -cy * sp
-    let tan_fov = 0.75
-    let w = c.w
-    let h = c.h
-    let t0 = clock()
-    mc_rw = max(c.pixel_w() / mc_q, 16)
-    mc_rh = max(c.pixel_h() / mc_q, 9)
-    if mc_buf.len() != mc_rw * mc_rh { mc_buf = array_make::<int>(mc_rw * mc_rh) }
-    let aspect = float(mc_rw) / float(mc_rh)
-    let ex = mc_px
-    let ey = mc_py + 1.6
-    let ez = mc_pz
-    for y in 0..mc_rh {
-        let v = (1.0 - (float(y) + 0.5) / float(mc_rh) * 2.0) * tan_fov
-        for x in 0..mc_rw {
-            let u = ((float(x) + 0.5) / float(mc_rw) * 2.0 - 1.0) * tan_fov * aspect
-            mc_shade(x, y, ex, ey, ez, fx + rx * u + ux * v, fy + uy * v, fz + rz * u + uz * v)
+fn sky_color(ray_y: float) -> int {
+    let t = clamp((ray_y + 0.15) / 0.95, 0.0, 1.0)
+    let red = int(114.0 + 43.0 * t)
+    let green = int(181.0 + 48.0 * t)
+    let blue = int(225.0 + 27.0 * t)
+    return pack_rgb(red, green, blue)
+}
+
+fn block_ui_color(block: int) -> int {
+    if block == 1 { return rgb(88, 169, 66) }
+    if block == 2 { return rgb(132, 88, 52) }
+    if block == 3 { return rgb(124, 128, 134) }
+    if block == 4 { return rgb(137, 94, 53) }
+    if block == 5 { return rgb(60, 137, 56) }
+    if block == 6 { return rgb(222, 205, 128) }
+    return rgb(54, 56, 61)
+}
+
+fn block_name(block: int) -> str {
+    if block == 1 { return "Grass" }
+    if block == 2 { return "Dirt" }
+    if block == 3 { return "Stone" }
+    if block == 4 { return "Wood" }
+    if block == 5 { return "Leaves" }
+    if block == 6 { return "Sand" }
+    return "Bedrock"
+}
+
+fn overlaps_player(bx: int, by: int, bz: int) -> bool {
+    let overlap_x = float(bx) < player_x + PLAYER_RADIUS and float(bx + 1) > player_x - PLAYER_RADIUS
+    let overlap_z = float(bz) < player_z + PLAYER_RADIUS and float(bz + 1) > player_z - PLAYER_RADIUS
+    let overlap_y = float(by) < player_y + PLAYER_HEIGHT and float(by + 1) > player_y + 0.02
+    return overlap_x and overlap_y and overlap_z
+}
+
+fn handle_block_action(left_now: bool, right_now: bool) {
+    if left_now and not previous_left and mouse_captured {
+        let (block, bx, by, bz, _, _, _, _) = trace_ray(forward_x, forward_y, forward_z, 6.0)
+        if block != 0 and block != 7 and bx >= 0 {
+            set_block(bx, by, bz, 0)
         }
     }
 
-    c.pixels_smooth(0, 0, w, h, mc_buf, mc_rw, mc_rh)
-    mc_adapt((clock() - t0) * 1000.0)
-
-    // crosshair
-    let mx = w / 2
-    let my = h / 2
-    c.rect(mx - 9, my - 1, 18, 2, WHITE)
-    c.rect(mx - 1, my - 9, 2, 18, WHITE)
-
-    // hotbar
-    let total = 6 * 46
-    let left = (w - total) / 2
-    let top = h - 56
-    for i in 1..=6 {
-        let bx = left + (i - 1) * 46
-        c.rect(bx, top, 42, 42, rgba(0, 0, 0, 0.45))
-        c.rect(bx + 7, top + 7, 28, 28, rgb(MC_R[i], MC_G[i], MC_B[i]))
-        c.text(bx + 4, top + 2, "{i}", WHITE, 12)
-        if i == mc_sel { c.outline(bx - 1, top - 1, 44, 44, 0, 3, WHITE) }
-    }
-    c.text(8, 8, "{MC_NAMES[mc_sel]}   WASD move   mouse look   Space jump   left click break   right click place   1-6 block   Esc quit", WHITE, 14)
-    c.text(8, 28, "{mc_rw} x {mc_rh} rays   {mc_ms:.0f} ms", rgba(255, 255, 255, 0.7), 12)
-}
-
-// keep a frame near 20 ms: fewer rays when it is slower, more rays when there is room
-fn mc_adapt(ms: float) {
-    mc_ms = if mc_ms == 0.0 { ms } else { mc_ms * 0.9 + ms * 0.1 }
-    if mc_ms > 26.0 and mc_q < 8 {
-        mc_ms = mc_ms * float((mc_q) * (mc_q)) / float((mc_q + 1) * (mc_q + 1))
-        mc_q += 1
-    } else if mc_q > 1 {
-        // what a frame would cost with the next finer picture
-        let finer = mc_ms * float(mc_q * mc_q) / float((mc_q - 1) * (mc_q - 1))
-        if finer < 20.0 {
-            mc_ms = finer
-            mc_q -= 1
+    if right_now and not previous_right and mouse_captured {
+        let (block, bx, by, bz, ax, ay, az, _) = trace_ray(forward_x, forward_y, forward_z, 6.0)
+        if block != 0 and bx >= 0 and ax >= 0 and get_block(ax, ay, az) == 0 and not overlaps_player(ax, ay, az) {
+            set_block(ax, ay, az, selected_block)
         }
     }
+
+    previous_left = left_now
+    previous_right = right_now
+}
+
+fn game_tick() {
+    let escape_now = ui_key_down("escape")
+    if escape_now and not previous_escape {
+        mouse_captured = not mouse_captured
+        ui_mouse_capture(mouse_captured)
+    }
+    previous_escape = escape_now
+
+    let left_now = ui_mouse_held(0)
+    let right_now = ui_mouse_held(1)
+    if not mouse_captured {
+        if left_now or right_now {
+            mouse_captured = true
+            ui_mouse_capture(true)
+            previous_left = left_now
+            previous_right = right_now
+        }
+    }
+
+    if mouse_captured {
+        let (mouse_dx, mouse_dy) = ui_mouse_delta()
+        yaw += float(mouse_dx) * 0.0028
+        pitch -= float(mouse_dy) * 0.0025
+        pitch = clamp(pitch, -1.35, 1.35)
+        while yaw > PI_VALUE { yaw -= 2.0 * PI_VALUE }
+        while yaw < -PI_VALUE { yaw += 2.0 * PI_VALUE }
+    }
+
+    if ui_key_down("1") { selected_block = 1 }
+    if ui_key_down("2") { selected_block = 2 }
+    if ui_key_down("3") { selected_block = 3 }
+    if ui_key_down("4") { selected_block = 4 }
+    if ui_key_down("5") { selected_block = 5 }
+    if ui_key_down("6") { selected_block = 6 }
+
+    if collides_body(player_x, player_y - 0.06, player_z) {
+        grounded = true
+        if velocity_y < 0.0 {
+            velocity_y = 0.0
+            player_y = float(floor(player_y - 0.06)) + 1.0
+        }
+    } else {
+        grounded = false
+    }
+
+    if ui_key_down("space") and grounded {
+        velocity_y = 7.4
+        grounded = false
+    }
+
+    var move_x = 0.0
+    var move_z = 0.0
+    let flat_forward_x = sin_atf(yaw)
+    let flat_forward_z = cos_atf(yaw)
+    let flat_right_x = cos_atf(yaw)
+    let flat_right_z = -sin_atf(yaw)
+
+    if ui_key_down("w") { move_x += flat_forward_x; move_z += flat_forward_z }
+    if ui_key_down("s") { move_x -= flat_forward_x; move_z -= flat_forward_z }
+    if ui_key_down("d") { move_x += flat_right_x; move_z += flat_right_z }
+    if ui_key_down("a") { move_x -= flat_right_x; move_z -= flat_right_z }
+
+    let move_length = sqrt(move_x * move_x + move_z * move_z)
+    if move_length > 0.001 {
+        var speed = 4.2
+        if ui_key_down("shift") { speed = 6.5 }
+        move_x = move_x / move_length * speed * 0.03
+        move_z = move_z / move_length * speed * 0.03
+        move_horizontal(move_x, move_z)
+    }
+
+    if not grounded {
+        velocity_y -= 18.0 * 0.03
+        let next_y = player_y + velocity_y * 0.03
+        if collides_body(player_x, next_y, player_z) {
+            if velocity_y <= 0.0 {
+                player_y = float(floor(next_y)) + 1.0
+                grounded = true
+            } else {
+                player_y = float(floor(next_y + PLAYER_HEIGHT)) - PLAYER_HEIGHT
+            }
+            velocity_y = 0.0
+        } else {
+            player_y = next_y
+        }
+    } else {
+        velocity_y = 0.0
+    }
+
+    update_camera()
+    handle_block_action(left_now, right_now)
+}
+
+fn draw_hud(c: Canvas) {
+    c.text(18, 14, "ATF BLOCKWORLD", rgb(255, 255, 255), 20, true)
+    c.text(18, 40, "WASD move  |  Mouse look  |  SPACE jump  |  SHIFT sprint", rgb(235, 242, 250), 14, false)
+    c.text(18, 60, "LMB mine  |  RMB place  |  1-6 select block  |  ESC release mouse", rgb(235, 242, 250), 14, false)
+
+    c.text(18, c.h - 28, "XYZ  {int(floor(player_x))}, {int(floor(player_y))}, {int(floor(player_z))}", rgb(245, 245, 245), 14, true)
+    c.text(c.w - 185, c.h - 28, "BLOCK: {block_name(selected_block)}", rgb(245, 245, 245), 14, true)
+
+    let slot_size = 38
+    let gap = 5
+    let total_width = 6 * slot_size + 5 * gap
+    let start_x = (c.w - total_width) / 2
+    let bar_y = c.h - 62
+    c.rect(start_x - 9, bar_y - 9, total_width + 18, slot_size + 18, rgba(20, 23, 29, 0.78))
+    c.outline(start_x - 9, bar_y - 9, total_width + 18, slot_size + 18, 2, 1, rgb(95, 105, 117))
+
+    for i in 0..6 {
+        let x = start_x + i * (slot_size + gap)
+        c.rect(x, bar_y, slot_size, slot_size, rgb(47, 52, 60))
+        c.rect(x + 7, bar_y + 7, slot_size - 14, slot_size - 14, block_ui_color(i + 1))
+        let border_color = if selected_block == i + 1 { rgb(255, 220, 79) } else { rgb(117, 128, 141) }
+        let border_width = if selected_block == i + 1 { 3 } else { 1 }
+        c.outline(x, bar_y, slot_size, slot_size, 1, border_width, border_color)
+        c.text(x + 3, bar_y - 18, str(i + 1), rgb(255, 255, 255), 13, true)
+    }
+
+    let center_x = c.w / 2
+    let center_y = c.h / 2
+    c.line(center_x - 8, center_y, center_x - 3, center_y, 2, rgb(255, 255, 255))
+    c.line(center_x + 3, center_y, center_x + 8, center_y, 2, rgb(255, 255, 255))
+    c.line(center_x, center_y - 8, center_x, center_y - 3, 2, rgb(255, 255, 255))
+    c.line(center_x, center_y + 3, center_x, center_y + 8, 2, rgb(255, 255, 255))
+
+    if not mouse_captured {
+        c.rect(center_x - 126, center_y + 28, 252, 42, rgba(15, 18, 24, 0.86))
+        c.outline(center_x - 126, center_y + 28, 252, 42, 4, 2, rgb(255, 220, 79))
+        c.text(center_x - 89, center_y + 39, "CLICK TO RESUME", rgb(255, 226, 105), 18, true)
+    }
+}
+
+fn draw_game(c: Canvas) {
+    let aspect_x = 1.20
+    let aspect_y = 0.68
+
+    for y in 0..RENDER_H {
+        let screen_y = (1.0 - (float(y) + 0.5) * 2.0 / float(RENDER_H)) * aspect_y
+        for x in 0..RENDER_W {
+            let screen_x = ((float(x) + 0.5) * 2.0 / float(RENDER_W) - 1.0) * aspect_x
+            let dx = forward_x + right_x * screen_x + up_x * screen_y
+            let dy = forward_y + right_y * screen_x + up_y * screen_y
+            let dz = forward_z + right_z * screen_x + up_z * screen_y
+            let (block, bx, by, bz, px, py, pz, distance) = trace_ray(dx, dy, dz, VIEW_DISTANCE)
+            var color = sky_color(dy)
+            if block != 0 {
+                let face = face_from_hit(bx, by, bz, px, py, pz, dx, dy, dz)
+                let sample_y = camera_y + dy * distance
+                color = color_for_block(block, face, bx, by, bz, sample_y, distance)
+            } else {
+                let ray_length = sqrt(dx * dx + dy * dy + dz * dz)
+                let ndx = dx / ray_length
+                let ndy = dy / ray_length
+                let ndz = dz / ray_length
+                let sun_dot = ndx * -0.30 + ndy * 0.48 + ndz * 0.82
+                if sun_dot > 0.994 { color = pack_rgb(255, 244, 205) }
+            }
+            frame_pixels[y * RENDER_W + x] = color
+        }
+    }
+
+    c.pixels_smooth(0, 0, c.w, c.h, frame_pixels, RENDER_W, RENDER_H)
+    draw_hud(c)
 }
 
 fn view() -> Node {
-    return canvas(|c| { mc_draw(c) }).grow()
+    if not timer_started {
+        timer_started = true
+        mouse_captured = true
+        ui_mouse_capture(true)
+        ui_every(FRAME_TIME_MS, game_tick)
+    }
+    return canvas(|c| { draw_game(c) }).grow()
 }
 
 fn main() {
-    mc_generate()
-    ui_mouse_capture(true)
-    ui_every(30, || { mc_step() })
-    ui_shortcut("q", || { mc_break() })
-    ui_shortcut("e", || { mc_place() })
-    ui_shortcut("esc", || { ui_quit() })
-    for i in 1..=6 {
-        ui_shortcut("{i}", || { mc_sel = i })
-    }
-    ui_run("ATF Minecraft", MC_WIN_W, MC_WIN_H, view)
+    create_world()
+    ui_run("ATF Blockworld", 1100, 680, view)
 }
