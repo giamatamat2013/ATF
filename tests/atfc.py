@@ -8,6 +8,8 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+from atf.launch import program_argv  # noqa: E402  (on Linux the .exe files run through Wine)
 NATIVE = os.path.join(ROOT, "bin", "atf.exe")
 
 
@@ -33,7 +35,7 @@ def compile_to(path, exe):
     env = dict(os.environ, ATF_PATH_STYLE="base")
     if os.path.exists(exe):
         os.remove(exe)
-    p = subprocess.run([NATIVE, "build", path, "-o", exe], capture_output=True, env=env, cwd=ROOT)
+    p = subprocess.run(program_argv(NATIVE) + ["build", path, "-o", exe], capture_output=True, env=env, cwd=ROOT)
     if p.returncode != 0 or not os.path.exists(exe):
         err = p.stderr.decode("utf-8", "replace").replace("\r\n", "\n")
         return False, err if err.endswith("\n") else err + "\n"

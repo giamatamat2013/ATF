@@ -85,7 +85,7 @@ total: 5.25
 
 ## Getting started
 
-Requirements: 64-bit Windows 10 or 11. Nothing else is needed to compile and run programs.
+Requirements: 64-bit Windows 10 or 11 (or Linux with Wine, see below). Nothing else is needed to compile and run programs.
 
 ```text
 atf run hello.atf              compile and run a program
@@ -101,6 +101,12 @@ atf version
 that folder to your PATH, and makes ATF the program that opens `.atf` files in Explorer (with the ATF
 icon). `uninstall.cmd` removes all of it again. Note: Windows may ask for confirmation the first time you run a newly built,
 unsigned program.
+
+**On Linux** (for example a remote server where an AI assistant works), the compiler runs through
+[Wine](https://www.winehq.org/). Install it once with `sudo apt install wine64`. Then `wine bin/atf.exe run hello.atf`
+runs a program with the native compiler, and `python3 run_atf.py run hello.atf` runs it with the Python compiler.
+`python3 run_atf.py check` and `build` need only Python 3. The test scripts run the same way. The first run creates
+the Wine folder `~/.wine` and takes a little longer. If `wine` is not on the PATH, set `ATF_WINE` to the Wine program.
 
 A program may start with the line `// ATF 1.2.0` to say which version it was written for. The line is optional; an
 older compiler only prints a warning when it is older than that version (see the tutorial, section 2).
@@ -241,3 +247,5 @@ python tests/std/run_std_tests.py  the standard library modules
 python tests/check_docs.py         every code sample in the documentation
 python tests/compare_stages.py     programs built by the bootstrap and by the native compiler behave the same
 ```
+
+On Linux the same commands work when Wine is installed (see Getting started).

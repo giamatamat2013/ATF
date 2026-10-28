@@ -27,7 +27,7 @@ def run_in_process(path, stdin, out_dir):
     if not ok:
         return "", 1, "COMPILE ERROR\n" + err
     try:
-        p = subprocess.run([exe], input=stdin, capture_output=True, timeout=120)
+        p = subprocess.run(atfc.program_argv(exe), input=stdin, capture_output=True, timeout=120)
     except subprocess.TimeoutExpired:
         return "", 1, "TIMEOUT\n"
     return (p.stdout.decode("utf-8", "replace").replace("\r\n", "\n"), p.returncode,

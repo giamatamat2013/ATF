@@ -3,5 +3,5 @@ start
 [stderr] panic: stack overflow (a function called itself too many times; is a recursion missing its end condition?)
   in down (err_stack.atf)
   at down (err_stack.atf:2)
-  ... the line above repeats 4193146 more times
+  ... the line above repeats N more times
   at main (err_stack.atf:6)

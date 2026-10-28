@@ -20,6 +20,8 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 ATF = os.path.join(ROOT, "bin", "atf.exe")
+sys.path.insert(0, ROOT)
+from atf.launch import program_argv  # noqa: E402
 
 
 def build(path, exe):
@@ -31,7 +33,7 @@ def build(path, exe):
             time.sleep(3)
             continue
         try:
-            p = subprocess.run([ATF, "build", path, "-o", exe], capture_output=True, timeout=300, cwd=ROOT)
+            p = subprocess.run(program_argv(ATF) + ["build", path, "-o", exe], capture_output=True, timeout=300, cwd=ROOT)
         except (OSError, PermissionError) as e:  # locked while the lead rebuilds the compiler
             last = str(e)
             time.sleep(3)
@@ -47,7 +49,7 @@ def build(path, exe):
 
 def run(exe, stdin, args):
     try:
-        p = subprocess.run([exe] + args, input=stdin, capture_output=True, timeout=120, cwd=ROOT)
+        p = subprocess.run(program_argv(exe) + args, input=stdin, capture_output=True, timeout=120, cwd=ROOT)
     except subprocess.TimeoutExpired:
         return "", 1, "TIMEOUT\n"
     return (p.stdout.decode("utf-8", "replace").replace("\r\n", "\n"), p.returncode,

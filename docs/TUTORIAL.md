@@ -76,6 +76,9 @@ In Git Bash, call the compiler directly: `bin/atf.exe run hello.atf`. The compil
 dependencies, and the `.exe` files it creates are stand-alone too: copy them to any 64-bit Windows computer and they run.
 Arguments after the file name are passed to your program: `atf run prog.atf one two`.
 
+On Linux, for example a remote server, install Wine once (`sudo apt install wine64`) and start the compiler through it:
+`wine bin/atf.exe run hello.atf`. The `.exe` files it creates run the same way: `wine hello.exe`.
+
 Every program starts at `fn main()`. A function body is written between `{` and `}`.
 `println` prints a line of text. Text is written between double quotes.
 

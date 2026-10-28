@@ -9,7 +9,7 @@ ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), st
 
 ## Workflow
 
-1. Find the compiler: `bin/atf.exe` (or `atf.cmd`) in the repo root; `atf` if installed on PATH. In Git Bash call `bin/atf.exe`, in PowerShell `.\atf` or `bin\atf.exe`.
+1. Find the compiler: `bin/atf.exe` (or `atf.cmd`) in the repo root; `atf` if installed on PATH. In Git Bash call `bin/atf.exe`, in PowerShell `.\atf` or `bin\atf.exe`. On Linux (a remote server) there is no `atf.cmd`: install Wine (`sudo apt install wine64`), then call `wine bin/atf.exe check f.atf` and `wine bin/atf.exe run f.atf`; `python3 run_atf.py run f.atf` also works (Python compiler, runs the program through Wine).
 2. Write the code, then **always compile it** before reporting it works:
    ```
    atf check f.atf            # errors only, prints "ok"
@@ -188,7 +188,7 @@ fn main() { let app = App(); ui_run("Demo", 420, 300, || view(app)) }
 - An optional `str?` prints with quotes; unwrap first.
 - Integer overflow wraps silently; `/` or `%` by zero, bad index, missing map key, `!` on nil all panic with a traceback (exit code 1). Infinite recursion kills the process silently (exit -1073741571).
 - Assigning a struct/array/map aliases it; use `copy(x)` (shallow) for an independent one.
-- Windows only (64-bit Windows 10/11). Output is buffered; it is flushed on exit, on input and on stderr writes.
+- Windows only (64-bit Windows 10/11; on Linux the programs run through Wine). Output is buffered; it is flushed on exit, on input and on stderr writes.
 
 ## Converting to and from Python and Rust
 `atf run tools/convert.atf prog.py --to atf` (also `.rs`, and `--to py|rs`, `-o out`) translates between ATF, Python and Rust. The result is a starting point, not a finished port: comments are dropped, types and ownership are guessed, and library functions with no counterpart (`str_builder`, `regex`, `std/ui`) are kept as they are. Notes about guesses go to stderr as `note: ...`. After converting to ATF, always run `atf check` and fix what it reports. Details: `docs/CONVERT.md`.

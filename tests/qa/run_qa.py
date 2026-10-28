@@ -32,6 +32,8 @@ import time
 QA = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(QA))
 ATF = os.path.join(ROOT, "bin", "atf.exe")
+sys.path.insert(0, ROOT)
+from atf.launch import program_argv  # noqa: E402
 ACTUAL_DIR = os.path.join(QA, "_actual")
 RUN_TIMEOUT = 120
 COMPILE_TIMEOUT = 120
@@ -46,7 +48,7 @@ def run_compiler(args, env):
     for attempt in range(10):
         if os.path.exists(ATF):
             try:
-                return subprocess.run([ATF] + args, capture_output=True, env=env, cwd=ROOT,
+                return subprocess.run(program_argv(ATF) + args, capture_output=True, env=env, cwd=ROOT,
                                       timeout=COMPILE_TIMEOUT)
             except PermissionError:
                 pass
@@ -83,7 +85,7 @@ def run_one(name, build_dir):
         with open(os.path.join(QA, name + ".args"), encoding="utf8") as f:
             args = f.read().split()
     try:
-        r = subprocess.run([exe] + args, input=stdin, capture_output=True, timeout=RUN_TIMEOUT, cwd=build_dir)
+        r = subprocess.run(program_argv(exe) + args, input=stdin, capture_output=True, timeout=RUN_TIMEOUT, cwd=build_dir)
     except subprocess.TimeoutExpired:
         return name, "TIMEOUT\n", crash, time.time() - t0
     actual = norm(r.stdout)

@@ -57,7 +57,7 @@
 ## 2. התקנה והרצה
 
 אין צורך בהתקנה. כל מה שצריך נמצא בתיקיית הפרויקט: המהדר הוא קובץ אחד, `bin/atf.exe`, בלי תלויות נוספות.
-צריך רק מחשב Windows של 64 ביט.
+צריך רק מחשב Windows של 64 ביט (או Linux עם Wine, ראו למטה).
 
 הפקודות העיקריות:
 
@@ -76,6 +76,9 @@ bin/atf.exe build hello.atf -o greet.exe
 
 הפקודות למעלה כתובות בתחביר של Git Bash. בחלון `cmd` או ב-PowerShell, מתוך תיקיית הפרויקט, אפשר לכתוב בקיצור
 `atf run hello.atf` (ב-PowerShell: `.\atf run hello.atf`): הקובץ `atf.cmd` פשוט קורא ל-`bin\atf.exe`.
+
+בלינוקס (למשל בשרת מרוחק) מתקינים פעם אחת את Wine (`sudo apt install wine64`) ומפעילים את המהדר דרכו:
+`wine bin/atf.exe run hello.atf`. קובצי ה-`.exe` שהמהדר יוצר רצים באותה דרך: `wine hello.exe`.
 
 ### המצב האינטראקטיבי (REPL)
 

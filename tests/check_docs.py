@@ -36,6 +36,8 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # samples are checked with the native compiler (the one that ships); ATF=path overrides it
 ATF = os.path.abspath(os.environ.get("ATF", os.path.join(ROOT, "bin", "atf.exe")))
+sys.path.insert(0, ROOT)
+from atf.launch import program_argv  # noqa: E402
 
 FENCE = re.compile(r"^(\s*)```(.*)$")
 
@@ -75,11 +77,11 @@ def run_program(source, stdin, tmp):
     if os.path.exists(exe):
         os.remove(exe)
     env = dict(os.environ, ATF_PATH_STYLE="base")
-    c = subprocess.run([ATF, "build", path, "-o", exe], capture_output=True, env=env, cwd=tmp, timeout=120)
+    c = subprocess.run(program_argv(ATF) + ["build", path, "-o", exe], capture_output=True, env=env, cwd=tmp, timeout=120)
     if c.returncode != 0 or not os.path.exists(exe):
         return False, "", c.stderr.decode("utf-8", "replace").replace("\r\n", "\n"), 1
     try:
-        p = subprocess.run([exe], input=stdin.encode("utf8"), capture_output=True, timeout=60, cwd=tmp)
+        p = subprocess.run(program_argv(exe), input=stdin.encode("utf8"), capture_output=True, timeout=60, cwd=tmp)
     except subprocess.TimeoutExpired:
         return True, "", "TIMEOUT\n", 1
     return (True, p.stdout.decode("utf-8", "replace").replace("\r\n", "\n"),

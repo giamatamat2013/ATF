@@ -15,6 +15,7 @@ sys.path.insert(0, ROOT)
 from atf import driver, errors  # noqa: E402
 from atf.checker import MultiError  # noqa: E402
 from atf.errors import CompileError  # noqa: E402
+from atf.launch import program_argv  # noqa: E402
 
 errors.PATH_STYLE = "base"
 RUN_TIMEOUT = 60
@@ -22,7 +23,7 @@ RUN_TIMEOUT = 60
 
 def run_exe(exe, stdin):
     try:
-        r = subprocess.run([exe], input=stdin, capture_output=True, timeout=RUN_TIMEOUT, cwd=ROOT)
+        r = subprocess.run(program_argv(exe), input=stdin, capture_output=True, timeout=RUN_TIMEOUT, cwd=ROOT)
     except subprocess.TimeoutExpired:
         return ("timeout", b"")
     out = r.stdout.replace(b"\r\n", b"\n")
@@ -65,7 +66,7 @@ def main():
             exp = None
         if os.path.exists(out1):
             os.remove(out1)
-        p = subprocess.run([stage1, "build", path, "-o", out1], capture_output=True, env=env, cwd=ROOT)
+        p = subprocess.run(program_argv(stage1) + ["build", path, "-o", out1], capture_output=True, env=env, cwd=ROOT)
         got = open(out1, "rb").read() if os.path.exists(out1) else None
         if exp is None and got is not None:
             print("stage 1 only        %s  (uses features the frozen bootstrap does not have)" % f)

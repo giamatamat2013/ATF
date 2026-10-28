@@ -7,6 +7,7 @@ import tempfile
 
 from . import errors
 from .errors import CompileError
+from .launch import program_argv
 from .parser import parse_source
 from . import syntax as S
 
@@ -183,10 +184,16 @@ def run(path, args):
     with open(exe, "wb") as f:
         f.write(data)
     try:
-        return subprocess.call([exe] + list(args))
+        argv = program_argv(exe)
+    except RuntimeError as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 1
+    try:
+        return subprocess.call(argv + list(args))
     except OSError as e:
         print("error: cannot run the compiled program (%s)" % e, file=sys.stderr)
-        print("hint: Windows may be blocking unsigned executables (Smart App Control / Application Control).", file=sys.stderr)
+        if sys.platform == "win32":
+            print("hint: Windows may be blocking unsigned executables (Smart App Control / Application Control).", file=sys.stderr)
         return 1
 
 
