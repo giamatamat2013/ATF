@@ -31,6 +31,7 @@ TODO = HERE / "todo.json"          # the coding tasks, written by whoever is wri
 VERSION_FILE = "VERSION"                            # the file that holds the version number (relative to the repository root)
 VERSION_RE = r"(\d+\.\d+\.\d+)"                       # a regex whose group 1 is the version in that file
 RELEASE_WORKFLOW = "release"                         # the `name:` of the release workflow in .github/workflows
+RELEASE_FILE = "release.yml"                         # its file name, to ask GitHub for its runs
 DEFAULT_GH_SECONDS = 720
 LOCAL_EVERY, GITHUB_EVERY = 3, 8          # seconds
 
@@ -124,6 +125,9 @@ def github(remote):
     out = {"remote": remote, "error": "", "runs": [], "rels": [], "jobs": [], "cur": None}
     try:
         out["runs"] = api("/actions/runs?per_page=15")["workflow_runs"]
+        # the release runs are asked for by name: the tests run many times, so the last 15 runs may hold none of the releases
+        seen = {r["id"] for r in out["runs"]}
+        out["runs"] += [r for r in api(f"/actions/workflows/{RELEASE_FILE}/runs?per_page=10")["workflow_runs"] if r["id"] not in seen]
         out["rels"] = api("/releases?per_page=4")
         ok_runs = [r for r in out["runs"] if r["name"] == RELEASE_WORKFLOW and r["status"] == "completed" and r["conclusion"] == "success"]
         if ok_runs and Cache.hist.get("run") != ok_runs[0]["id"]:
