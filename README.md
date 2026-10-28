@@ -75,6 +75,8 @@ total: 5.25
   It also has what a whole application needs: multi-line text editing with selection, undo and the clipboard, menus and
   menu bars, select lists, tabs, dialogs, tooltips, keyboard shortcuts, standard file dialogs, a drawing canvas, and a
   way to test the interface without a window (`ui_headless`, `ui_click`, `ui_type`). `std/app` keeps settings between runs.
+  The same program also runs in a browser, without any change to it: `ATF_UI_WEB=8080 bin/atf.exe run examples/ui/counter.atf`,
+  then open `http://127.0.0.1:8080/`. The page shows the picture the window would draw and sends the mouse and keyboard back.
 
   ```atf nocheck
   button("Save", || save(doc)).bg(hex("#4f46e5")).color(WHITE).radius(10).hover(style().bg(hex("#4338ca")))

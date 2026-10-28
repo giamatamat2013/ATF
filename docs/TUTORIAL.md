@@ -2782,6 +2782,46 @@ fn main() {
 true
 ```
 
+#### The same program in a browser
+
+With the environment variable `ATF_UI_WEB=8080` set, `ui_run` does not open a window. It serves the program at
+`http://127.0.0.1:8080/` instead, and the program does not change. The page shows the picture the window would draw
+(the same drawing code, sent to the browser as pixels) and sends the mouse, the wheel and the keyboard back to the
+program. Hover styles, transitions, `ui_every` timers, text editing, shortcuts and `ui_quit` work as in the window.
+
+```atf nocheck
+import "std/ui"
+
+struct Counter { count: int = 0 }
+
+fn main() {
+    let c = Counter()
+    ui_run("Counter", 360, 260, || column([
+        text("Count: {c.count}").font_size(28),
+        button("+1", || { c.count += 1 }).width(120),
+    ]).gap(12).padding(24))
+}
+```
+
+Start it with the port number, then open the address in a browser:
+
+```bash
+ATF_UI_WEB=8080 bin/atf.exe run counter.atf
+```
+
+In PowerShell: `$env:ATF_UI_WEB = "8080"; bin\atf.exe run counter.atf`
+
+The program keeps running until it calls `ui_quit()`; the page then says that the program has closed. Things to know:
+
+- The page only works on the computer that runs the program: the server listens on `127.0.0.1` only, and it refuses
+  requests from other sites (403), so another computer on the network cannot use it.
+- Only the left mouse button is passed on, so `ui_mouse_held(1)` and `ui_mouse_held(2)` stay false in the browser.
+- `ui_mouse_capture(true)` locks the pointer in the page: click the picture to lock it, and press Esc to release it.
+- Dialogs (`message_box`, `confirm_box`, the file dialogs), the clipboard and the image files named by `image(path)`
+  belong to the computer that runs the program. A dialog opens on that computer and waits there, so the page stops
+  until it is answered.
+- Fonts are the ones of the computer that runs the program.
+
 #### A complete program: menus, text, dialogs, files
 
 Beyond the basics, `std/ui` has what a whole application needs:

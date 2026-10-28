@@ -1,0 +1,133 @@
+// Tests the browser mode of std/ui (ATF_UI_WEB): the HTTP answers, the picture and the events.
+// Each request is sent over a real connection, and ui_web_step answers it once in this program.
+import "std/ui"
+import "std/net"
+
+var clicks = 0
+var typed = ""
+
+// a button or a field inside a column: a view whose root itself is clickable cannot take a press
+fn button_view() -> Node {
+    return column([button("Clicks: {clicks}", || { clicks += 1 }).width(96).height(64)])
+}
+
+fn field_view() -> Node {
+    return column([textbox(typed, |s| { typed = s }).width(96).height(64)])
+}
+
+// send one raw request, let the server answer it, and return the whole answer
+fn ask(srv: TcpServer, raw: str) -> str {
+    let c = tcp_connect("127.0.0.1", srv.port).unwrap()
+    c.write(raw)
+    ui_web_step(srv)
+    let answer = c.read_all()
+    c.close()
+    return answer
+}
+
+// a POST request from this computer with a body
+fn post(path: str, body_text: str) -> str {
+    return "POST " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1\r\nContent-Length: " + str(body_text.len()) + "\r\n\r\n" + body_text
+}
+
+// a poll from the page: the events, and the picture number it has now
+fn poll(srv: TcpServer, body_text: str) -> str {
+    return ask(srv, post("/ev?s=" + str(ui_web_seq), body_text))
+}
+
+// the first line of an answer, for example "HTTP/1.1 200 OK"
+fn status_line(answer: str) -> str {
+    return answer.split("\r\n")[0]
+}
+
+// the value of a header in an answer ("" when it is missing)
+fn header_of(answer: str, name: str) -> str {
+    let head = answer[0..answer.find("\r\n\r\n")]
+    for line in head.split("\r\n") {
+        if line.starts_with(name + ":") { return line[name.len() + 1..].trim() }
+    }
+    return ""
+}
+
+// the body of an answer: the bytes after the headers
+fn body_of(answer: str) -> str {
+    return answer[answer.find("\r\n\r\n") + 4..]
+}
+
+fn main() {
+    let srv = tcp_listen(0).unwrap()
+    ui_web_begin("Web test", 96, 64, || button_view())
+
+    // the page
+    let page = ask(srv, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    println(status_line(page))
+    let has_canvas = body_of(page).contains("<canvas id=\"screen\"")
+    println("page has the canvas: {has_canvas}")
+
+    // the first picture: the page asks with picture number 0
+    let first = ask(srv, post("/ev?s=0", ""))
+    println(status_line(first))
+    let pw = header_of(first, "X-W")
+    let ph = header_of(first, "X-H")
+    println("picture: {pw} x {ph}, {body_of(first).len()} bytes")
+
+    // a click: the mouse moves in, presses and releases on the button
+    let clicked = poll(srv, "M 0\nm 10 10\nd 10 10\nu 10 10")
+    println("clicks: {clicks}")
+    println(status_line(clicked))
+
+    // a picture that does not change: the page gets no new picture (204)
+    ui_web_begin("Web test", 96, 64, || column([text("Static")]))
+    let still = ask(srv, post("/ev?s=0", ""))
+    println(status_line(still))
+    let idle = poll(srv, "")
+    println(status_line(idle))
+
+    // requests from other sites are refused
+    let evil_host = ask(srv, "GET / HTTP/1.1\r\nHost: evil.example\r\n\r\n")
+    println(status_line(evil_host))
+    let rebinding = ask(srv, "GET / HTTP/1.1\r\nHost: 127.0.0.1.evil.example\r\n\r\n")
+    println(status_line(rebinding))
+    let cross = ask(srv, "POST /ev?s=0 HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nContent-Length: 0\r\n\r\n")
+    println(status_line(cross))
+    let missing = ask(srv, "GET /nothing HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    println(status_line(missing))
+
+    // typing into a text field: the click focuses it, then keys and text arrive
+    ui_web_begin("Web test", 96, 64, || field_view())
+    let focus = poll(srv, "M 0\nm 10 10\nd 10 10\nu 10 10")
+    println(status_line(focus))
+    let typing = poll(srv, "M 0\nkd 65\nt a\nku 65\nkd 66\nt %C3%A9\nku 66")
+    println("typed: {typed}")
+    let deleting = poll(srv, "kd 8\nku 8")
+    println("after backspace: {typed}")
+    println(status_line(deleting))
+    println(status_line(typing))
+
+    // a key held in the page is a key held in the program
+    let press = poll(srv, "kd 65")
+    let pressed = ui_key_down("a")
+    println("a held: {pressed}")
+    let release = poll(srv, "ku 65")
+    let released = ui_key_down("a")
+    println("a released: {released}")
+
+    // mouse look: the page sends the movement while the pointer is locked
+    ui_mouse_capture(true)
+    let look = poll(srv, "r 5 -3")
+    let (dx, dy) = ui_mouse_delta()
+    println("pointer moved: {dx} {dy}")
+    println("pointer locked: {header_of(look, "X-Lock")}")
+    ui_mouse_capture(false)
+
+    // the title and the end of the program
+    ui_title("New title")
+    let titled = poll(srv, "")
+    let title = header_of(titled, "X-Title")
+    println("title: {title}")
+    ui_quit()
+    let last = poll(srv, "")
+    let quit = header_of(last, "X-Quit")
+    println("quit: {quit}")
+    srv.close()
+}

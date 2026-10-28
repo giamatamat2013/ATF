@@ -52,6 +52,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/ui](#stdui)
   - [std/url](#stdurl)
   - [std/xml](#stdxml)
+  - [std/zlib](#stdzlib)
 
 ## Built-in functions
 
@@ -2175,6 +2176,8 @@ Lengths are in pixels at 100% screen scale; they are scaled for high-DPI screens
 Every method of Style also works directly on a Node:  text("Hi").bold().color(WHITE).padding(8)
 Without a window (tests, docs): ui_screenshot(view, w, h, "shot.bmp"), or run any UI program with
 the environment variable ATF_UI_SCREENSHOT=shot.bmp.
+In the browser: run any UI program with the environment variable ATF_UI_WEB=8080, then open
+http://127.0.0.1:8080/. The same screen is drawn there and the mouse and keyboard work as in the window.
 
 **Constants**
 
@@ -2286,7 +2289,7 @@ struct UiColorTween {
 - `fn animate_color(key: str, target: int, ms: int = 300) -> int` - A color that fades toward target (like animate, for colors): animate_color("bg", if on { GREEN } else { RED }, 400)
 - `fn focus_field(key: str)` - give the keyboard focus to the text field marked with .key(name) and put the caret at its end; does nothing when there is no such field. Handy in a shortcut: ui_shortcut("ctrl+f", || focus_field("search"))
 - `fn ui_refresh()` - ask for the view to be rebuilt and the window to be redrawn (after changing data outside an event)
-- `fn ui_quit()` - close the window (ui_run returns)
+- `fn ui_quit()` - close the window (ui_run returns; in the browser the page reports that the program has closed)
 - `fn ui_title(title: str)` - change the window title
 - `fn ui_every(ms: int, f: fn())` - run f every ms milliseconds while the window is open; the view is rebuilt after each call
 - `fn ui_mouse_move(x: int, y: int)` - move the mouse pointer to (x, y) without clicking: hover styles and tooltips react (use it in tests)
@@ -2297,7 +2300,7 @@ struct UiColorTween {
 - `fn confirm_box(title: str, question: str) -> bool` - ask a yes/no question; true when the user answered Yes
 - `fn open_file_dialog(title: str = "Open", filter: str = "All files|*.*") -> str?` - The Windows "Open" dialog. filter is pairs of name|pattern: "Text files|*.txt|All files|*.*". Returns the chosen path, or nil when the user cancelled.
 - `fn save_file_dialog(title: str = "Save as", filter: str = "All files|*.*", ext: str = "") -> str?` - The Windows "Save as" dialog; ext (like "txt") is added when the user types a name without one. Returns the chosen path, or nil when the user cancelled.
-- `fn ui_run(title: str, width: int, height: int, view: fn() -> Node)` - Open a window and show view() in it until the window is closed. width and height are the size of the inside of the window. view runs again after every click, key press and timer, so it should build the screen from the program's data each time. With the environment variable ATF_UI_SCREENSHOT=picture.bmp set, no window opens: the first frame is saved to that file instead (for tests and documentation of any UI program).
+- `fn ui_run(title: str, width: int, height: int, view: fn() -> Node)` - Open a window and show view() in it until the window is closed. width and height are the size of the inside of the window. view runs again after every click, key press and timer, so it should build the screen from the program's data each time. With the environment variable ATF_UI_SCREENSHOT=picture.bmp set, no window opens: the first frame is saved to that file instead (for tests and documentation of any UI program). With ATF_UI_WEB=8080 set, no window opens either: the program is served to the browser at http://127.0.0.1:8080/ until it calls ui_quit (see the browser section below).
 - `fn ui_headless(view: fn() -> Node, width: int, height: int)` - Start view() in a width x height area without opening a window and forget all earlier state (focus, open menus, scroll positions, undo). Then send events with ui_click, ui_type and ui_keypress, check the program's own data, and draw the result with ui_screenshot. Dialogs do not open while testing: message_box does nothing, confirm_box answers ui_answers' yes, the file dialogs return its path (nil when it is empty), and the clipboard is private to the program.
 - `fn ui_answers(yes: bool, path: str)` - what the dialogs answer while testing: yes for confirm_box, and the path the file dialogs return ("" = cancel)
 - `fn ui_last_dialog() -> str` - the text of the last message_box or confirm_box
@@ -2523,3 +2526,91 @@ struct XmlParser {
 - `.name() -> str`
 - `.decode(raw: str) -> str` - replaces the entities in raw text
 - `.element() -> XmlNode?` - reads an element; the position is at its '<'
+
+## std/zlib
+
+Deflate, zlib and gzip compression and decompression (RFC 1951, 1950 and 1952).
+
+```text
+import "std/zlib"
+let z = zlib_compress("hello hello hello hello")
+zlib_decompress(z).unwrap()            == "hello hello hello hello"
+gzip_decompress(gzip_compress(s))      (the format of .gz files)
+zlib_inflate_raw(d) / zlib_deflate_raw(s)   raw deflate streams, as stored inside .zip and .png files
+```
+
+Text (str) is treated as raw bytes, so binary data round-trips exactly.
+The decompressors return Result<str, str>: Err carries a readable message ("invalid distance code", "checksum mismatch").
+The compressor finds repeats with LZ77 (a hash chain over the last 32 KiB) and writes them with the fixed Huffman
+codes of the deflate format. The output is valid for every inflate implementation, smaller than the input for
+repetitive data, and a little bigger than what the zlib library produces. level 0 stores the data without compressing.
+
+**Types**
+
+a Huffman decoding table: t[next bits] = (code length << 16) | symbol, 0 for a code that does not exist
+
+```text
+struct ZlTable {
+    t: [int],
+    bits: int
+}
+```
+
+the state of one inflate run: the input, the bit buffer and the growing output
+
+```text
+struct ZlState {
+    src: str,
+    p: ptr<byte>,
+    n: int,
+    pos: int,
+    bits: int,
+    nbits: int,
+    over: int,
+    out: ptr<byte>,
+    olen: int,
+    ocap: int,
+    err: str
+}
+```
+
+the state of one deflate run: the bytes written so far and the bits that wait for a whole byte
+
+```text
+struct ZlOut {
+    sb: StrBuilder,
+    acc: int,
+    nacc: int
+}
+```
+
+
+**Functions**
+
+- `fn zl_rev(code: int, n: int) -> int` - the lowest n bits of code in reverse order
+- `fn zl_codes(lens: [int], off: int, n: int) -> [int]` - the canonical Huffman codes of lens[off..off+n], bit-reversed so that they can be written least significant bit first; an empty array when the lengths use more code space than there is
+- `fn zl_table(lens: [int], off: int, n: int) -> ZlTable?` - the decoding table of lens[off..off+n], nil when the lengths are not a possible Huffman code
+- `fn zl_init()`
+- `fn zl_be32(sb: StrBuilder, v: int)`
+- `fn zl_le32(sb: StrBuilder, v: int)`
+- `fn zl_fail(st: ZlState, msg: str) -> bool`
+- `fn zl_fill(st: ZlState)` - keeps at least 49 bits in the bit buffer; past the end of the input it adds zero bits and counts them in over
+- `fn zl_bits(st: ZlState, n: int) -> int`
+- `fn zl_sym(st: ZlState, tb: ZlTable) -> int` - the next Huffman symbol, -1 for a code that does not exist (the bit buffer must hold 15 bits)
+- `fn zl_grow(st: ZlState)`
+- `fn zl_overrun(st: ZlState) -> bool` - true when more bits were used than the input had
+- `fn zl_block(st: ZlState, lit: ZlTable, dist: ZlTable) -> bool` - decodes the symbols of one block with the given tables, up to its end-of-block code
+- `fn zl_unread(st: ZlState) -> bool` - gives the whole bytes that are still in the bit buffer back to the input; false when the input was too short
+- `fn zl_stored(st: ZlState) -> bool`
+- `fn zl_dynamic(st: ZlState) -> bool`
+- `fn zl_inflate(src: str, start: int) -> ZlState` - inflates the deflate stream that starts at byte start of src; on success st.err is "" and st.pos is the byte after the stream
+- `fn zl_result(st: ZlState) -> Result<str, str>`
+- `fn zlib_inflate_raw(data: str) -> Result<str, str>` - decompresses a raw deflate stream (RFC 1951): no header, no checksum
+- `fn zlib_decompress(data: str) -> Result<str, str>` - decompresses zlib data (RFC 1950: a 2 byte header, the deflate stream and an Adler-32 checksum, which is checked)
+- `fn gzip_decompress(data: str) -> Result<str, str>` - decompresses gzip data (RFC 1952, the first member): header fields are skipped, CRC-32 and size are checked
+- `fn zl_put(o: ZlOut, v: int, nb: int)`
+- `fn zl_stored_blocks(s: str) -> str` - a raw deflate stream made of stored (uncompressed) blocks
+- `fn zl_fixed_block(s: str, max_chain: int) -> str` - one block with the fixed Huffman codes: LZ77 matches found through a hash chain over the last 32 KiB
+- `fn zlib_deflate_raw(data: str, level: int = 6) -> str` - compresses to a raw deflate stream (RFC 1951): no header, no checksum. level 0 stores the data, 1 to 9 search for repeats (the higher, the longer; the default 6 is a good balance). The result is never bigger than the input plus 5 bytes per 64 KiB.
+- `fn zlib_compress(data: str, level: int = 6) -> str` - compresses to zlib data (RFC 1950): a 2 byte header, the deflate stream and the Adler-32 checksum
+- `fn gzip_compress(data: str, level: int = 6) -> str` - compresses to gzip data (RFC 1952, what a .gz file contains): a 10 byte header, the deflate stream, CRC-32 and size

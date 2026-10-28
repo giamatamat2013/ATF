@@ -30,6 +30,10 @@
 // Every method of Style also works directly on a Node:  text("Hi").bold().color(WHITE).padding(8)
 // Without a window (tests, docs): ui_screenshot(view, w, h, "shot.bmp"), or run any UI program with
 // the environment variable ATF_UI_SCREENSHOT=shot.bmp.
+// In the browser: run any UI program with the environment variable ATF_UI_WEB=8080, then open
+// http://127.0.0.1:8080/. The same screen is drawn there and the mouse and keyboard work as in the window.
+
+import "std/net"
 
 // ---------------------------------------------------------------- Windows API
 extern "user32" fn RegisterClassExW(wc: ptr<int>) -> i32
@@ -2679,6 +2683,7 @@ fn ui_index_in_line(f: UiFont, t: str, ls: int, le: int, xr: int) -> int {
 }
 
 fn ui_mods() -> int {
+    if ui_web_on { return ui_web_mods }
     if ui_fake_mods >= 0 { return ui_fake_mods }
     var m = 0
     if GetKeyState(17) & 0x8000 != 0 { m = m | 1 }
@@ -2926,6 +2931,7 @@ fn ui_place_overlays() {
 
 fn ui_rebuild() {
     if ui_views.len() == 0 { return }
+    ui_dirty = true
     ui_view_anim = false
     ui_root = ui_views[0]()
     ui_layout()
@@ -2938,13 +2944,15 @@ fn ui_refresh() {
     if ui_hwnd != 0 { InvalidateRect(ui_hwnd, 0, 0) }
 }
 
-// close the window (ui_run returns)
+// close the window (ui_run returns; in the browser the page reports that the program has closed)
 fn ui_quit() {
     if ui_hwnd != 0 { DestroyWindow(ui_hwnd) }
+    ui_web_quit = true
 }
 
 // change the window title
 fn ui_title(title: str) {
+    ui_web_title = title
     if ui_hwnd != 0 { SetWindowTextW(ui_hwnd, ui_wide(title)) }
 }
 
@@ -2954,15 +2962,18 @@ var ui_captured = false
 // true while the key is held down and this window is the active one. Names as in ui_shortcut:
 // ui_key_down("w"), ui_key_down("space"), ui_key_down("left").
 fn ui_key_down(name: str) -> bool {
-    if ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd { return false }
     let vk = ui_key_code(name.lower())
     if vk == 0 { return false }
+    if ui_web_on { return ui_web_keys.get(vk, false) }
+    if ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd { return false }
     return GetAsyncKeyState(vk) & 0x8000 != 0
 }
 
 // true while a mouse button is held down over an active window: 0 = left, 1 = right, 2 = middle
 fn ui_mouse_held(button: int) -> bool {
-    if ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd or button < 0 or button > 2 { return false }
+    if button < 0 or button > 2 { return false }
+    if ui_web_on { return button == 0 and ui_web_btn }
+    if ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd { return false }
     return GetAsyncKeyState([1, 2, 4][button]) & 0x8000 != 0
 }
 
@@ -2993,6 +3004,14 @@ fn ui_mouse_capture(on: bool) {
 // how many pixels the mouse moved since the last call (right and down are positive).
 // Only works after ui_mouse_capture(true) and while the window is active.
 fn ui_mouse_delta() -> (int, int) {
+    if ui_web_on {
+        let dx = ui_web_dx
+        let dy = ui_web_dy
+        ui_web_dx = 0
+        ui_web_dy = 0
+        if not ui_captured { return (0, 0) }
+        return (dx, dy)
+    }
     if not ui_captured or ui_hwnd == 0 or GetForegroundWindow() != ui_hwnd { return (0, 0) }
     let p = __alloc_atomic(16) as ptr<int>
     GetCursorPos(p)
@@ -3089,6 +3108,7 @@ fn ui_update_hover() -> bool {
 }
 
 fn ui_invalidate() {
+    ui_dirty = true
     if ui_hwnd != 0 { InvalidateRect(ui_hwnd, 0, 0) }
 }
 
@@ -3860,11 +3880,22 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
 // build the screen from the program's data each time.
 // With the environment variable ATF_UI_SCREENSHOT=picture.bmp set, no window opens: the first frame is
 // saved to that file instead (for tests and documentation of any UI program).
+// With ATF_UI_WEB=8080 set, no window opens either: the program is served to the browser at
+// http://127.0.0.1:8080/ until it calls ui_quit (see the browser section below).
 fn ui_run(title: str, width: int, height: int, view: fn() -> Node) {
     if let shot = getenv("ATF_UI_SCREENSHOT") {
         if shot.len() > 0 {
             if not ui_screenshot(view, width, height, shot) { panic("ui_run: could not write {shot}") }
             return
+        }
+    }
+    if let web = getenv("ATF_UI_WEB") {
+        if web.len() > 0 {
+            if let port = web.parse_int() {
+                ui_web_run(title, width, height, view, port)
+                return
+            }
+            panic("ATF_UI_WEB must be a port number, for example ATF_UI_WEB=8080")
         }
     }
     ui_views = [view]
@@ -4057,4 +4088,422 @@ fn ui_put32(d: ptr<byte>, at: int, v: int) {
     d[at + 1] = byte((v >> 8) & 255)
     d[at + 2] = byte((v >> 16) & 255)
     d[at + 3] = byte((v >> 24) & 255)
+}
+
+// ---------------------------------------------------------------- the browser (ATF_UI_WEB)
+// ATF_UI_WEB=8080 serves the program at http://127.0.0.1:8080/ instead of a window. The page shows the
+// picture the window would draw (the same software renderer, sent as RGBA bytes) and sends the mouse,
+// keyboard and wheel back through the same functions the window uses (ui_mouse_down, ui_key, ui_insert...).
+// The page asks for a new picture about 30 times a second, and every request also runs the timers, so
+// ui_every and animations keep going. Requests are handled one at a time, on the program's own thread.
+
+var ui_web_on = false          // true while the program is served to a browser
+var ui_dirty = false           // the picture changed: draw it again before the next answer
+var ui_web_seq = 0             // number of the picture in ui_web_frame; the page asks for a newer one
+var ui_web_frame = ""          // that picture: 4 bytes per pixel (red, green, blue, 255), top row first
+var ui_web_mods = 0            // Ctrl 1, Shift 2, Alt 4, as the browser reports them
+var ui_web_btn = false         // the left mouse button is held down in the browser
+var ui_web_keys: {int: bool} = {}
+var ui_web_dx = 0              // pointer lock movement since the last ui_mouse_delta() call
+var ui_web_dy = 0
+var ui_web_quit = false        // ui_quit was called
+var ui_web_title = ""          // the title given to ui_title
+var ui_web_due: [int] = []     // when each ui_every timer runs next (GetTickCount64 milliseconds)
+var ui_web_caret_due = 0       // when the caret blinks next
+
+// start view() for the browser, as ui_run does for a window, but without a server: the first picture
+// is drawn now. ui_web_run calls this first; tests call it and then ui_web_step.
+fn ui_web_begin(title: str, width: int, height: int, view: fn() -> Node) {
+    ui_web_on = true
+    ui_web_quit = false
+    ui_web_title = title
+    ui_views = [view]
+    ui_scale = 1.0
+    ui_winw = width
+    ui_winh = height
+    ui_mx = -1
+    ui_my = -1
+    ui_rebuild()
+    ui_web_draw()
+}
+
+// serve view() at http://127.0.0.1:port/ until the program calls ui_quit (port 0 picks a free port).
+// ui_run calls this when ATF_UI_WEB is set. The address is printed on stderr.
+fn ui_web_run(title: str, width: int, height: int, view: fn() -> Node, port: int) {
+    let r = tcp_listen(port)
+    if r.is_err() {
+        let why = r.err()!
+        panic("ATF_UI_WEB: cannot serve on port {port}: {why}")
+    }
+    let srv = r.unwrap()
+    ui_web_begin(title, width, height, view)
+    eprintln("ATF UI: open http://127.0.0.1:{srv.port}/ in a browser (the program ends when it calls ui_quit)")
+    while not ui_web_quit { ui_web_step(srv) }
+    srv.close()
+    ui_web_on = false
+}
+
+// answer one browser request: read it, refuse it unless it comes from this computer, run the events it
+// carries and the timers, then answer with the picture when it changed. Tests call this directly.
+fn ui_web_step(srv: TcpServer) {
+    let r = srv.accept()
+    if r.is_err() { return }
+    let conn = r.unwrap()
+    let parts = (conn.read_line() ?? "").split(" ")
+    var host = ""
+    var origin = ""
+    var clen = 0
+    loop {
+        let line = conn.read_line() ?? ""
+        if line == "" { break }
+        let colon = line.find(":")
+        if colon > 0 {
+            let name = line[0..colon].lower()
+            let value = line[colon + 1..].trim()
+            if name == "host" {
+                host = value
+            } else if name == "origin" {
+                origin = value
+            } else if name == "content-length" {
+                clen = value.parse_int() ?? 0
+            }
+        }
+    }
+    if clen < 0 or clen > 1048576 {
+        ui_web_reply(conn, "413 Payload Too Large", "text/plain; charset=utf-8", "", "too large")
+        return
+    }
+    let body = if clen > 0 { conn.read_exact(clen) ?? "" } else { "" }
+    // a page from another site (DNS rebinding, a cross-site form) must not reach the program
+    let ok = ui_web_local(host) and (origin == "" or (origin.starts_with("http://") and ui_web_local(origin[7..])))
+    if not ok {
+        ui_web_reply(conn, "403 Forbidden", "text/plain; charset=utf-8", "", "Forbidden: open http://127.0.0.1/ in the browser")
+        return
+    }
+    if parts.len() < 2 {
+        ui_web_reply(conn, "400 Bad Request", "text/plain; charset=utf-8", "", "bad request")
+        return
+    }
+    let target = parts[1]
+    let qi = target.find("?")
+    let path = if qi >= 0 { target[0..qi] } else { target }
+    let query = if qi >= 0 { target[qi + 1..] } else { "" }
+    if parts[0] == "GET" and (path == "/" or path == "/index.html") {
+        ui_web_reply(conn, "200 OK", "text/html; charset=utf-8", "", ui_web_page())
+        return
+    }
+    if parts[0] == "POST" and path == "/ev" {
+        ui_web_events(body)
+        ui_web_pump()
+        let seen = if query.starts_with("s=") { query[2..].parse_int() ?? -1 } else { -1 }
+        if seen == ui_web_seq {
+            ui_web_reply(conn, "204 No Content", "text/plain; charset=utf-8", ui_web_state(), "")
+        } else {
+            let extra = ui_web_state() + "X-W: " + str(ui_winw) + "\r\nX-H: " + str(ui_winh) + "\r\nX-Seq: " + str(ui_web_seq) + "\r\n"
+            ui_web_reply(conn, "200 OK", "application/octet-stream", extra, ui_web_frame)
+        }
+        return
+    }
+    ui_web_reply(conn, "404 Not Found", "text/plain; charset=utf-8", "", "not found")
+}
+
+// send one answer and close the connection
+fn ui_web_reply(conn: TcpConn, status: str, ctype: str, extra: str, body: str) {
+    let head = "HTTP/1.1 " + status + "\r\nContent-Type: " + ctype + "\r\nContent-Length: " + str(body.len()) + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + extra + "\r\n"
+    conn.write(head)
+    if body.len() > 0 { conn.write(body) }
+    conn.close()
+}
+
+// the headers every answer carries: the title, whether the pointer is locked, and whether the program ended
+fn ui_web_state() -> str {
+    let lock = if ui_captured { "1" } else { "0" }
+    let quit = if ui_web_quit { "1" } else { "0" }
+    return "X-Title: " + ui_web_pct(ui_web_title) + "\r\nX-Lock: " + lock + "\r\nX-Quit: " + quit + "\r\n"
+}
+
+// is this host name (from the Host header, or from Origin without its http://) this computer?
+fn ui_web_local(host: str) -> bool {
+    return host == "127.0.0.1" or host == "localhost" or host.starts_with("127.0.0.1:") or host.starts_with("localhost:")
+}
+
+// the number in word i of a line of the page's events, 0 when it is missing
+fn ui_web_arg(p: [str], i: int) -> int {
+    if i < p.len() { return p[i].parse_int() ?? 0 }
+    return 0
+}
+
+// run the events the page sent, one per line, in the order they happened. The same calls the window makes.
+fn ui_web_events(body: str) {
+    if body.len() == 0 { return }
+    for line in body.split("\n") {
+        let p = line.split(" ")
+        let kind = p[0]
+        if kind == "M" {
+            ui_web_mods = ui_web_arg(p, 1)
+        } else if kind == "m" {
+            ui_mouse_move(ui_web_arg(p, 1), ui_web_arg(p, 2))
+        } else if kind == "r" {
+            if ui_captured {
+                ui_web_dx += ui_web_arg(p, 1)
+                ui_web_dy += ui_web_arg(p, 2)
+            }
+        } else if kind == "d" {
+            ui_web_btn = true
+            ui_mouse_down(ui_web_arg(p, 1), ui_web_arg(p, 2))
+        } else if kind == "u" {
+            ui_web_btn = false
+            ui_mouse_up(ui_web_arg(p, 1), ui_web_arg(p, 2))
+        } else if kind == "w" {
+            ui_wheel(ui_web_arg(p, 1))
+        } else if kind == "kd" {
+            let vk = ui_web_arg(p, 1)
+            ui_web_keys[vk] = true
+            ui_key(vk)
+        } else if kind == "ks" {
+            // Alt held: the window sends these to the shortcuts only
+            let vk = ui_web_arg(p, 1)
+            ui_web_keys[vk] = true
+            ui_try_shortcut(vk, ui_mods())
+        } else if kind == "ku" {
+            ui_web_keys[ui_web_arg(p, 1)] = false
+        } else if kind == "t" {
+            if line.len() > 2 { ui_insert(ui_web_unpct(line[2..])) }
+        } else if kind == "L" {
+            // the page left pointer lock (Esc)
+            ui_captured = false
+        }
+    }
+}
+
+// run the timers and the caret blink, and draw the picture again when anything changed
+fn ui_web_pump() {
+    let now = GetTickCount64()
+    if ui_focus.len() > 0 and now >= ui_web_caret_due {
+        ui_web_caret_due = now + 530
+        ui_caret_on = not ui_caret_on
+        ui_dirty = true
+    }
+    if ui_view_anim { ui_rebuild() }
+    if ui_animating or ui_view_anim { ui_dirty = true }
+    while ui_web_due.len() < ui_timers.len() {
+        ui_web_due.push(now + ui_timer_ms[ui_web_due.len()])
+    }
+    for i in 0..ui_timers.len() {
+        if now >= ui_web_due[i] {
+            ui_web_due[i] = now + ui_timer_ms[i]
+            ui_timers[i]()
+            ui_rebuild()
+        }
+    }
+    if ui_dirty {
+        ui_dirty = false
+        ui_web_draw()
+    }
+}
+
+// draw the screen into ui_fb, then keep it as RGBA bytes for the page
+fn ui_web_draw() {
+    if ui_root == nil { ui_rebuild() }
+    if let root = ui_root { ui_render(root, ui_winw, ui_winh) }
+    let n = ui_winw * ui_winh
+    let out = str_new(n * 4)
+    let d = str_data(out)
+    let fb = ui_fb as ptr<int>
+    for i in 0..n {
+        let p = fb[i]
+        d[4 * i] = byte((p >> 16) & 255)
+        d[4 * i + 1] = byte((p >> 8) & 255)
+        d[4 * i + 2] = byte(p & 255)
+        d[4 * i + 3] = 255
+    }
+    ui_web_frame = out
+    ui_web_seq += 1
+    if ui_animating or ui_view_anim { ui_dirty = true }
+}
+
+// percent-encode every byte except letters, digits and - . _ ~ (the title travels in a header)
+fn ui_web_pct(s: str) -> str {
+    let digits = "0123456789ABCDEF"
+    let out = str_builder()
+    for i in 0..s.len() {
+        let c = int(s.byte_at(i))
+        if (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 46 or c == 95 or c == 126 {
+            out.add_byte(byte(c))
+        } else {
+            out.add("%")
+            out.add(digits[c / 16..c / 16 + 1])
+            out.add(digits[c % 16..c % 16 + 1])
+        }
+    }
+    return out.finish()
+}
+
+// decode the %XX escapes the page sends (encodeURIComponent)
+fn ui_web_unpct(s: str) -> str {
+    let out = str_builder()
+    var i = 0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '%' and i + 2 < s.len() and ui_hexval(s.byte_at(i + 1)) >= 0 and ui_hexval(s.byte_at(i + 2)) >= 0 {
+            out.add_byte(byte(ui_hexval(s.byte_at(i + 1)) * 16 + ui_hexval(s.byte_at(i + 2))))
+            i += 3
+        } else {
+            out.add_byte(c)
+            i += 1
+        }
+    }
+    return out.finish()
+}
+
+// the page: a canvas that shows the picture, and the script that sends the mouse and keyboard back
+fn ui_web_page() -> str {
+    return r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATF</title>
+<style>
+html, body { margin: 0; height: 100%; background: #1e1e1e; overflow: hidden; }
+body { display: flex; align-items: center; justify-content: center; }
+canvas { display: block; max-width: 100vw; max-height: 100vh; width: auto; height: auto; touch-action: none; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4); }
+#msg { position: fixed; left: 16px; right: 16px; top: 40%; text-align: center; color: #ddd; font: 16px sans-serif; display: none; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="1" height="1"></canvas>
+<div id="msg"></div>
+<script>
+(function () {
+  'use strict';
+  var canvas = document.getElementById('screen');
+  var ctx = canvas.getContext('2d');
+  var msg = document.getElementById('msg');
+  var seq = 0;
+  var queue = [];
+  var queuedMods = -1;
+  var down = {};
+  var button = false;
+  var wantLock = false;
+  var lastTitle = null;
+
+  function mods(e) {
+    return (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
+  }
+  function push(e, line) {
+    var m = mods(e);
+    if (m !== queuedMods) { queue.push('M ' + m); queuedMods = m; }
+    queue.push(line);
+  }
+  function at(e) {
+    var r = canvas.getBoundingClientRect();
+    return Math.round((e.clientX - r.left) * canvas.width / r.width) + ' ' +
+      Math.round((e.clientY - r.top) * canvas.height / r.height);
+  }
+  function show(text) {
+    msg.textContent = text;
+    msg.style.display = 'block';
+  }
+  function apply(headers) {
+    var title = headers.get('X-Title');
+    if (title !== null && title !== lastTitle) {
+      lastTitle = title;
+      document.title = decodeURIComponent(title) || 'ATF';
+    }
+    wantLock = headers.get('X-Lock') === '1';
+    if (!wantLock && document.pointerLockElement === canvas) { document.exitPointerLock(); }
+    return headers.get('X-Quit') === '1';
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'F5' || e.key === 'F12') { return; }
+    e.preventDefault();
+    var vk = e.keyCode;
+    down[vk] = true;
+    var sys = e.altKey && !e.ctrlKey;
+    push(e, (sys ? 'ks ' : 'kd ') + vk);
+    // a printable key types text, except with Ctrl or Alt alone (shortcuts); AltGr (Ctrl+Alt) types
+    if (e.key && [...e.key].length === 1 && !e.metaKey && !sys && (!e.ctrlKey || e.altKey)) {
+      push(e, 't ' + encodeURIComponent(e.key));
+    }
+  });
+  document.addEventListener('keyup', function (e) {
+    delete down[e.keyCode];
+    push(e, 'ku ' + e.keyCode);
+  });
+  window.addEventListener('blur', function () {
+    for (var k in down) { queue.push('ku ' + k); }
+    down = {};
+    if (button) { button = false; queue.push('u -1 -1'); }
+  });
+
+  canvas.addEventListener('mousedown', function (e) {
+    if (e.button !== 0) { return; }
+    e.preventDefault();
+    button = true;
+    if (wantLock && document.pointerLockElement !== canvas) {
+      var asked = canvas.requestPointerLock();
+      if (asked && asked.catch) { asked.catch(function () {}); }
+    }
+    push(e, 'd ' + at(e));
+  });
+  window.addEventListener('mouseup', function (e) {
+    if (e.button !== 0 || !button) { return; }
+    button = false;
+    push(e, 'u ' + at(e));
+  });
+  canvas.addEventListener('mousemove', function (e) {
+    if (document.pointerLockElement === canvas) {
+      push(e, 'r ' + e.movementX + ' ' + e.movementY);
+    } else {
+      push(e, 'm ' + at(e));
+    }
+  });
+  canvas.addEventListener('mouseleave', function (e) { push(e, 'm -1 -1'); });
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+    push(e, 'w ' + Math.round(-dy * 1.2));
+  }, { passive: false });
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  document.addEventListener('pointerlockchange', function () {
+    if (document.pointerLockElement !== canvas) { queue.push('L 0'); }
+  });
+
+  async function step() {
+    var body = queue.join('\n');
+    queue = [];
+    var quit = false;
+    try {
+      var r = await fetch('/ev?s=' + seq, { method: 'POST', body: body, cache: 'no-store' });
+      if (r.status !== 200 && r.status !== 204) {
+        show('The program did not answer (HTTP ' + r.status + ').');
+        return;
+      }
+      quit = apply(r.headers);
+      if (r.status === 200) {
+        var w = parseInt(r.headers.get('X-W'), 10);
+        var h = parseInt(r.headers.get('X-H'), 10);
+        var pixels = await r.arrayBuffer();
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
+        seq = parseInt(r.headers.get('X-Seq'), 10);
+      }
+    } catch (err) {
+      show('The connection to the program was lost.');
+      return;
+    }
+    if (quit) {
+      show('The program has closed.');
+      return;
+    }
+    setTimeout(step, 33);
+  }
+  step();
+})();
+</script>
+</body>
+</html>
+"#
 }

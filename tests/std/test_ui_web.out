@@ -1,0 +1,23 @@
+HTTP/1.1 200 OK
+page has the canvas: true
+HTTP/1.1 200 OK
+picture: 96 x 64, 24576 bytes
+clicks: 1
+HTTP/1.1 200 OK
+HTTP/1.1 200 OK
+HTTP/1.1 204 No Content
+HTTP/1.1 403 Forbidden
+HTTP/1.1 403 Forbidden
+HTTP/1.1 403 Forbidden
+HTTP/1.1 404 Not Found
+HTTP/1.1 200 OK
+typed: aé
+after backspace: a
+HTTP/1.1 200 OK
+HTTP/1.1 200 OK
+a held: true
+a released: false
+pointer moved: 5 -3
+pointer locked: 1
+title: New%20title
+quit: 1
