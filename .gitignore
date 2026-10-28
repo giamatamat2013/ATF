@@ -18,6 +18,9 @@ tools/release_status/local-tests-history.json
 tools/release_status/local-single.json
 tools/release_status/cycle.json
 
+# Temporary build folder left by the compiler checks
+build_tmp/
+
 # Editor and OS files
 .vscode/
 Thumbs.db
