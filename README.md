@@ -97,8 +97,9 @@ atf version
 ```
 
 `atf` is `bin\atf.exe` (or `atf.cmd` in the repository root). To install it for your user, run
-`install.cmd`: it copies the compiler and the standard library to `%LOCALAPPDATA%\atf` and adds
-that folder to your PATH. Note: Windows may ask for confirmation the first time you run a newly built,
+`install.cmd`: it copies the compiler, the standard library and the icon to `%LOCALAPPDATA%\atf`, adds
+that folder to your PATH, and makes ATF the program that opens `.atf` files in Explorer (with the ATF
+icon). `uninstall.cmd` removes all of it again. Note: Windows may ask for confirmation the first time you run a newly built,
 unsigned program.
 
 A program may start with the line `// ATF 1.2.0` to say which version it was written for. The line is optional; an

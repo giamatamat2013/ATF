@@ -22,9 +22,10 @@ jobs:
         shell: pwsh
         run: |
           $pkg = "atf-$env:VERSION-windows-x64"
-          New-Item -ItemType Directory -Force "pack/$pkg/bin", "pack/$pkg/stdlib", "dist" | Out-Null
+          New-Item -ItemType Directory -Force "pack/$pkg/bin", "pack/$pkg/stdlib", "pack/$pkg/assets", "dist" | Out-Null
           Copy-Item bin/atf.exe "pack/$pkg/bin/"
           Copy-Item stdlib/*.atf "pack/$pkg/stdlib/"
+          Copy-Item assets/atf.ico "pack/$pkg/assets/"
           Copy-Item install.cmd, uninstall.cmd, README.md, LICENSE, VERSION "pack/$pkg/"
           Copy-Item docs "pack/$pkg/docs" -Recurse
           Copy-Item examples "pack/$pkg/examples" -Recurse
