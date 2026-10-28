@@ -1,17 +1,17 @@
-// ATF 1.2.0 — BLOCKWORLD ULTRA
-// First-person voxel sandbox with faster voxel DDA, smooth rendering,
-// terrain, water, ores, day/night, minimap and save/load.
-// Controls: WASD move, mouse look, Space jump, Shift sprint,
-// left mouse mine, right mouse place, 1-8 hotbar, M minimap,
-// F3 debug, F5 save, F9 load, Esc release mouse.
+// ATF 1.2.0 — BLOCKWORLD SURVIVAL
+// First-person voxel sandbox with procedural face textures, resource inventory,
+// crafting, survival stats, water movement, ore drops, day/night, minimap, save/load.
+// Minecraft-style controls: WASD move, mouse look, Space jump/swim, Shift crouch,
+// Ctrl sprint, left mouse mine, right mouse place/use, 1-9 hotbar, E inventory,
+// Q drop one item, Esc pause, F eat apple, M map, F3 debug, F6 save, F7 load.
 
 import "std/ui"
 
 const WORLD_W = 64
 const WORLD_H = 28
 const WORLD_D = 64
-const RENDER_W = 480
-const RENDER_H = 300
+const RENDER_W = 560
+const RENDER_H = 315
 const FRAME_TIME_MS = 30
 const PLAYER_RADIUS = 0.27
 const PLAYER_HEIGHT = 1.70
@@ -20,12 +20,15 @@ const PI_VALUE = 3.141592653589793
 
 var world: [int] = array_make::<int>(WORLD_W * WORLD_H * WORLD_D)
 var frame_pixels: [int] = array_make::<int>(RENDER_W * RENDER_H)
+// Inventory slots are item IDs. 15=coal, 16=gold, 17=apple, 19=diamond.
+var inventory: [int] = array_make::<int>(21)
 
 var player_x = 24.5
 var player_y = 8.0
 var player_z = 24.5
 var velocity_y = 0.0
 var grounded = false
+var crouching = false
 var yaw = 0.0
 var pitch = 0.0
 var camera_x = 24.5
@@ -51,11 +54,32 @@ var previous_left = false
 var previous_right = false
 var previous_m = false
 var previous_f3 = false
-var previous_f5 = false
-var previous_f9 = false
+var previous_f6 = false
+var previous_f7 = false
+var previous_e = false
+var previous_q = false
+var previous_9 = false
+var previous_v = false
+var show_pause = false
+var previous_f = false
+var previous_space = false
+var previous_1 = false
+var previous_2 = false
+var previous_3 = false
+var previous_4 = false
+var previous_5 = false
+var previous_6 = false
+var previous_7 = false
+var previous_8 = false
 var show_map = false
 var show_debug = false
-var status_message = "Welcome to Blockworld Ultra"
+var show_crafting = false
+var health = 20.0
+var hunger = 20.0
+var hunger_timer = 0.0
+var regen_timer = 0.0
+var starvation_timer = 0.0
+var status_message = "WASD move  |  E inventory  |  1-9 hotbar  |  Q drop"
 var status_timer = 6.0
 var game_time = 0.0
 var day_light = 1.0
@@ -63,6 +87,14 @@ var fps_value = 0.0
 var last_tick_time = 0.0
 var blocks_mined = 0
 var blocks_placed = 0
+var blocks_crafted = 0
+
+// Dropped item entities: items can be thrown out and picked up again.
+var dropped_item_ids: [int] = []
+var dropped_item_xs: [float] = []
+var dropped_item_ys: [float] = []
+var dropped_item_zs: [float] = []
+var dropped_item_ages: [float] = []
 
 fn sin_atf(value: float) -> float {
     var x = value
@@ -145,7 +177,10 @@ fn create_world() {
                 } else {
                     // Coal and gold are tucked into stone layers.
                     let ore_roll = (x * 97 + y * 53 + z * 31 + x * z * 7) % 113
-                    if ore_roll < 5 {
+                    let diamond_roll = (x * 71 + y * 43 + z * 61 + x * z * 5) % 257
+                    if y < 6 and diamond_roll == 19 {
+                        block = 18
+                    } else if ore_roll < 5 {
                         block = 9
                     } else if ore_roll == 11 and y < 8 {
                         block = 10
@@ -206,7 +241,7 @@ fn update_camera() {
     up_z = -cy * sp
 
     camera_x = player_x
-    camera_y = player_y + 1.58
+    camera_y = player_y + (if crouching { 1.20 } else { 1.58 })
     camera_z = player_z
     camera_underwater = get_block(int(floor(camera_x)), int(floor(camera_y)), int(floor(camera_z))) == 8
 }
@@ -311,96 +346,174 @@ fn face_from_hit(bx: int, by: int, bz: int, px: int, py: int, pz: int, dx: float
         if dx > 0.0 { return 1 }
         return 2
     }
-    if dz > 0.0 { return 1 }
-    return 2
+    if dz > 0.0 { return 4 }
+    return 5
 }
 
-fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: float, distance: float) -> int {
+fn fract_atf(value: float) -> float => value - floor(value)
+
+fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: float, distance: float, hit_x: float, hit_y: float, hit_z: float) -> int {
+    // Face-local UV coordinates make each cube face have its own repeatable texture.
+    var u = fract_atf(hit_x)
+    var v = fract_atf(hit_z)
+    if face == 1 or face == 2 {
+        u = fract_atf(hit_z)
+        v = fract_atf(hit_y)
+    } else if face == 4 or face == 5 {
+        u = fract_atf(hit_x)
+        v = fract_atf(hit_y)
+    }
+    let cell_u = int(floor(u * 8.0))
+    let cell_v = int(floor(v * 8.0))
+    let texture_hash = abs((bx * 73 + by * 31 + bz * 47 + cell_u * 19 + cell_v * 23 + block * 17) % 31)
+    let grain = texture_hash % 11 - 5
+
     var red = 110
     var green = 110
     var blue = 110
 
     if block == 1 {
         if face == 0 {
-            red = 88
-            green = 169
-            blue = 66
-        } else if sample_y - float(by) > 0.72 {
-            red = 83
-            green = 151
-            blue = 57
+            red = 83 + grain
+            green = 165 + grain * 2
+            blue = 60 + grain
+            if texture_hash % 7 == 0 { red -= 13; green -= 18; blue -= 7 }
+            if texture_hash % 11 == 3 { red += 9; green += 10; blue += 4 }
+        } else if sample_y - float(by) > 0.82 {
+            red = 82 + grain
+            green = 151 + grain * 2
+            blue = 57 + grain
         } else {
-            red = 126
-            green = 86
-            blue = 50
+            red = 124 + grain * 2
+            green = 83 + grain
+            blue = 48 + grain
+            if cell_v == 7 { red = 89; green = 157; blue = 59 }
+            if texture_hash % 6 == 0 { red -= 13; green -= 12; blue -= 8 }
         }
     } else if block == 2 {
-        red = 132
-        green = 88
-        blue = 52
+        red = 132 + grain * 2
+        green = 86 + grain
+        blue = 50 + grain
+        if texture_hash % 5 == 0 { red -= 17; green -= 11; blue -= 7 }
     } else if block == 3 {
-        red = 124
-        green = 128
-        blue = 134
+        red = 126 + grain * 2
+        green = 131 + grain * 2
+        blue = 139 + grain * 2
+        if (cell_u * 7 + cell_v * 11 + bx + bz) % 19 == 0 { red -= 30; green -= 30; blue -= 29 }
+        if cell_u == 0 and texture_hash % 3 == 0 { red -= 9; green -= 9; blue -= 8 }
     } else if block == 4 {
-        if face == 0 {
-            red = 174
-            green = 128
-            blue = 73
+        if face == 0 or face == 3 {
+            red = 174 + grain * 2
+            green = 128 + grain
+            blue = 73 + grain
+            let ring = int(floor((abs(u - 0.5) + abs(v - 0.5)) * 12.0))
+            if ring % 3 == 0 { red -= 22; green -= 16; blue -= 9 }
         } else {
-            red = 137
-            green = 94
-            blue = 53
+            red = 146 + grain * 2
+            green = 99 + grain
+            blue = 57 + grain
+            if cell_u % 3 == 0 { red -= 25; green -= 17; blue -= 9 }
+            if cell_v == 0 { red -= 8; green -= 6; blue -= 4 }
         }
     } else if block == 5 {
-        red = 60
-        green = 137
-        blue = 56
+        red = 54 + grain
+        green = 135 + grain * 2
+        blue = 48 + grain
+        if texture_hash % 5 == 0 { red -= 23; green -= 30; blue -= 17 }
+        if texture_hash % 9 == 1 { red += 18; green += 13; blue += 9 }
     } else if block == 6 {
-        red = 222
-        green = 205
-        blue = 128
+        red = 224 + grain
+        green = 205 + grain
+        blue = 129 + grain
+        if texture_hash % 6 == 0 { red -= 18; green -= 16; blue -= 10 }
+        if texture_hash % 13 == 2 { red += 8; green += 6; blue += 3 }
     } else if block == 8 {
-        red = 55
-        green = 132
-        blue = 202
-        if face == 0 { green = 165; blue = 225 }
-    } else if block == 9 {
-        red = 82
-        green = 84
-        blue = 89
-        if (bx * 13 + by * 17 + bz * 23) % 5 == 0 { red = 35; green = 37; blue = 40 }
-    } else if block == 10 {
-        red = 145
-        green = 116
-        blue = 54
-        if (bx * 19 + by * 11 + bz * 29) % 4 == 0 { red = 238; green = 184; blue = 52 }
+        red = 43 + grain
+        green = 126 + grain * 2
+        blue = 201 + grain * 2
+        let wave = int(floor((hit_x + hit_z + game_time * 0.7) * 5.0)) % 5
+        if face == 0 or wave == 0 { red += 15; green += 26; blue += 28 }
+    } else if block == 9 or block == 10 or block == 18 {
+        // Ores inherit stone, with clustered mineral flecks instead of flat dots.
+        red = 119 + grain * 2
+        green = 123 + grain * 2
+        blue = 132 + grain * 2
+        if (cell_u * 5 + cell_v * 7 + bx + bz) % 9 < 3 {
+            if block == 9 {
+                red = 39 + grain
+                green = 42 + grain
+                blue = 46 + grain
+            } else if block == 10 {
+                red = 221 + grain
+                green = 166 + grain * 2
+                blue = 43 + grain
+            } else {
+                red = 45 + grain
+                green = 198 + grain * 2
+                blue = 220 + grain * 2
+            }
+        }
+    } else if block == 11 {
+        // Plank boards have repeating edges and visible grain.
+        red = 174 + grain * 2
+        green = 123 + grain * 2
+        blue = 71 + grain
+        let board_edge = fract_atf(v * 4.0)
+        if (face != 0 and face != 3 and (board_edge < 0.07 or board_edge > 0.93)) or (face == 0 and cell_u == 0) {
+            red -= 42; green -= 30; blue -= 17
+        }
+        if cell_u % 4 == 0 { red -= 10; green -= 7; blue -= 4 }
+    } else if block == 12 {
+        // Staggered brick courses with contrasting mortar joints.
+        red = 157 + grain * 2
+        green = 75 + grain
+        blue = 57 + grain
+        let brick_row = int(floor(v * 4.0))
+        let brick_u = fract_atf(u * 4.0 + (if brick_row % 2 == 0 { 0.0 } else { 0.5 }))
+        if fract_atf(v * 4.0) < 0.07 or brick_u < 0.055 { red = 190; green = 177; blue = 155 }
+    } else if block == 13 {
+        // Glass uses bright edge highlights and a cool tinted pane effect.
+        red = 140 + grain
+        green = 209 + grain
+        blue = 226 + grain
+        if u < 0.075 or u > 0.925 or v < 0.075 or v > 0.925 { red = 224; green = 246; blue = 255 }
+        if cell_u == cell_v and texture_hash % 4 == 0 { red += 8; green += 5; blue += 2 }
+    } else if block == 14 {
+        // Crafting bench: warm timber sides, gridded work surface on top.
+        if face == 0 {
+            red = 162 + grain * 2; green = 111 + grain; blue = 58 + grain
+            if cell_u == 0 or cell_v == 0 or cell_u == 4 or cell_v == 4 { red -= 34; green -= 23; blue -= 12 }
+        } else {
+            red = 139 + grain * 2; green = 87 + grain; blue = 45 + grain
+            if cell_v == 0 or cell_v == 7 { red -= 25; green -= 17; blue -= 8 }
+        }
+    } else if block == 20 {
+        // The crafted lantern is emissive-looking and clearly legible at night.
+        red = 255
+        green = 190 + texture_hash % 30
+        blue = 62 + texture_hash % 18
+        if u < 0.13 or u > 0.87 or v < 0.13 or v > 0.87 { red = 177; green = 94; blue = 27 }
+        if day_light < 0.35 { red = 255; green = 221; blue = 118 }
     } else {
-        red = 54
-        green = 56
-        blue = 61
+        red = 54 + grain
+        green = 56 + grain
+        blue = 61 + grain
     }
 
-    let variation = (bx * 17 + by * 31 + bz * 13) % 9 - 4
-    red = clamp(red + variation, 0, 255)
-    green = clamp(green + variation, 0, 255)
-    blue = clamp(blue + variation, 0, 255)
-
     var light = 0.82
-    if face == 0 {
-        light = 1.0
-    } else if face == 1 {
-        light = 0.82
-    } else if face == 2 {
-        light = 0.68
-    } else {
-        light = 0.48
+    if face == 0 { light = 1.0 }
+    else if face == 1 or face == 4 { light = 0.82 }
+    else if face == 2 or face == 5 { light = 0.68 }
+    else { light = 0.48 }
+
+    if block == 20 {
+        light = max(light, 1.08)
     }
     let distance_light = clamp(1.0 - distance * 0.012, 0.58, 1.0)
     let factor = light * distance_light * (0.36 + day_light * 0.64)
-    red = int(float(red) * factor)
-    green = int(float(green) * factor)
-    blue = int(float(blue) * factor)
+    red = clamp(int(float(red) * factor), 0, 255)
+    green = clamp(int(float(green) * factor), 0, 255)
+    blue = clamp(int(float(blue) * factor), 0, 255)
 
     let fog = clamp((distance - 9.0) / 14.0, 0.0, 0.64)
     let night_fog = clamp((0.76 - day_light) / 0.55, 0.0, 1.0)
@@ -437,6 +550,12 @@ fn block_ui_color(block: int) -> int {
     if block == 6 { return rgb(222, 205, 128) }
     if block == 9 { return rgb(61, 64, 69) }
     if block == 10 { return rgb(204, 158, 43) }
+    if block == 11 { return rgb(174, 123, 71) }
+    if block == 12 { return rgb(157, 75, 57) }
+    if block == 13 { return rgb(140, 209, 226) }
+    if block == 14 { return rgb(162, 111, 58) }
+    if block == 18 { return rgb(45, 198, 220) }
+    if block == 20 { return rgb(255, 190, 62) }
     return rgb(54, 56, 61)
 }
 
@@ -450,13 +569,51 @@ fn block_name(block: int) -> str {
     if block == 8 { return "Water" }
     if block == 9 { return "Coal Ore" }
     if block == 10 { return "Gold Ore" }
+    if block == 11 { return "Planks" }
+    if block == 12 { return "Bricks" }
+    if block == 13 { return "Glass" }
+    if block == 14 { return "Workbench" }
+    if block == 15 { return "Coal" }
+    if block == 16 { return "Gold" }
+    if block == 17 { return "Apple" }
+    if block == 18 { return "Diamond Ore" }
+    if block == 19 { return "Diamond" }
+    if block == 20 { return "Lantern" }
     return "Bedrock"
 }
 
 fn hotbar_block(slot: int) -> int {
+    if slot == 0 { return 1 }
+    if slot == 1 { return 2 }
+    if slot == 2 { return 3 }
+    if slot == 3 { return 4 }
+    if slot == 4 { return 11 }
+    if slot == 5 { return 6 }
+    if slot == 6 { return 12 }
+    if slot == 7 { return 13 }
+    return 14
+}
+
+fn inventory_grid_item(slot: int) -> int {
+    if slot == 0 { return 1 }
+    if slot == 1 { return 2 }
+    if slot == 2 { return 3 }
+    if slot == 3 { return 4 }
+    if slot == 4 { return 5 }
+    if slot == 5 { return 6 }
     if slot == 6 { return 9 }
     if slot == 7 { return 10 }
-    return slot + 1
+    if slot == 8 { return 18 }
+    if slot == 9 { return 11 }
+    if slot == 10 { return 12 }
+    if slot == 11 { return 13 }
+    if slot == 12 { return 14 }
+    if slot == 13 { return 20 }
+    if slot == 14 { return 15 }
+    if slot == 15 { return 16 }
+    if slot == 16 { return 17 }
+    if slot == 17 { return 19 }
+    return 0
 }
 
 fn map_color(block: int) -> int {
@@ -469,6 +626,12 @@ fn map_color(block: int) -> int {
     if block == 8 { return rgb(52, 129, 201) }
     if block == 9 { return rgb(48, 50, 53) }
     if block == 10 { return rgb(208, 160, 40) }
+    if block == 11 { return rgb(174, 123, 71) }
+    if block == 12 { return rgb(157, 75, 57) }
+    if block == 13 { return rgb(140, 209, 226) }
+    if block == 14 { return rgb(162, 111, 58) }
+    if block == 18 { return rgb(45, 198, 220) }
+    if block == 20 { return rgb(255, 190, 62) }
     return rgb(59, 61, 66)
 }
 
@@ -480,14 +643,117 @@ fn surface_block(x: int, z: int) -> int {
     return 0
 }
 
+fn player_in_water() -> bool {
+    let px = int(floor(player_x))
+    let py = int(floor(player_y + 0.15))
+    let pz = int(floor(player_z))
+    return get_block(px, py, pz) == 8 or get_block(px, int(floor(player_y + 0.85)), pz) == 8
+}
+
+fn has_workbench_nearby() -> bool {
+    let px = int(floor(player_x))
+    let py = int(floor(player_y))
+    let pz = int(floor(player_z))
+    for bx in (px - 2)..=(px + 2) {
+        for by in (py - 1)..=(py + 2) {
+            for bz in (pz - 2)..=(pz + 2) {
+                if get_block(bx, by, bz) == 14 and abs(bx - px) + abs(by - py) + abs(bz - pz) <= 4 {
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+fn craft_recipe(recipe: int) {
+    if recipe == 1 {
+        if inventory[4] >= 1 {
+            inventory[4] -= 1
+            inventory[11] += 4
+            blocks_crafted += 4
+            status_message = "Crafted 4 planks"
+        } else {
+            status_message = "Need 1 wood to craft planks"
+        }
+    } else if recipe == 2 {
+        if not has_workbench_nearby() {
+            status_message = "Place a workbench nearby first"
+        } else if inventory[3] >= 4 and inventory[15] >= 1 {
+            inventory[3] -= 4
+            inventory[15] -= 1
+            inventory[12] += 4
+            blocks_crafted += 4
+            status_message = "Crafted 4 bricks"
+        } else {
+            status_message = "Need 4 stone and 1 coal"
+        }
+    } else if recipe == 3 {
+        if not has_workbench_nearby() {
+            status_message = "Place a workbench nearby first"
+        } else if inventory[6] >= 2 and inventory[15] >= 1 {
+            inventory[6] -= 2
+            inventory[15] -= 1
+            inventory[13] += 2
+            blocks_crafted += 2
+            status_message = "Crafted 2 glass blocks"
+        } else {
+            status_message = "Need 2 sand and 1 coal"
+        }
+    } else if recipe == 4 {
+        if inventory[4] >= 4 and inventory[3] >= 2 {
+            inventory[4] -= 4
+            inventory[3] -= 2
+            inventory[14] += 1
+            blocks_crafted += 1
+            status_message = "Crafted a workbench — press 9 to select it"
+        } else {
+            status_message = "Need 4 wood and 2 stone"
+        }
+    } else if recipe == 5 {
+        if not has_workbench_nearby() {
+            status_message = "Place a workbench nearby first"
+        } else if inventory[15] >= 2 and inventory[16] >= 1 {
+            inventory[15] -= 2
+            inventory[16] -= 1
+            inventory[20] += 1
+            blocks_crafted += 1
+            status_message = "Crafted a lantern — press 0 to select it"
+        } else {
+            status_message = "Need 2 coal and 1 gold"
+        }
+    }
+    status_timer = 3.0
+}
+
+fn respawn_player() {
+    player_x = float(WORLD_W / 2) + 0.5
+    player_z = float(WORLD_D / 2) + 0.5
+    player_y = float(terrain_height(WORLD_W / 2, WORLD_D / 2) + 1)
+    velocity_y = 0.0
+    grounded = true
+    health = 20.0
+    hunger = 12.0
+    update_camera()
+    status_message = "You respawned. Inventory kept."
+    status_timer = 4.0
+}
+
 fn save_world() {
     let buffer = str_builder()
-    buffer.add("BW2\n")
+    buffer.add("BW3\n")
     for block in world {
         buffer.add_byte(byte(block + 48))
     }
+    buffer.add("\n")
+    for i in 0..inventory.len() {
+        if i > 0 { buffer.add(",") }
+        buffer.add(str(inventory[i]))
+    }
+    buffer.add("\n")
+    buffer.add("{player_x},{player_y},{player_z},{yaw},{pitch},{health},{hunger},{game_time}")
     if write_file("blockworld.save", buffer.finish()) {
-        status_message = "World saved to blockworld.save"
+        status_message = "World, inventory and stats saved"
     } else {
         status_message = "Save failed — check folder permissions"
     }
@@ -497,26 +763,53 @@ fn save_world() {
 fn load_world() {
     let saved = read_file("blockworld.save")
     if saved == nil {
-        status_message = "No save found — press F5 to save"
+        status_message = "No save found — press F6 to save"
         status_timer = 4.0
         return
     }
     let data = saved!
-    if not data.starts_with("BW2\n") or data.len() != world.len() + 4 {
-        status_message = "Save file is invalid or from an older version"
+    let lines = data.lines()
+    if lines.len() != 4 or lines[0] != "BW3" or lines[1].len() != world.len() {
+        status_message = "Save file invalid or from an older version"
         status_timer = 4.0
         return
     }
     for i in 0..world.len() {
-        world[i] = int(data.byte_at(i + 4)) - 48
+        world[i] = int(lines[1].byte_at(i)) - 48
     }
-    player_x = float(WORLD_W / 2) + 0.5
-    player_z = float(WORLD_D / 2) + 0.5
-    player_y = float(terrain_height(WORLD_W / 2, WORLD_D / 2) + 1)
+    let inv_parts = lines[2].split(",")
+    if inv_parts.len() != inventory.len() {
+        status_message = "Save inventory data is invalid"
+        status_timer = 4.0
+        return
+    }
+    for i in 0..inventory.len() {
+        let count = inv_parts[i].parse_int()
+        if count == nil {
+            status_message = "Save inventory data is invalid"
+            status_timer = 4.0
+            return
+        }
+        inventory[i] = max(0, count!)
+    }
+    let stats = lines[3].split(",")
+    if stats.len() != 8 {
+        status_message = "Save player data is invalid"
+        status_timer = 4.0
+        return
+    }
+    player_x = float(stats[0])
+    player_y = float(stats[1])
+    player_z = float(stats[2])
+    yaw = float(stats[3])
+    pitch = float(stats[4])
+    health = clamp(float(stats[5]), 0.0, 20.0)
+    hunger = clamp(float(stats[6]), 0.0, 20.0)
+    game_time = float(stats[7])
     velocity_y = 0.0
     grounded = false
     update_camera()
-    status_message = "World loaded"
+    status_message = "World, inventory and stats loaded"
     status_timer = 4.0
 }
 
@@ -530,17 +823,45 @@ fn overlaps_player(bx: int, by: int, bz: int) -> bool {
 fn handle_block_action(left_now: bool, right_now: bool) {
     if left_now and not previous_left and mouse_captured {
         let (block, bx, by, bz, _, _, _, _) = trace_ray(forward_x, forward_y, forward_z, 6.0)
-        if block != 0 and block != 7 and bx >= 0 {
+        if block != 0 and block != 7 and block != 8 and bx >= 0 {
             set_block(bx, by, bz, 0)
             blocks_mined += 1
+            if block == 9 {
+                inventory[15] += 1 + ((bx + by + bz) % 2)
+                status_message = "Mined coal ore"
+            } else if block == 10 {
+                inventory[16] += 1
+                status_message = "Mined gold ore"
+            } else if block == 18 {
+                inventory[19] += 1
+                status_message = "Diamond found!"
+            } else if block >= 1 and block <= 14 or block == 20 {
+                inventory[block] += 1
+                status_message = "Collected {block_name(block)}"
+                if block == 5 and (bx * 19 + by * 11 + bz * 7) % 5 == 0 {
+                    inventory[17] += 1
+                    status_message = "Collected leaves and found an apple!"
+                }
+            }
+            status_timer = 1.8
         }
     }
 
     if right_now and not previous_right and mouse_captured {
         let (block, bx, by, bz, ax, ay, az, _) = trace_ray(forward_x, forward_y, forward_z, 6.0)
-        if block != 0 and bx >= 0 and ax >= 0 and get_block(ax, ay, az) == 0 and not overlaps_player(ax, ay, az) {
-            set_block(ax, ay, az, selected_block)
-            blocks_placed += 1
+        let can_place = selected_block >= 1 and selected_block <= 14 or selected_block == 20
+        let target_in_bounds = ax >= 0 and ax < WORLD_W and ay >= 0 and ay < WORLD_H and az >= 0 and az < WORLD_D
+        if block != 0 and bx >= 0 and target_in_bounds and can_place and get_block(ax, ay, az) == 0 and not overlaps_player(ax, ay, az) {
+            if inventory[selected_block] > 0 {
+                set_block(ax, ay, az, selected_block)
+                inventory[selected_block] -= 1
+                blocks_placed += 1
+                status_message = "Placed {block_name(selected_block)}"
+                status_timer = 1.2
+            } else {
+                status_message = "No {block_name(selected_block)} left — mine or craft more"
+                status_timer = 2.0
+            }
         }
     }
 
@@ -548,13 +869,138 @@ fn handle_block_action(left_now: bool, right_now: bool) {
     previous_right = right_now
 }
 
+fn drop_selected_item() {
+    if selected_block < 1 or selected_block >= inventory.len() {
+        status_message = "No item selected"
+        status_timer = 1.4
+        return
+    }
+    if inventory[selected_block] <= 0 {
+        status_message = "Nothing to drop"
+        status_timer = 1.4
+        return
+    }
+    if dropped_item_ids.len() >= 40 {
+        status_message = "Too many dropped items nearby"
+        status_timer = 1.8
+        return
+    }
+    inventory[selected_block] -= 1
+    dropped_item_ids.push(selected_block)
+    dropped_item_xs.push(player_x + sin_atf(yaw) * 1.35)
+    dropped_item_ys.push(player_y + 0.65)
+    dropped_item_zs.push(player_z + cos_atf(yaw) * 1.35)
+    dropped_item_ages.push(0.0)
+    status_message = "Dropped {block_name(selected_block)}"
+    status_timer = 1.4
+}
+
+fn update_dropped_items() {
+    var i = dropped_item_ids.len() - 1
+    while i >= 0 {
+        dropped_item_ages[i] += 0.03
+        let nx = int(floor(dropped_item_xs[i]))
+        let nz = int(floor(dropped_item_zs[i]))
+        let next_y = dropped_item_ys[i] - 0.025
+        let ny = int(floor(next_y))
+        if get_block(nx, ny, nz) != 0 {
+            dropped_item_ys[i] = float(ny + 1) + 0.08
+        } else {
+            dropped_item_ys[i] = next_y
+        }
+        // Slowly bob like the floating item sprites in Minecraft.
+        dropped_item_ys[i] += sin_atf(game_time * 3.0 + float(i)) * 0.0015
+        let dx = player_x - dropped_item_xs[i]
+        let dy = (player_y + 0.6) - dropped_item_ys[i]
+        let dz = player_z - dropped_item_zs[i]
+        if sqrt(dx * dx + dy * dy + dz * dz) < 1.25 {
+            let item = dropped_item_ids[i]
+            inventory[item] += 1
+            status_message = "Picked up {block_name(item)}"
+            status_timer = 1.1
+            dropped_item_ids.remove(i)
+            dropped_item_xs.remove(i)
+            dropped_item_ys.remove(i)
+            dropped_item_zs.remove(i)
+            dropped_item_ages.remove(i)
+        } else if dropped_item_ages[i] > 180.0 {
+            dropped_item_ids.remove(i)
+            dropped_item_xs.remove(i)
+            dropped_item_ys.remove(i)
+            dropped_item_zs.remove(i)
+            dropped_item_ages.remove(i)
+        }
+        i -= 1
+    }
+}
+
 fn game_tick() {
     let escape_now = ui_key_down("escape")
     if escape_now and not previous_escape {
-        mouse_captured = not mouse_captured
-        ui_mouse_capture(mouse_captured)
+        if show_crafting {
+            show_crafting = false
+            show_pause = false
+            mouse_captured = true
+            ui_mouse_capture(true)
+        } else if show_pause {
+            show_pause = false
+            mouse_captured = true
+            ui_mouse_capture(true)
+        } else {
+            show_pause = true
+            mouse_captured = false
+            ui_mouse_capture(false)
+        }
     }
     previous_escape = escape_now
+    crouching = ui_key_down("shift")
+
+    // Save/load use F6/F7 so F5 remains free for a familiar Minecraft binding.
+    let save_now = ui_key_down("f6")
+    if save_now and not previous_f6 { save_world() }
+    previous_f6 = save_now
+    let load_now = ui_key_down("f7")
+    if load_now and not previous_f7 { load_world() }
+    previous_f7 = load_now
+
+    if show_pause {
+        let pause_click = ui_mouse_held(0)
+        if pause_click {
+            show_pause = false
+            mouse_captured = true
+            ui_mouse_capture(true)
+        }
+        previous_left = pause_click
+        previous_right = ui_mouse_held(1)
+        return
+    }
+
+    let inventory_now = ui_key_down("e")
+    if inventory_now and not previous_e {
+        show_crafting = not show_crafting
+        if show_crafting {
+            mouse_captured = false
+            ui_mouse_capture(false)
+        } else {
+            mouse_captured = true
+            ui_mouse_capture(true)
+        }
+    }
+    previous_e = inventory_now
+
+    let drop_now = ui_key_down("q")
+    if drop_now and not previous_q and not show_crafting {
+        drop_selected_item()
+    }
+    previous_q = drop_now
+
+    let lantern_now = ui_key_down("v")
+    if lantern_now and not previous_v and not show_crafting {
+        selected_block = 20
+        status_message = "Lantern selected"
+        status_timer = 1.1
+    }
+    previous_v = lantern_now
 
     let map_now = ui_key_down("m")
     if map_now and not previous_m { show_map = not show_map }
@@ -562,12 +1008,51 @@ fn game_tick() {
     let debug_now = ui_key_down("f3")
     if debug_now and not previous_f3 { show_debug = not show_debug }
     previous_f3 = debug_now
-    let save_now = ui_key_down("f5")
-    if save_now and not previous_f5 { save_world() }
-    previous_f5 = save_now
-    let load_now = ui_key_down("f9")
-    if load_now and not previous_f9 { load_world() }
-    previous_f9 = load_now
+    let eat_now = ui_key_down("f")
+    if eat_now and not previous_f and inventory[17] > 0 and (hunger < 20.0 or health < 20.0) {
+        inventory[17] -= 1
+        hunger = min(20.0, hunger + 6.0)
+        health = min(20.0, health + 1.0)
+        status_message = "Ate an apple (+food and health)"
+        status_timer = 2.2
+    }
+    previous_f = eat_now
+
+    let key1 = ui_key_down("1")
+    let key2 = ui_key_down("2")
+    let key3 = ui_key_down("3")
+    let key4 = ui_key_down("4")
+    let key5 = ui_key_down("5")
+    let key6 = ui_key_down("6")
+    let key7 = ui_key_down("7")
+    let key8 = ui_key_down("8")
+    let key9 = ui_key_down("9")
+    if show_crafting {
+        if key1 and not previous_1 { craft_recipe(1) }
+        if key2 and not previous_2 { craft_recipe(2) }
+        if key3 and not previous_3 { craft_recipe(3) }
+        if key4 and not previous_4 { craft_recipe(4) }
+        if key5 and not previous_5 { craft_recipe(5) }
+    } else {
+        if key1 { selected_block = hotbar_block(0) }
+        if key2 { selected_block = hotbar_block(1) }
+        if key3 { selected_block = hotbar_block(2) }
+        if key4 { selected_block = hotbar_block(3) }
+        if key5 { selected_block = hotbar_block(4) }
+        if key6 { selected_block = hotbar_block(5) }
+        if key7 { selected_block = hotbar_block(6) }
+        if key8 { selected_block = hotbar_block(7) }
+        if key9 { selected_block = hotbar_block(8) }
+    }
+    previous_1 = key1
+    previous_2 = key2
+    previous_3 = key3
+    previous_4 = key4
+    previous_5 = key5
+    previous_6 = key6
+    previous_7 = key7
+    previous_8 = key8
+    previous_9 = key9
 
     let now = clock()
     if last_tick_time > 0.0 {
@@ -579,9 +1064,32 @@ fn game_tick() {
     day_light = 0.60 + 0.40 * sin_atf(game_time * 0.0349 + PI_VALUE / 2.0)
     if status_timer > 0.0 { status_timer -= 0.03 }
 
+    hunger_timer += 0.03
+    if hunger_timer >= 24.0 {
+        hunger_timer -= 24.0
+        if hunger > 0.0 { hunger = max(0.0, hunger - 1.0) }
+    }
+    if hunger >= 18.0 and health < 20.0 {
+        regen_timer += 0.03
+        if regen_timer >= 8.0 {
+            regen_timer = 0.0
+            health = min(20.0, health + 1.0)
+            hunger = max(0.0, hunger - 1.0)
+        }
+    } else if hunger <= 0.0 {
+        starvation_timer += 0.03
+        if starvation_timer >= 5.0 {
+            starvation_timer = 0.0
+            health = max(1.0, health - 1.0)
+        }
+    } else {
+        regen_timer = 0.0
+        starvation_timer = 0.0
+    }
+
     let left_now = ui_mouse_held(0)
     let right_now = ui_mouse_held(1)
-    if not mouse_captured {
+    if not mouse_captured and not show_crafting {
         if left_now or right_now {
             mouse_captured = true
             ui_mouse_capture(true)
@@ -599,18 +1107,16 @@ fn game_tick() {
         while yaw < -PI_VALUE { yaw += 2.0 * PI_VALUE }
     }
 
-    if ui_key_down("1") { selected_block = 1 }
-    if ui_key_down("2") { selected_block = 2 }
-    if ui_key_down("3") { selected_block = 3 }
-    if ui_key_down("4") { selected_block = 4 }
-    if ui_key_down("5") { selected_block = 5 }
-    if ui_key_down("6") { selected_block = 6 }
-    if ui_key_down("7") { selected_block = 9 }
-    if ui_key_down("8") { selected_block = 10 }
+    let in_water = player_in_water()
 
     if collides_body(player_x, player_y - 0.06, player_z) {
         grounded = true
         if velocity_y < 0.0 {
+            if not in_water and velocity_y < -10.0 {
+                health = max(0.0, health - ((-velocity_y - 8.0) * 1.2))
+                status_message = "Fall damage! HP {int(health)}"
+                status_timer = 2.0
+            }
             velocity_y = 0.0
             player_y = float(floor(player_y - 0.06)) + 1.0
         }
@@ -618,10 +1124,15 @@ fn game_tick() {
         grounded = false
     }
 
-    if ui_key_down("space") and grounded {
-        velocity_y = 7.4
+    let space_now = ui_key_down("space")
+    if space_now and grounded and not show_crafting {
+        velocity_y = if in_water { 3.8 } else { 7.4 }
+        grounded = false
+    } else if in_water and space_now and not previous_space and not show_crafting {
+        velocity_y = 3.3
         grounded = false
     }
+    previous_space = space_now
 
     var move_x = 0.0
     var move_z = 0.0
@@ -636,19 +1147,31 @@ fn game_tick() {
     if ui_key_down("a") { move_x -= flat_right_x; move_z -= flat_right_z }
 
     let move_length = sqrt(move_x * move_x + move_z * move_z)
-    if move_length > 0.001 {
-        var speed = 4.2
-        if ui_key_down("shift") { speed = 6.5 }
+    if move_length > 0.001 and not show_crafting {
+        var speed = if in_water { 2.5 } else { 4.2 }
+        if ui_key_down("shift") { speed = if in_water { 1.25 } else { 2.0 } }
+        if ui_key_down("ctrl") and not ui_key_down("shift") { speed = if in_water { 3.4 } else { 6.5 } }
+        if ui_key_down("ctrl") and not ui_key_down("shift") { hunger_timer += 0.012 }
         move_x = move_x / move_length * speed * 0.03
         move_z = move_z / move_length * speed * 0.03
         move_horizontal(move_x, move_z)
     }
 
     if not grounded {
-        velocity_y -= 18.0 * 0.03
+        if in_water {
+            velocity_y -= 5.0 * 0.03
+            velocity_y = max(-3.0, velocity_y)
+        } else {
+            velocity_y -= 18.0 * 0.03
+        }
         let next_y = player_y + velocity_y * 0.03
         if collides_body(player_x, next_y, player_z) {
             if velocity_y <= 0.0 {
+                if not in_water and velocity_y < -10.0 {
+                    health = max(0.0, health - ((-velocity_y - 8.0) * 1.2))
+                    status_message = "Fall damage! HP {int(health)}"
+                    status_timer = 2.0
+                }
                 player_y = float(floor(next_y)) + 1.0
                 grounded = true
             } else {
@@ -662,80 +1185,288 @@ fn game_tick() {
         velocity_y = 0.0
     }
 
+    if player_y < -3.0 { health = 0.0 }
+    if health <= 0.0 { respawn_player() }
+
     update_camera()
     handle_block_action(left_now, right_now)
+    update_dropped_items()
+}
+
+fn draw_slot(c: Canvas, x: int, y: int, size: int, selected: bool) {
+    c.rect(x, y, size, size, rgb(24, 24, 24))
+    c.rect(x + 1, y + 1, size - 2, size - 2, rgb(190, 190, 190))
+    c.rect(x + 2, y + 2, size - 4, size - 4, rgb(80, 80, 80))
+    c.line(x + 2, y + 2, x + size - 3, y + 2, 1, rgb(224, 224, 224))
+    c.line(x + 2, y + 2, x + 2, y + size - 3, 1, rgb(224, 224, 224))
+    c.line(x + 2, y + size - 3, x + size - 3, y + size - 3, 1, rgb(42, 42, 42))
+    c.line(x + size - 3, y + 2, x + size - 3, y + size - 3, 1, rgb(42, 42, 42))
+    if selected {
+        c.outline(x - 2, y - 2, size + 4, size + 4, 0, 2, rgb(255, 255, 255))
+    }
+}
+
+fn draw_block_icon(c: Canvas, x: int, y: int, size: int, block: int) {
+    let inner = size - 4
+    let px = x + 2
+    let py = y + 2
+    let base = block_ui_color(block)
+    c.rect(px, py, inner, inner, base)
+    if block == 1 {
+        c.rect(px, py, inner, max(4, inner / 3), rgb(82, 172, 61))
+        c.rect(px + 3, py + 2, 3, 2, rgb(112, 198, 72))
+        c.rect(px + inner - 7, py + 3, 3, 2, rgb(60, 143, 50))
+        c.rect(px, py + max(4, inner / 3), inner, inner - max(4, inner / 3), rgb(132, 88, 52))
+        c.rect(px + 4, py + inner - 5, 3, 2, rgb(105, 66, 42))
+    } else if block == 2 {
+        c.rect(px + 4, py + 5, 3, 2, rgb(108, 68, 42))
+        c.rect(px + inner - 7, py + 10, 3, 2, rgb(165, 112, 67))
+        c.rect(px + 8, py + inner - 6, 2, 2, rgb(115, 73, 43))
+    } else if block == 3 or block == 9 or block == 10 or block == 18 {
+        c.rect(px + 4, py + 4, 3, 2, rgb(157, 161, 166))
+        c.rect(px + inner - 8, py + 6, 4, 2, rgb(89, 92, 98))
+        c.rect(px + 7, py + inner - 6, 3, 2, rgb(89, 92, 98))
+        c.line(px + 5, py + 8, px + 10, py + 12, 1, rgb(75, 78, 84))
+        if block == 9 { c.rect(px + inner / 2, py + inner / 2, 5, 4, rgb(35, 35, 35)) }
+        if block == 10 { c.rect(px + inner / 2, py + inner / 2, 5, 4, rgb(245, 194, 50)) }
+        if block == 18 { c.rect(px + inner / 2, py + inner / 2, 5, 4, rgb(60, 230, 244)) }
+    } else if block == 4 {
+        c.rect(px + 4, py, 3, inner, rgb(104, 66, 37))
+        c.rect(px + inner - 7, py, 2, inner, rgb(168, 116, 63))
+    } else if block == 5 {
+        for yy in 0..4 {
+            for xx in 0..4 {
+                if (xx * 7 + yy * 11 + block) % 3 != 0 {
+                    c.rect(px + 3 + xx * max(1, inner / 5), py + 3 + yy * max(1, inner / 5), 2, 2, rgb(46, 123, 42))
+                }
+            }
+        }
+    } else if block == 6 {
+        c.rect(px + 4, py + 5, 2, 2, rgb(242, 223, 160))
+        c.rect(px + inner - 7, py + 10, 2, 2, rgb(195, 177, 113))
+        c.rect(px + 9, py + inner - 6, 2, 2, rgb(243, 225, 171))
+    } else if block == 11 {
+        c.line(px, py + inner / 3, px + inner - 1, py + inner / 3, 1, rgb(111, 72, 42))
+        c.line(px, py + (inner * 2) / 3, px + inner - 1, py + (inner * 2) / 3, 1, rgb(111, 72, 42))
+        c.rect(px + 5, py + 4, 2, 2, rgb(205, 157, 98))
+    } else if block == 12 {
+        c.line(px, py + inner / 3, px + inner - 1, py + inner / 3, 1, rgb(226, 160, 139))
+        c.line(px, py + (inner * 2) / 3, px + inner - 1, py + (inner * 2) / 3, 1, rgb(226, 160, 139))
+        c.line(px + inner / 2, py + 1, px + inner / 2, py + inner / 3, 1, rgb(226, 160, 139))
+        c.line(px + inner / 3, py + inner / 3, px + inner / 3, py + (inner * 2) / 3, 1, rgb(226, 160, 139))
+    } else if block == 13 {
+        c.rect(px + 2, py + 2, inner - 4, inner - 4, rgb(153, 215, 231))
+        c.rect(px + 4, py + 3, 3, inner - 6, rgb(224, 249, 255))
+        c.line(px + 2, py + inner - 4, px + inner - 3, py + inner - 4, 1, rgb(107, 180, 204))
+    } else if block == 14 {
+        c.rect(px + 2, py + 2, inner - 4, inner - 4, rgb(177, 125, 66))
+        c.line(px + 2, py + inner / 2, px + inner - 3, py + inner / 2, 2, rgb(100, 62, 36))
+        c.line(px + inner / 2, py + 2, px + inner / 2, py + inner - 3, 2, rgb(100, 62, 36))
+    } else if block == 20 {
+        c.rect(px + inner / 3, py + 3, inner / 3, inner - 6, rgb(255, 181, 52))
+        c.rect(px + inner / 3 + 2, py + 5, max(2, inner / 3 - 4), inner - 10, rgb(255, 231, 128))
+        c.line(px + 3, py + 3, px + inner - 4, py + 3, 2, rgb(82, 82, 82))
+    } else if block == 15 {
+        c.rect(px + 4, py + 4, 4, 4, rgb(35, 35, 35))
+        c.rect(px + inner - 8, py + 9, 4, 3, rgb(35, 35, 35))
+    } else if block == 16 {
+        c.rect(px + 4, py + 4, 4, 4, rgb(247, 191, 39))
+        c.rect(px + inner - 8, py + 9, 4, 3, rgb(247, 191, 39))
+    } else if block == 17 {
+        c.circle(px + inner / 2, py + inner / 2, max(3, inner / 3), rgb(207, 42, 35))
+        c.rect(px + inner / 2, py + 2, 3, 5, rgb(57, 121, 43))
+    } else if block == 19 {
+        c.rect(px + inner / 2 - 2, py + inner / 2 - 2, 5, 5, rgb(71, 238, 247))
+        c.rect(px + inner / 2, py + inner / 2, 3, 3, rgb(218, 255, 255))
+    }
+}
+
+fn draw_heart(c: Canvas, x: int, y: int, amount: int) {
+    for row in 0..8 {
+        for col in 0..8 {
+            var pixel = false
+            if row == 0 and (col == 1 or col == 2 or col == 5 or col == 6) { pixel = true }
+            if row == 1 and col >= 0 and col <= 7 { pixel = true }
+            if row >= 2 and row <= 4 and col >= 0 and col <= 7 { pixel = true }
+            if row == 5 and col >= 1 and col <= 6 { pixel = true }
+            if row == 6 and col >= 2 and col <= 5 { pixel = true }
+            if row == 7 and (col == 3 or col == 4) { pixel = true }
+            if pixel {
+                var color = rgb(73, 20, 27)
+                if amount == 2 { color = rgb(214, 45, 56) }
+                if amount == 1 and col < 4 { color = rgb(214, 45, 56) }
+                c.rect(x + col * 2, y + row * 2, 2, 2, color)
+            }
+        }
+    }
+}
+
+fn draw_food(c: Canvas, x: int, y: int, amount: int) {
+    for row in 0..8 {
+        for col in 0..8 {
+            var pixel = false
+            if row == 0 and col == 5 { pixel = true }
+            if row == 1 and col >= 4 and col <= 6 { pixel = true }
+            if row == 2 and col >= 3 and col <= 6 { pixel = true }
+            if row == 3 and col >= 2 and col <= 5 { pixel = true }
+            if row == 4 and col >= 1 and col <= 4 { pixel = true }
+            if row == 5 and col >= 0 and col <= 3 { pixel = true }
+            if row == 6 and col >= 0 and col <= 2 { pixel = true }
+            if pixel {
+                var color = rgb(78, 42, 28)
+                if amount == 2 { color = rgb(177, 78, 34) }
+                if amount == 1 and row <= 3 { color = rgb(177, 78, 34) }
+                if col <= 1 and row >= 5 and amount > 0 { color = rgb(226, 211, 174) }
+                c.rect(x + col * 2, y + row * 2, 2, 2, color)
+            }
+        }
+    }
+}
+
+fn draw_inventory_overlay(c: Canvas) {
+    c.rect(0, 0, c.w, c.h, rgba(0, 0, 0, 0.58))
+    let panel_x = c.w / 2 - 335
+    let panel_y = c.h / 2 - 210
+    c.rect(panel_x, panel_y, 670, 420, rgb(198, 198, 198))
+    c.outline(panel_x, panel_y, 670, 420, 0, 3, rgb(35, 35, 35))
+    c.line(panel_x + 3, panel_y + 3, panel_x + 666, panel_y + 3, 2, rgb(245, 245, 245))
+    c.line(panel_x + 3, panel_y + 3, panel_x + 3, panel_y + 416, 2, rgb(245, 245, 245))
+    c.text(panel_x + 22, panel_y + 14, "Inventory", rgb(55, 55, 55), 20, true)
+    c.text(panel_x + 28, panel_y + 47, "Items", rgb(64, 64, 64), 13, true)
+
+    let cell = 36
+    let gap = 4
+    for row in 0..3 {
+        for col in 0..9 {
+            let index = row * 9 + col
+            let item = inventory_grid_item(index)
+            let sx = panel_x + 27 + col * (cell + gap)
+            let sy = panel_y + 65 + row * (cell + gap)
+            draw_slot(c, sx, sy, cell, false)
+            if item > 0 {
+                draw_block_icon(c, sx + 5, sy + 5, cell - 10, item)
+                if inventory[item] > 0 {
+                    c.text(sx + 22, sy + 23, "{inventory[item]}", rgb(255, 255, 255), 10, true)
+                }
+            }
+        }
+    }
+
+    c.text(panel_x + 28, panel_y + 205, "Hotbar", rgb(64, 64, 64), 13, true)
+    for slot in 0..9 {
+        let item = hotbar_block(slot)
+        let sx = panel_x + 27 + slot * (cell + gap)
+        let sy = panel_y + 224
+        draw_slot(c, sx, sy, cell, item == selected_block)
+        draw_block_icon(c, sx + 5, sy + 5, cell - 10, item)
+        if inventory[item] > 0 { c.text(sx + 22, sy + 23, "{inventory[item]}", rgb(255, 255, 255), 10, true) }
+    }
+
+    let right_x = panel_x + 415
+    c.text(right_x, panel_y + 47, "Crafting", rgb(64, 64, 64), 14, true)
+    for row in 0..2 {
+        for col in 0..2 {
+            draw_slot(c, right_x + col * 36, panel_y + 67 + row * 36, 32, false)
+        }
+    }
+    c.text(right_x + 78, panel_y + 97, "->", rgb(70, 70, 70), 18, true)
+    draw_slot(c, right_x + 113, panel_y + 83, 36, false)
+    c.text(right_x, panel_y + 157, "Recipe shortcuts", rgb(65, 65, 65), 13, true)
+    c.text(right_x, panel_y + 180, "1  Wood -> 4 planks", rgb(55, 55, 55), 11, false)
+    c.text(right_x, panel_y + 200, "2  Stone + coal -> bricks", rgb(55, 55, 55), 11, false)
+    c.text(right_x, panel_y + 220, "3  Sand + coal -> glass", rgb(55, 55, 55), 11, false)
+    c.text(right_x, panel_y + 240, "4  Wood + stone -> bench", rgb(55, 55, 55), 11, false)
+    c.text(right_x, panel_y + 260, "5  Coal + gold -> lantern", rgb(55, 55, 55), 11, false)
+    let bench_state = if has_workbench_nearby() { "Workbench nearby" } else { "Place a workbench for 2, 3, 5" }
+    c.text(right_x, panel_y + 286, bench_state, rgb(93, 67, 28), 11, true)
+    c.line(panel_x + 22, panel_y + 316, panel_x + 648, panel_y + 316, 1, rgb(130, 130, 130))
+    c.text(panel_x + 28, panel_y + 332, "E or Esc: close inventory  |  1-5: craft recipe", rgb(60, 60, 60), 13, true)
+    c.text(panel_x + 28, panel_y + 357, "Q drops one item  |  F eats an apple", rgb(70, 70, 70), 12, false)
+}
+
+fn draw_pause_menu(c: Canvas) {
+    c.rect(0, 0, c.w, c.h, rgba(0, 0, 0, 0.60))
+    let panel_x = c.w / 2 - 190
+    let panel_y = c.h / 2 - 145
+    c.rect(panel_x, panel_y, 380, 290, rgb(198, 198, 198))
+    c.outline(panel_x, panel_y, 380, 290, 0, 3, rgb(32, 32, 32))
+    c.line(panel_x + 3, panel_y + 3, panel_x + 376, panel_y + 3, 2, rgb(245, 245, 245))
+    c.text(panel_x + 105, panel_y + 22, "Game Menu", rgb(45, 45, 45), 25, true)
+    c.rect(panel_x + 38, panel_y + 74, 304, 42, rgb(115, 115, 115))
+    c.rect(panel_x + 40, panel_y + 76, 300, 38, rgb(95, 151, 191))
+    c.outline(panel_x + 38, panel_y + 74, 304, 42, 0, 2, rgb(245, 245, 245))
+    c.text(panel_x + 92, panel_y + 86, "Back to Game", rgb(255, 255, 255), 17, true)
+    c.rect(panel_x + 38, panel_y + 128, 304, 37, rgb(130, 130, 130))
+    c.outline(panel_x + 38, panel_y + 128, 304, 37, 0, 2, rgb(225, 225, 225))
+    c.text(panel_x + 76, panel_y + 138, "Save World (F6)", rgb(255, 255, 255), 15, true)
+    c.rect(panel_x + 38, panel_y + 172, 304, 37, rgb(130, 130, 130))
+    c.outline(panel_x + 38, panel_y + 172, 304, 37, 0, 2, rgb(225, 225, 225))
+    c.text(panel_x + 76, panel_y + 182, "Load World (F7)", rgb(255, 255, 255), 15, true)
+    c.text(panel_x + 56, panel_y + 232, "Esc or click: Back to Game", rgb(55, 55, 55), 13, false)
 }
 
 fn draw_hud(c: Canvas) {
-    // Lightweight translucent HUD panels keep text readable over any terrain.
-    c.rrect(12, 12, 302, 91, 8, rgba(12, 16, 22, 0.72))
-    c.text(24, 20, "BLOCKWORLD ULTRA", rgb(255, 255, 255), 20, true)
-    c.text(24, 47, "WASD move  |  Mouse look  |  SPACE jump", rgb(225, 236, 246), 12, false)
-    c.text(24, 66, "SHIFT sprint  |  LMB mine  |  RMB place", rgb(225, 236, 246), 12, false)
-    c.text(24, 83, "F5 save  |  F9 load  |  M map  |  F3 debug", rgb(225, 236, 246), 12, false)
-
-    c.rrect(12, c.h - 35, 305, 23, 6, rgba(12, 16, 22, 0.68))
-    c.text(22, c.h - 30, "XYZ {int(floor(player_x))}, {int(floor(player_y))}, {int(floor(player_z))}", rgb(245, 248, 252), 13, true)
-    c.text(c.w - 180, 18, "FPS {int(fps_value)}", rgb(252, 252, 252), 14, true)
-
-    let slot_size = 42
-    let gap = 5
-    let slot_count = 8
-    let total_width = slot_count * slot_size + (slot_count - 1) * gap
-    let start_x = (c.w - total_width) / 2
-    let bar_y = c.h - 69
-    c.rrect(start_x - 10, bar_y - 10, total_width + 20, slot_size + 20, 10, rgba(14, 17, 23, 0.84))
-    c.outline(start_x - 10, bar_y - 10, total_width + 20, slot_size + 20, 9, 2, rgb(92, 105, 120))
-
-    for i in 0..8 {
-        let slot_block = hotbar_block(i)
-        let x = start_x + i * (slot_size + gap)
-        c.rrect(x, bar_y, slot_size, slot_size, 6, rgb(43, 49, 58))
-        c.rect(x + 7, bar_y + 7, slot_size - 14, slot_size - 14, block_ui_color(slot_block))
-        let border_color = if selected_block == slot_block { rgb(255, 222, 74) } else { rgb(115, 129, 146) }
-        let border_width = if selected_block == slot_block { 3 } else { 1 }
-        c.outline(x, bar_y, slot_size, slot_size, 6, border_width, border_color)
-        c.text(x + 3, bar_y - 18, str(i + 1), rgb(255, 255, 255), 13, true)
+    if show_pause {
+        draw_pause_menu(c)
+        return
     }
-
-    c.rrect(c.w - 196, c.h - 36, 184, 24, 6, rgba(12, 16, 22, 0.72))
-    c.text(c.w - 185, c.h - 31, "BLOCK: {block_name(selected_block)}", rgb(255, 245, 198), 13, true)
+    if show_crafting {
+        draw_inventory_overlay(c)
+        return
+    }
 
     let center_x = c.w / 2
     let center_y = c.h / 2
-    let (target, _, _, _, _, _, _, _) = trace_ray(forward_x, forward_y, forward_z, 7.0)
-    let cross_color = if target != 0 { rgb(255, 224, 104) } else { rgb(255, 255, 255) }
-    c.line(center_x - 9, center_y, center_x - 3, center_y, 2, cross_color)
-    c.line(center_x + 3, center_y, center_x + 9, center_y, 2, cross_color)
-    c.line(center_x, center_y - 9, center_x, center_y - 3, 2, cross_color)
-    c.line(center_x, center_y + 3, center_x, center_y + 9, 2, cross_color)
+    let bar_y = c.h - 56
+    let slot_size = 44
+    let gap = 2
+    let total_width = 9 * slot_size + 8 * gap
+    let start_x = (c.w - total_width) / 2
 
-    if not mouse_captured {
-        c.rrect(center_x - 154, center_y + 28, 308, 48, 10, rgba(13, 17, 24, 0.90))
-        c.outline(center_x - 154, center_y + 28, 308, 48, 9, 2, rgb(255, 220, 79))
-        c.text(center_x - 112, center_y + 41, "CLICK TO CAPTURE MOUSE", rgb(255, 226, 105), 17, true)
+    // Classic Minecraft-style hotbar: square bevelled slots and a bright selected slot.
+    c.rect(start_x - 5, bar_y - 5, total_width + 10, slot_size + 10, rgb(24, 24, 24))
+    c.rect(start_x - 3, bar_y - 3, total_width + 6, slot_size + 6, rgb(115, 115, 115))
+    for i in 0..9 {
+        let slot_block = hotbar_block(i)
+        let x = start_x + i * (slot_size + gap)
+        draw_slot(c, x, bar_y, slot_size, selected_block == slot_block)
+        draw_block_icon(c, x + 7, bar_y + 7, slot_size - 14, slot_block)
+        if inventory[slot_block] > 0 {
+            c.text(x + 27, bar_y + 28, "{inventory[slot_block]}", rgb(255, 255, 255), 13, true)
+        }
     }
 
-    if status_timer > 0.0 {
-        let message_width = min(c.text_width(status_message, 14, true) + 30, c.w - 40)
-        c.rrect((c.w - message_width) / 2, 18, message_width, 31, 8, rgba(12, 16, 22, 0.78))
-        c.text((c.w - message_width) / 2 + 15, 25, status_message, rgb(245, 249, 252), 14, true)
+    // Ten pixel-art hearts and drumsticks, positioned above the hotbar.
+    let stats_y = c.h - 101
+    for i in 0..10 {
+        let hp = if health >= float((i + 1) * 2) { 2 } else if health > float(i * 2) { 1 } else { 0 }
+        draw_heart(c, center_x - 206 + i * 18, stats_y, hp)
+        let food = if hunger >= float((i + 1) * 2) { 2 } else if hunger > float(i * 2) { 1 } else { 0 }
+        draw_food(c, center_x + 28 + i * 18, stats_y, food)
     }
+
+    // Compact crosshair with a dark outline, closer to the vanilla HUD.
+    c.line(center_x - 7, center_y, center_x + 7, center_y, 3, rgb(20, 20, 20))
+    c.line(center_x, center_y - 7, center_x, center_y + 7, 3, rgb(20, 20, 20))
+    c.line(center_x - 6, center_y, center_x + 6, center_y, 1, rgb(245, 245, 245))
+    c.line(center_x, center_y - 6, center_x, center_y + 6, 1, rgb(245, 245, 245))
 
     if show_debug {
-        c.rrect(12, 116, 245, 80, 8, rgba(12, 16, 22, 0.78))
-        c.text(24, 124, "DEBUG", rgb(255, 221, 100), 14, true)
-        c.text(24, 145, "FPS: {int(fps_value)}   DAY LIGHT: {int(day_light * 100.0)}%", rgb(240, 245, 250), 12, false)
-        c.text(24, 164, "MINED: {blocks_mined}   PLACED: {blocks_placed}", rgb(240, 245, 250), 12, false)
-        c.text(24, 180, "WORLD: {WORLD_W} x {WORLD_H} x {WORLD_D}", rgb(240, 245, 250), 12, false)
+        c.rect(8, 8, 315, 98, rgba(0, 0, 0, 0.72))
+        c.text(16, 15, "Minecraft-style debug", rgb(255, 255, 255), 13, true)
+        c.text(16, 34, "XYZ {int(floor(player_x))}, {int(floor(player_y))}, {int(floor(player_z))}", rgb(255, 255, 255), 12, false)
+        c.text(16, 52, "FPS {int(fps_value)}  LIGHT {int(day_light * 100.0)}%", rgb(255, 255, 255), 12, false)
+        c.text(16, 70, "MINED {blocks_mined}  PLACED {blocks_placed}  CRAFTED {blocks_crafted}", rgb(255, 255, 255), 12, false)
+        c.text(16, 88, "DROPS {dropped_item_ids.len()}  DIAMONDS {inventory[19]}", rgb(255, 255, 255), 12, false)
     }
 
     if show_map {
         let map_size = 192
         let map_x = c.w - map_size - 18
-        let map_y = 48
+        let map_y = 24
         let cell = 3
-        c.rrect(map_x - 8, map_y - 8, map_size + 16, map_size + 16, 10, rgba(12, 16, 22, 0.88))
+        c.rect(map_x - 6, map_y - 6, map_size + 12, map_size + 12, rgb(32, 32, 32))
+        c.rect(map_x - 3, map_y - 3, map_size + 6, map_size + 6, rgb(190, 190, 190))
         for mx in 0..WORLD_W {
             for mz in 0..WORLD_D {
                 let surface = surface_block(mx, mz)
@@ -744,9 +1475,45 @@ fn draw_hud(c: Canvas) {
         }
         let player_map_x = map_x + int(player_x * float(cell))
         let player_map_y = map_y + int(player_z * float(cell))
-        c.circle(player_map_x, player_map_y, 4, rgb(255, 70, 65))
+        c.rect(player_map_x - 2, player_map_y - 2, 5, 5, rgb(255, 65, 65))
         c.line(player_map_x, player_map_y, player_map_x + int(sin_atf(yaw) * 12.0), player_map_y + int(cos_atf(yaw) * 12.0), 2, rgb(255, 255, 255))
-        c.text(map_x, map_y + map_size + 10, "WORLD MAP  •  M to close", rgb(255, 255, 255), 12, true)
+    }
+
+    if status_timer > 0.0 {
+        let message_width = min(c.text_width(status_message, 14, true) + 26, c.w - 40)
+        let message_x = (c.w - message_width) / 2
+        c.rect(message_x, 16, message_width, 30, rgba(0, 0, 0, 0.66))
+        c.outline(message_x, 16, message_width, 30, 0, 1, rgb(35, 35, 35))
+        c.text(message_x + 13, 23, status_message, rgb(255, 255, 255), 14, true)
+    }
+
+    if not mouse_captured {
+        c.rect(center_x - 150, center_y + 27, 300, 40, rgba(0, 0, 0, 0.82))
+        c.outline(center_x - 150, center_y + 27, 300, 40, 0, 2, rgb(210, 210, 210))
+        c.text(center_x - 112, center_y + 39, "CLICK TO RETURN TO GAME", rgb(255, 255, 255), 15, true)
+    }
+}
+
+fn draw_dropped_items(c: Canvas) {
+    for i in 0..dropped_item_ids.len() {
+        let dx = dropped_item_xs[i] - camera_x
+        let dy = dropped_item_ys[i] - camera_y
+        let dz = dropped_item_zs[i] - camera_z
+        let depth = dx * forward_x + dy * forward_y + dz * forward_z
+        let distance = sqrt(dx * dx + dy * dy + dz * dz)
+        if depth > 0.2 and depth < VIEW_DISTANCE and distance > 0.01 {
+            let (block, _, _, _, _, _, _, hit_distance) = trace_ray(dx, dy, dz, distance)
+            if block == 0 or hit_distance >= distance - 0.32 {
+                let side = dx * right_x + dy * right_y + dz * right_z
+                let up = dx * up_x + dy * up_y + dz * up_z
+                let screen_x = int((side / depth / 1.09 + 1.0) * 0.5 * float(c.w))
+                let screen_y = int((1.0 - (up / depth / 0.68 + 1.0) * 0.5) * float(c.h))
+                if screen_x >= 0 and screen_x < c.w and screen_y >= 0 and screen_y < c.h {
+                    let icon_size = clamp(int(95.0 / depth), 14, 22)
+                    draw_block_icon(c, screen_x - icon_size / 2, screen_y - icon_size / 2, icon_size, dropped_item_ids[i])
+                }
+            }
+        }
     }
 }
 
@@ -766,8 +1533,10 @@ fn draw_game(c: Canvas) {
             if block != 0 {
                 let face = face_from_hit(bx, by, bz, px, py, pz, dx, dy, dz)
                 let ray_length = sqrt(dx * dx + dy * dy + dz * dz)
-                let sample_y = camera_y + (dy / ray_length) * distance
-                color = color_for_block(block, face, bx, by, bz, sample_y, distance)
+                let hit_x = camera_x + (dx / ray_length) * distance
+                let hit_y = camera_y + (dy / ray_length) * distance
+                let hit_z = camera_z + (dz / ray_length) * distance
+                color = color_for_block(block, face, bx, by, bz, hit_y, distance, hit_x, hit_y, hit_z)
             } else {
                 let ray_length = sqrt(dx * dx + dy * dy + dz * dz)
                 let ndx = dx / ray_length
@@ -790,6 +1559,7 @@ fn draw_game(c: Canvas) {
     }
 
     c.pixels_smooth(0, 0, c.w, c.h, frame_pixels, RENDER_W, RENDER_H)
+    draw_dropped_items(c)
     draw_hud(c)
 }
 
@@ -805,5 +1575,5 @@ fn view() -> Node {
 
 fn main() {
     create_world()
-    ui_run("ATF Blockworld Ultra", 1200, 750, view)
+    ui_run("Blockworld — Minecraft Style", 1200, 750, view)
 }
