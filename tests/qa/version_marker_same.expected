@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: type mismatch: expected int but found str
+  --> version_marker_same.atf:3:18
+ 3 |     let n: int = "not a number"
+   |                  ^
+  hint: use int(s) or float(s) to convert text to a number

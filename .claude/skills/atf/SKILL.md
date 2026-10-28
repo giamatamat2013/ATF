@@ -29,6 +29,7 @@ fn main() {                       // or: fn main(args: [str]) -> int  (return va
     println("Hello, {name}!")     // {expr} interpolation, \{ for literal brace
 }
 ```
+Optional first line: `// ATF 1.2.0` names the version the file was written for. It is a comment; the compiler only warns (stderr) when it is newer than the compiler. Add it to new programs, do not require it.
 No semicolons needed (optional), no imports for the core library, no header files. Declarations outside functions can appear in any order. A statement continues onto the next line if the line ends with an operator/comma, is inside brackets, or the next line starts with `.`, `&&`, `||`, `??`.
 
 ## Core syntax cheat sheet

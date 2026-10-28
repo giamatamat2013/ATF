@@ -115,6 +115,22 @@ four five
 * A statement continues on the next line if the line ends with an operator or a comma, if you are inside
   `( )` or `[ ]` brackets, or if the next line starts with `.` (a method chain), `&&`, `||` or `??`.
 
+The first line of a file can name the ATF version the file was written for. It is a comment, so it is optional, and
+the compiler does not need it. When the compiler is older than the version on that line, `atf run`, `atf build` and
+`atf check` print a warning on stderr and still compile the file. This is useful when a program moves to a computer
+with an older ATF.
+
+<!-- id: version-line -->
+```atf
+// ATF 1.2.0
+fn main() {
+    println("written for ATF 1.2.0")
+}
+```
+```output
+written for ATF 1.2.0
+```
+
 ---
 
 ## 3. Variables: `let`, `var` and `const`

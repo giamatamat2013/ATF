@@ -18,7 +18,7 @@ import "opt"
 import "repl"
 import "fmt"
 
-const VERSION = "1.1.0 (self-hosted)"
+const VERSION = "1.2.0 (self-hosted)"
 const PRELUDE_SRC = include_str("../atf/stdlib/prelude.atf")
 const PRELUDE_NAME = "<std>/prelude.atf"
 
@@ -92,12 +92,41 @@ fn load_module(path: str, prelude: bool, src_text: str?, from_pos: Pos) {
     modules.push(Module(items, prelude))
 }
 
+// the version named in the first line of a program, "// ATF 1.2.0"; "" when there is no such line
+fn built_for(text: str) -> str {
+    let first = text.split("\n")[0]
+    if not first.starts_with("// ATF ") { return "" }
+    return first[7..].trim().split(" ")[0]
+}
+
+// "1.2.3" -> 1002003, so that versions compare as numbers; 0 when v is not three numbers
+fn version_value(v: str) -> int {
+    let parts = v.split(" ")[0].split(".")
+    if parts.len() != 3 { return 0 }
+    var n = 0
+    for p in parts {
+        if not p.isdigit() { return 0 }
+        n = n * 1000 + p.to_int()
+    }
+    return n
+}
+
+// a program written for a newer ATF may not compile here: say so, but compile it anyway
+fn warn_if_newer(text: str) {
+    let want = built_for(text)
+    let here = VERSION.split(" ")[0]
+    if want != "" and version_value(want) > version_value(here) {
+        eprintln("warning: this file was written for ATF {want}, but this compiler is ATF {here}; it may not compile")
+    }
+}
+
 // compile a program file; returns the executable's bytes or nil (errors are in diags)
 fn compile_file(path: str, check_only: bool) -> Bytes? {
     var exe: Bytes? = nil
     let ok = guarded(|| {
         load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
         load_module(path, false, nil, NOPOS)
+        warn_if_newer(sources[path])
         var ms: [([Item], bool)] = []
         for m in modules { ms.push((m.items, m.prelude)) }
         let prog = check_program(ms)

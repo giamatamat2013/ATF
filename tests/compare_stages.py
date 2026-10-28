@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -28,6 +29,19 @@ def run_exe(exe, stdin):
     # benchmarks print their running time:  time 0.123 ...
     out = re.sub(rb"(?m)^time [0-9.e-]+", b"time ?", out)
     return (r.returncode, out)
+
+
+def write_exe(path, data):
+    # On Windows the open can fail for a moment right after the file was run (a scanner may still hold it).
+    for attempt in range(10):
+        try:
+            with open(path, "wb") as fh:
+                fh.write(data)
+            return
+        except OSError:
+            if attempt == 9:
+                raise
+            time.sleep(0.5)
 
 
 def main():
@@ -70,8 +84,7 @@ def main():
             print("same binary         %s" % f)
             same += 1
             continue
-        with open(out0, "wb") as fh:
-            fh.write(exp)
+        write_exe(out0, exp)
         stdin = b""
         inp = path[:-4] + ".in"
         if os.path.exists(inp):

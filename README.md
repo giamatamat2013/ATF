@@ -101,6 +101,9 @@ atf version
 that folder to your PATH. Note: Windows may ask for confirmation the first time you run a newly built,
 unsigned program.
 
+A program may start with the line `// ATF 1.2.0` to say which version it was written for. The line is optional; an
+older compiler only prints a warning when it is older than that version (see the tutorial, section 2).
+
 A first program, `hello.atf`:
 
 ```atf

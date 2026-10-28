@@ -13,7 +13,7 @@ from . import syntax as S
 HERE = os.path.dirname(os.path.abspath(__file__))
 STDLIB = os.path.join(HERE, "stdlib")                                   # prelude.atf lives here
 STD_MODULES = os.path.join(os.path.dirname(HERE), "stdlib")             # importable as  import "std/name"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def read_source(path):
@@ -24,6 +24,33 @@ def read_source(path):
     text = data.decode("utf-8")
     errors.SOURCES[path] = text.replace("\r\n", "\n")
     return text.replace("\r\n", "\n")
+
+
+def version_value(v):
+    """'1.2.3' -> 1002003, so that versions compare as numbers; 0 when v is not three numbers"""
+    parts = v.split(" ")[0].split(".")
+    if len(parts) != 3 or not all(p != "" and all("0" <= c <= "9" for c in p) for p in parts):
+        return 0
+    n = 0
+    for p in parts:
+        n = n * 1000 + int(p)
+    return n
+
+
+def built_for(text):
+    """the version named in the first line, '// ATF 1.2.0'; '' when there is no such line"""
+    first = text.split("\n", 1)[0]
+    if not first.startswith("// ATF "):
+        return ""
+    return first[7:].strip().split(" ")[0]
+
+
+def warn_if_newer(text):
+    """a program written for a newer ATF may not compile here: say so, but compile it anyway"""
+    want = built_for(text)
+    if want and version_value(want) > version_value(VERSION):
+        print("warning: this file was written for ATF %s, but this compiler is ATF %s; it may not compile"
+              % (want, VERSION), file=sys.stderr)
 
 
 def resolve_import(name, from_file):
@@ -74,6 +101,7 @@ def compile_file(path, check_only=False):
     from .checker import Checker, MultiError
     from .codegen import CodeGen
     modules = load_program(path)
+    warn_if_newer(errors.SOURCES[os.path.abspath(path)])
     chk = Checker()
     for items, prelude in modules:
         chk.declare_module(items, prelude)
