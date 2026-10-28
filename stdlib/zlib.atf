@@ -1,0 +1,557 @@
+// std/zlib - deflate, zlib and gzip compression and decompression (RFC 1951, 1950 and 1952).
+//
+//   import "std/zlib"
+//   let z = zlib_compress("hello hello hello hello")
+//   zlib_decompress(z).unwrap()            == "hello hello hello hello"
+//   gzip_decompress(gzip_compress(s))      (the format of .gz files)
+//   zlib_inflate_raw(d) / zlib_deflate_raw(s)   raw deflate streams, as stored inside .zip and .png files
+//
+// Text (str) is treated as raw bytes, so binary data round-trips exactly.
+// The decompressors return Result<str, str>: Err carries a readable message ("invalid distance code", "checksum mismatch").
+// The compressor finds repeats with LZ77 (a hash chain over the last 32 KiB) and writes them with the fixed Huffman
+// codes of the deflate format. The output is valid for every inflate implementation, smaller than the input for
+// repetitive data, and a little bigger than what the zlib library produces. level 0 stores the data without compressing.
+
+import "std/hash"
+
+var zl_len_base: [int] = []
+var zl_len_extra: [int] = []
+var zl_dist_base: [int] = []
+var zl_dist_extra: [int] = []
+var zl_order: [int] = []
+var zl_len_index: [int] = []
+var zl_fixed_code: [int] = []
+var zl_fixed_len: [int] = []
+var zl_fixed_dist_code: [int] = []
+var zl_fixed_lit: ZlTable? = nil
+var zl_fixed_dist: ZlTable? = nil
+
+// a Huffman decoding table: t[next bits] = (code length << 16) | symbol, 0 for a code that does not exist
+struct ZlTable {
+    t: [int],
+    bits: int
+}
+
+// the state of one inflate run: the input, the bit buffer and the growing output
+struct ZlState {
+    src: str,
+    p: ptr<byte>,
+    n: int,
+    pos: int,
+    bits: int,
+    nbits: int,
+    over: int,
+    out: ptr<byte>,
+    olen: int,
+    ocap: int,
+    err: str
+}
+
+// the state of one deflate run: the bytes written so far and the bits that wait for a whole byte
+struct ZlOut {
+    sb: StrBuilder,
+    acc: int,
+    nacc: int
+}
+
+// ---------------------------------------------------------------- Huffman codes
+// the lowest n bits of code in reverse order
+fn zl_rev(code: int, n: int) -> int {
+    var r = 0
+    var c = code
+    for i in 0..n {
+        r = (r << 1) | (c & 1)
+        c = c >> 1
+    }
+    return r
+}
+
+// the canonical Huffman codes of lens[off..off+n], bit-reversed so that they can be written least significant bit
+// first; an empty array when the lengths use more code space than there is
+fn zl_codes(lens: [int], off: int, n: int) -> [int] {
+    let count = array_make::<int>(16)
+    for i in 0..n { count[lens[off + i]] += 1 }
+    count[0] = 0
+    var left = 1
+    for l in 1..16 {
+        left = left * 2 - count[l]
+        if left < 0 { return array_make::<int>(0) }
+    }
+    let next = array_make::<int>(16)
+    var code = 0
+    for l in 1..16 {
+        code = (code + count[l - 1]) << 1
+        next[l] = code
+    }
+    let codes = array_make::<int>(n)
+    for i in 0..n {
+        let l = lens[off + i]
+        if l != 0 {
+            codes[i] = zl_rev(next[l], l)
+            next[l] += 1
+        }
+    }
+    return codes
+}
+
+// the decoding table of lens[off..off+n], nil when the lengths are not a possible Huffman code
+fn zl_table(lens: [int], off: int, n: int) -> ZlTable? {
+    let codes = zl_codes(lens, off, n)
+    if codes.len() == 0 { return nil }
+    var maxbits = 1
+    for i in 0..n {
+        if lens[off + i] > maxbits { maxbits = lens[off + i] }
+    }
+    let size = 1 << maxbits
+    let t = array_make::<int>(size)
+    for i in 0..n {
+        let l = lens[off + i]
+        if l != 0 {
+            var j = codes[i]
+            let stride = 1 << l
+            while j < size {
+                t[j] = (l << 16) | i
+                j += stride
+            }
+        }
+    }
+    return ZlTable{ t: t, bits: maxbits }
+}
+
+fn zl_init() {
+    if zl_len_base.len() != 0 { return }
+    zl_len_base = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+    zl_len_extra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+    zl_dist_base = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+    zl_dist_extra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+    zl_order = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+    // the code (symbol 285) for length 258 is listed last, so it wins over the code for 227 + 31
+    zl_len_index = array_make::<int>(259)
+    for k in 0..29 {
+        let top = zl_len_base[k] + (1 << zl_len_extra[k])
+        for l in zl_len_base[k]..top {
+            if l <= 258 { zl_len_index[l] = k }
+        }
+    }
+    // fixed Huffman code: 0-143 have 8 bits, 144-255 have 9, 256-279 have 7, 280-287 have 8
+    let lens = array_make::<int>(288)
+    for i in 0..288 {
+        if i < 144 { lens[i] = 8 } else if i < 256 { lens[i] = 9 } else if i < 280 { lens[i] = 7 } else { lens[i] = 8 }
+    }
+    zl_fixed_len = lens
+    zl_fixed_code = zl_codes(lens, 0, 288)
+    zl_fixed_lit = zl_table(lens, 0, 288)
+    let dl = array_make::<int>(32)
+    zl_fixed_dist_code = array_make::<int>(32)
+    for i in 0..32 {
+        dl[i] = 5
+        zl_fixed_dist_code[i] = zl_rev(i, 5)
+    }
+    zl_fixed_dist = zl_table(dl, 0, 32)
+}
+
+// ---------------------------------------------------------------- checksums
+fn zl_adler32(p: ptr<byte>, n: int) -> int {
+    var a = 1
+    var b = 0
+    var i = 0
+    while i < n {
+        let end = min(i + 5552, n)
+        while i < end {
+            a += int(p[i])
+            b += a
+            i += 1
+        }
+        a = a % 65521
+        b = b % 65521
+    }
+    return (b << 16) | a
+}
+
+fn zl_be32(sb: StrBuilder, v: int) {
+    sb.add_byte(byte((v >> 24) & 255))
+    sb.add_byte(byte((v >> 16) & 255))
+    sb.add_byte(byte((v >> 8) & 255))
+    sb.add_byte(byte(v & 255))
+}
+
+fn zl_le32(sb: StrBuilder, v: int) {
+    sb.add_byte(byte(v & 255))
+    sb.add_byte(byte((v >> 8) & 255))
+    sb.add_byte(byte((v >> 16) & 255))
+    sb.add_byte(byte((v >> 24) & 255))
+}
+
+// ---------------------------------------------------------------- inflate
+fn zl_fail(st: ZlState, msg: str) -> bool {
+    st.err = msg
+    return false
+}
+
+// keeps at least 49 bits in the bit buffer; past the end of the input it adds zero bits and counts them in over
+fn zl_fill(st: ZlState) {
+    while st.nbits <= 48 {
+        if st.pos < st.n {
+            st.bits = st.bits | (int(st.p[st.pos]) << st.nbits)
+            st.pos += 1
+        } else {
+            st.over += 8
+        }
+        st.nbits += 8
+    }
+}
+
+fn zl_bits(st: ZlState, n: int) -> int {
+    if st.nbits < n { zl_fill(st) }
+    let v = st.bits & ((1 << n) - 1)
+    st.bits = st.bits >> n
+    st.nbits -= n
+    return v
+}
+
+// the next Huffman symbol, -1 for a code that does not exist (the bit buffer must hold 15 bits)
+fn zl_sym(st: ZlState, tb: ZlTable) -> int {
+    let e = tb.t[st.bits & ((1 << tb.bits) - 1)]
+    let l = e >> 16
+    if l == 0 { return -1 }
+    st.bits = st.bits >> l
+    st.nbits -= l
+    return e & 0xFFFF
+}
+
+fn zl_grow(st: ZlState) {
+    let ncap = st.ocap * 2 + 1024
+    let nb = __alloc_atomic(ncap)
+    __memcpy(nb, st.out, st.olen)
+    st.out = nb
+    st.ocap = ncap
+}
+
+// true when more bits were used than the input had
+fn zl_overrun(st: ZlState) -> bool {
+    return st.over > st.nbits
+}
+
+// decodes the symbols of one block with the given tables, up to its end-of-block code
+fn zl_block(st: ZlState, lit: ZlTable, dist: ZlTable) -> bool {
+    loop {
+        zl_fill(st)
+        if st.olen + 300 > st.ocap { zl_grow(st) }
+        let sym = zl_sym(st, lit)
+        if sym < 0 { return zl_fail(st, "invalid literal/length code") }
+        if sym < 256 {
+            st.out[st.olen] = byte(sym)
+            st.olen += 1
+        } else if sym == 256 {
+            if zl_overrun(st) { return zl_fail(st, "unexpected end of compressed data") }
+            return true
+        } else {
+            let li = sym - 257
+            if li >= 29 { return zl_fail(st, "invalid length code") }
+            let ln = zl_len_base[li] + zl_bits(st, zl_len_extra[li])
+            let ds = zl_sym(st, dist)
+            if ds < 0 or ds >= 30 { return zl_fail(st, "invalid distance code") }
+            let d = zl_dist_base[ds] + zl_bits(st, zl_dist_extra[ds])
+            if d > st.olen { return zl_fail(st, "distance is too far back") }
+            let out = st.out
+            let o = st.olen
+            for k in 0..ln { out[o + k] = out[o + k - d] }
+            st.olen += ln
+        }
+        if zl_overrun(st) { return zl_fail(st, "unexpected end of compressed data") }
+    }
+    return true
+}
+
+// gives the whole bytes that are still in the bit buffer back to the input; false when the input was too short
+fn zl_unread(st: ZlState) -> bool {
+    let back = (st.nbits >> 3) - (st.over >> 3)
+    if back < 0 { return false }
+    st.pos -= back
+    st.bits = 0
+    st.nbits = 0
+    st.over = 0
+    return true
+}
+
+fn zl_stored(st: ZlState) -> bool {
+    let drop = st.nbits & 7
+    st.bits = st.bits >> drop
+    st.nbits -= drop
+    let ln = zl_bits(st, 16)
+    let nln = zl_bits(st, 16)
+    if (ln ^ 0xFFFF) != nln { return zl_fail(st, "stored block length check failed") }
+    if not zl_unread(st) { return zl_fail(st, "unexpected end of compressed data") }
+    if st.pos + ln > st.n { return zl_fail(st, "unexpected end of compressed data") }
+    while st.olen + ln + 300 > st.ocap { zl_grow(st) }
+    __memcpy(st.out + st.olen, st.p + st.pos, ln)
+    st.olen += ln
+    st.pos += ln
+    return true
+}
+
+fn zl_dynamic(st: ZlState) -> bool {
+    let nlit = zl_bits(st, 5) + 257
+    let ndist = zl_bits(st, 5) + 1
+    let ncl = zl_bits(st, 4) + 4
+    if nlit > 286 or ndist > 30 { return zl_fail(st, "too many length or distance codes") }
+    let cl = array_make::<int>(19)
+    for i in 0..ncl { cl[zl_order[i]] = zl_bits(st, 3) }
+    let clt = zl_table(cl, 0, 19)
+    if clt == nil { return zl_fail(st, "invalid code length code") }
+    let total = nlit + ndist
+    let lens = array_make::<int>(total)
+    var i = 0
+    while i < total {
+        zl_fill(st)
+        let sym = zl_sym(st, clt!)
+        if sym < 0 { return zl_fail(st, "invalid code length symbol") }
+        if sym < 16 {
+            lens[i] = sym
+            i += 1
+        } else {
+            var rep = 0
+            var val = 0
+            if sym == 16 {
+                if i == 0 { return zl_fail(st, "repeat code without a previous length") }
+                val = lens[i - 1]
+                rep = 3 + zl_bits(st, 2)
+            } else if sym == 17 {
+                rep = 3 + zl_bits(st, 3)
+            } else {
+                rep = 11 + zl_bits(st, 7)
+            }
+            if i + rep > total { return zl_fail(st, "too many code lengths") }
+            for k in 0..rep { lens[i + k] = val }
+            i += rep
+        }
+        if zl_overrun(st) { return zl_fail(st, "unexpected end of compressed data") }
+    }
+    if lens[256] == 0 { return zl_fail(st, "the block has no end-of-block code") }
+    let lit = zl_table(lens, 0, nlit)
+    let dist = zl_table(lens, nlit, ndist)
+    if lit == nil or dist == nil { return zl_fail(st, "invalid Huffman code lengths") }
+    return zl_block(st, lit!, dist!)
+}
+
+// inflates the deflate stream that starts at byte start of src; on success st.err is "" and st.pos is the byte after the stream
+fn zl_inflate(src: str, start: int) -> ZlState {
+    zl_init()
+    let cap = max(str_len(src) * 4, 4096)
+    let st = ZlState{ src: src, p: str_data(src), n: str_len(src), pos: start, bits: 0, nbits: 0, over: 0, out: __alloc_atomic(cap), olen: 0, ocap: cap, err: "" }
+    loop {
+        let last = zl_bits(st, 1)
+        let typ = zl_bits(st, 2)
+        if zl_overrun(st) {
+            zl_fail(st, "unexpected end of compressed data")
+            return st
+        }
+        var ok = false
+        if typ == 0 {
+            ok = zl_stored(st)
+        } else if typ == 1 {
+            ok = zl_block(st, zl_fixed_lit!, zl_fixed_dist!)
+        } else if typ == 2 {
+            ok = zl_dynamic(st)
+        } else {
+            zl_fail(st, "invalid block type")
+        }
+        if not ok { return st }
+        if last == 1 { break }
+    }
+    let drop = st.nbits & 7
+    st.bits = st.bits >> drop
+    st.nbits -= drop
+    if not zl_unread(st) { zl_fail(st, "unexpected end of compressed data") }
+    return st
+}
+
+fn zl_result(st: ZlState) -> Result<str, str> {
+    if st.err != "" { return Result.Err(st.err) }
+    return Result.Ok(str_from_ptr(st.out, st.olen))
+}
+
+// decompresses a raw deflate stream (RFC 1951): no header, no checksum
+fn zlib_inflate_raw(data: str) -> Result<str, str> {
+    return zl_result(zl_inflate(data, 0))
+}
+
+// decompresses zlib data (RFC 1950: a 2 byte header, the deflate stream and an Adler-32 checksum, which is checked)
+fn zlib_decompress(data: str) -> Result<str, str> {
+    let n = str_len(data)
+    if n < 6 { return Result.Err("zlib data is too short") }
+    let p = str_data(data)
+    let cmf = int(p[0])
+    let flg = int(p[1])
+    if (cmf & 15) != 8 or (cmf >> 4) > 7 { return Result.Err("not zlib data (bad compression method)") }
+    if ((cmf << 8) | flg) % 31 != 0 { return Result.Err("not zlib data (bad header checksum)") }
+    if (flg & 32) != 0 { return Result.Err("zlib preset dictionaries are not supported") }
+    let st = zl_inflate(data, 2)
+    if st.err != "" { return Result.Err(st.err) }
+    if st.pos + 4 > n { return Result.Err("zlib data is missing its Adler-32 checksum") }
+    let want = (int(p[st.pos]) << 24) | (int(p[st.pos + 1]) << 16) | (int(p[st.pos + 2]) << 8) | int(p[st.pos + 3])
+    if zl_adler32(st.out, st.olen) != want { return Result.Err("zlib checksum mismatch (the data is damaged)") }
+    return zl_result(st)
+}
+
+// decompresses gzip data (RFC 1952, the first member): header fields are skipped, CRC-32 and size are checked
+fn gzip_decompress(data: str) -> Result<str, str> {
+    let n = str_len(data)
+    let p = str_data(data)
+    if n < 18 or int(p[0]) != 0x1f or int(p[1]) != 0x8b { return Result.Err("not gzip data (bad magic number)") }
+    if int(p[2]) != 8 { return Result.Err("unsupported gzip compression method") }
+    let flg = int(p[3])
+    var pos = 10
+    if (flg & 4) != 0 {
+        if pos + 2 > n { return Result.Err("gzip header is truncated") }
+        pos += 2 + (int(p[pos]) | (int(p[pos + 1]) << 8))
+    }
+    if (flg & 8) != 0 {
+        while pos < n and int(p[pos]) != 0 { pos += 1 }
+        pos += 1
+    }
+    if (flg & 16) != 0 {
+        while pos < n and int(p[pos]) != 0 { pos += 1 }
+        pos += 1
+    }
+    if (flg & 2) != 0 { pos += 2 }
+    if pos >= n { return Result.Err("gzip header is truncated") }
+    let st = zl_inflate(data, pos)
+    if st.err != "" { return Result.Err(st.err) }
+    if st.pos + 8 > n { return Result.Err("gzip data is missing its trailer") }
+    let q = st.pos
+    let crc = int(p[q]) | (int(p[q + 1]) << 8) | (int(p[q + 2]) << 16) | (int(p[q + 3]) << 24)
+    let size = int(p[q + 4]) | (int(p[q + 5]) << 8) | (int(p[q + 6]) << 16) | (int(p[q + 7]) << 24)
+    let text = str_from_ptr(st.out, st.olen)
+    if hash_crc32(text) != crc { return Result.Err("gzip checksum mismatch (the data is damaged)") }
+    if (st.olen & 0xFFFFFFFF) != size { return Result.Err("gzip size mismatch (the data is damaged)") }
+    return Result.Ok(text)
+}
+
+// ---------------------------------------------------------------- deflate
+fn zl_put(o: ZlOut, v: int, nb: int) {
+    o.acc = o.acc | (v << o.nacc)
+    o.nacc += nb
+    while o.nacc >= 8 {
+        o.sb.add_byte(byte(o.acc & 255))
+        o.acc = o.acc >> 8
+        o.nacc -= 8
+    }
+}
+
+fn zl_hash3(p: ptr<byte>, i: int) -> int {
+    return ((int(p[i]) << 10) ^ (int(p[i + 1]) << 5) ^ int(p[i + 2])) & 32767
+}
+
+// a raw deflate stream made of stored (uncompressed) blocks
+fn zl_stored_blocks(s: str) -> str {
+    let n = str_len(s)
+    let sb = str_builder()
+    var pos = 0
+    loop {
+        let ln = min(n - pos, 65535)
+        let last = pos + ln >= n
+        if last { sb.add_byte(byte(1)) } else { sb.add_byte(byte(0)) }
+        sb.add_byte(byte(ln & 255))
+        sb.add_byte(byte(ln >> 8))
+        sb.add_byte(byte((ln ^ 0xFFFF) & 255))
+        sb.add_byte(byte((ln ^ 0xFFFF) >> 8))
+        sb.add(s.substr(pos, ln))
+        pos += ln
+        if last { break }
+    }
+    return sb.finish()
+}
+
+// one block with the fixed Huffman codes: LZ77 matches found through a hash chain over the last 32 KiB
+fn zl_fixed_block(s: str, max_chain: int) -> str {
+    let n = str_len(s)
+    let p = str_data(s)
+    let o = ZlOut{ sb: str_builder(), acc: 0, nacc: 0 }
+    zl_put(o, 3, 3)
+    let head = array_make::<int>(32768)
+    let prev = array_make::<int>(32768)
+    var i = 0
+    while i < n {
+        var best_len = 0
+        var best_dist = 0
+        if i + 2 < n {
+            let h = zl_hash3(p, i)
+            var cand = head[h] - 1
+            var chain = 0
+            let maxlen = min(258, n - i)
+            while cand >= 0 and i - cand <= 32768 and chain < max_chain {
+                var l = 0
+                while l < maxlen and p[cand + l] == p[i + l] { l += 1 }
+                if l > best_len {
+                    best_len = l
+                    best_dist = i - cand
+                    if l >= maxlen { break }
+                }
+                chain += 1
+                cand = prev[cand & 32767] - 1
+            }
+            prev[i & 32767] = head[h]
+            head[h] = i + 1
+        }
+        if best_len >= 3 {
+            let k = zl_len_index[best_len]
+            let sym = 257 + k
+            zl_put(o, zl_fixed_code[sym], zl_fixed_len[sym])
+            zl_put(o, best_len - zl_len_base[k], zl_len_extra[k])
+            var d = 29
+            while zl_dist_base[d] > best_dist { d -= 1 }
+            zl_put(o, zl_fixed_dist_code[d], 5)
+            zl_put(o, best_dist - zl_dist_base[d], zl_dist_extra[d])
+            for j in i + 1..i + best_len {
+                if j + 2 < n {
+                    let hh = zl_hash3(p, j)
+                    prev[j & 32767] = head[hh]
+                    head[hh] = j + 1
+                }
+            }
+            i += best_len
+        } else {
+            let b = int(p[i])
+            zl_put(o, zl_fixed_code[b], zl_fixed_len[b])
+            i += 1
+        }
+    }
+    zl_put(o, zl_fixed_code[256], zl_fixed_len[256])
+    if o.nacc > 0 { o.sb.add_byte(byte(o.acc & 255)) }
+    return o.sb.finish()
+}
+
+// compresses to a raw deflate stream (RFC 1951): no header, no checksum. level 0 stores the data, 1 to 9 search for
+// repeats (the higher, the longer; the default 6 is a good balance). The result is never bigger than the input plus 5 bytes
+// per 64 KiB.
+fn zlib_deflate_raw(data: str, level: int = 6) -> str {
+    zl_init()
+    if level <= 0 { return zl_stored_blocks(data) }
+    var max_chain = 32
+    if level <= 3 { max_chain = 6 } else if level >= 8 { max_chain = 256 }
+    let packed = zl_fixed_block(data, max_chain)
+    let stored_size = str_len(data) + 5 * ((str_len(data) + 65534) / 65535 + 1)
+    if str_len(packed) >= stored_size { return zl_stored_blocks(data) }
+    return packed
+}
+
+// compresses to zlib data (RFC 1950): a 2 byte header, the deflate stream and the Adler-32 checksum
+fn zlib_compress(data: str, level: int = 6) -> str {
+    let sb = str_builder()
+    sb.add_byte(byte(0x78))
+    if level <= 0 { sb.add_byte(byte(0x01)) } else { sb.add_byte(byte(0x9C)) }
+    sb.add(zlib_deflate_raw(data, level))
+    zl_be32(sb, zl_adler32(str_data(data), str_len(data)))
+    return sb.finish()
+}
+
+// compresses to gzip data (RFC 1952, what a .gz file contains): a 10 byte header, the deflate stream, CRC-32 and size
+fn gzip_compress(data: str, level: int = 6) -> str {
+    let sb = str_builder()
+    sb.add("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff")
+    sb.add(zlib_deflate_raw(data, level))
+    zl_le32(sb, hash_crc32(data))
+    zl_le32(sb, str_len(data) & 0xFFFFFFFF)
+    return sb.finish()
+}

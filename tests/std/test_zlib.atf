@@ -1,0 +1,138 @@
+// tests for std/zlib
+import "std/zlib"
+import "std/hex"
+import "std/hash"
+
+const V_Z9 = "78da0bc94855282ccd4cce56482aca2fcf5348cbaf50c82acd2d2856c82f4b2d5228014ae72456552aa4e4a7eb29840c77c501894075b9950a494045e59925190a699965a940a9aad43c859cccc2d2fc22a0def462450503432363135333730b4bbae96160646266616563e7e0e4e2e6e1e5e3171014121611151397909492969195935750545256515553d7d0d4d2d6d1d5d34768b5b2b6b1b5b37770747276717573f7f0f4f2f6f1f5f30f080c0a0e090d0b8f888c8a8e898d8b4f484c4a4e494d4bcfc8cccacec9cdcb2f282c2a2e292d2bafa8acaaaea9adab6f686c6a6e696d6befe8eceaeee9edeb9f3071d2e42953a74d9f3173d6ec3973e7cd5fb070d1e2254b972d5fb172d5ea356bd7addfb071d3e62d5bb76ddfb173d7ee3d7bf7ed3f70f0d0e123478f1d3f71f2d4e93367cf9dbf70f1d2e52b57af5dbf71f3d6ed3b77efdd7ff0f0d1e3274f9f3d7ff1f2d5eb376fdfbdfff0f1d3e72f5fbf7dfff1f3d7ef3f7ffffd0700a97e12ff"
+const V_Z1 = "78010bc94855282ccd4cce56482aca2fcf5348cbaf50c82acd2d2856c82f4b2d5228014ae72456552aa4e4a7eb29840c77c50189c080c8ad544802864279664986425a66592ad0ef55a9790a399985a5f945c0c0492f56543030343236313533b7b054a0971e06462666165636760e4e2e6e1e5e3e7e0141216111513171094929691959397905452565155535750d4d2d6d1d5d3d7d8413adac6d6cedec1d1c9d9c5d5cdddc3d3cbdbc7d7cfdfc030283824342c3c22322a3a26362e3e2131293925352d3d23332b3b27372f3f20b0a8b8a4b4acbca2b2aabaa6b6aebea1b1a9b9a5b5adbda3b3abbba7b7afbfa274c9c3479cad469d367cc9c357bcedc79f3172c5cb478c9d265cb57ac5cb57acdda75eb376cdcb479cbd66ddb77ecdcb57bcfde7dfb0f1c3c74f8c8d163c74f9c3c75faccd973e72f5cbc74f9cad56bd76fdcbc75fbcedd7bf71f3c7cf4f8c9d367cf5fbc7cf5facddb77ef3f7cfcf4f9cbd76fdf7ffcfcf5fbcfdf7fff01a97e12ff"
+const V_Z0 = "780101aa0255fd54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f672e2054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f672e2054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f672e2054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f672e2054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f672e2054686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f672e205061636b206d7920626f782077697468206669766520646f7a656e206c6971756f72206a756773212030313233343536373839205061636b206d7920626f782077697468206669766520646f7a656e206c6971756f72206a756773212030313233343536373839205061636b206d7920626f782077697468206669766520646f7a656e206c6971756f72206a75677321203031323334353637383920000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeffa97e12ff"
+const V_RAW = "0bc94855282ccd4cce56482aca2fcf5348cbaf50c82acd2d2856c82f4b2d5228014ae72456552aa4e4a7eb29840c77c501894075b9950a494045e59925190a699965a940a9aad43c859cccc2d2fc22a0def462450503432363135333730b4bbae96160646266616563e7e0e4e2e6e1e5e3171014121611151397909492969195935750545256515553d7d0d4d2d6d1d5d34768b5b2b6b1b5b37770747276717573f7f0f4f2f6f1f5f30f080c0a0e090d0b8f888c8a8e898d8b4f484c4a4e494d4bcfc8cccacec9cdcb2f282c2a2e292d2bafa8acaaaea9adab6f686c6a6e696d6befe8eceaeee9edeb9f3071d2e42953a74d9f3173d6ec3973e7cd5fb070d1e2254b972d5fb172d5ea356bd7addfb071d3e62d5bb76ddfb173d7ee3d7bf7ed3f70f0d0e123478f1d3f71f2d4e93367cf9dbf70f1d2e52b57af5dbf71f3d6ed3b77efdd7ff0f0d1e3274f9f3d7ff1f2d5eb376fdfbdfff0f1d3e72f5fbf7dfff1f3d7ef3f7ffffd0700"
+const V_GZ = "1f8b08000000000002ff0bc94855282ccd4cce56482aca2fcf5348cbaf50c82acd2d2856c82f4b2d5228014ae72456552aa4e4a7eb29840c77c501894075b9950a494045e59925190a699965a940a9aad43c859cccc2d2fc22a0def462450503432363135333730b4bbae96160646266616563e7e0e4e2e6e1e5e3171014121611151397909492969195935750545256515553d7d0d4d2d6d1d5d34768b5b2b6b1b5b37770747276717573f7f0f4f2f6f1f5f30f080c0a0e090d0b8f888c8a8e898d8b4f484c4a4e494d4bcfc8cccacec9cdcb2f282c2a2e292d2bafa8acaaaea9adab6f686c6a6e696d6befe8eceaeee9edeb9f3071d2e42953a74d9f3173d6ec3973e7cd5fb070d1e2254b972d5fb172d5ea356bd7addfb071d3e62d5bb76ddfb173d7ee3d7bf7ed3f70f0d0e123478f1d3f71f2d4e93367cf9dbf70f1d2e52b57af5dbf71f3d6ed3b77efdd7ff0f0d1e3274f9f3d7ff1f2d5eb376fdfbdfff0f1d3e72f5fbf7dfff1f3d7ef3f7ffffd0700901106a2aa020000"
+const V_EMPTY = "78da030000000001"
+const V_DYN = "78da7d96e16e83300c845f855763056dd55091a05a5f7fe2cee5be84697fa292d88e7dbe73fa1a9ff3364cf7ed39ece3631a9eeb76fb1af6e7fa9887cf6ddcf7e173d1ba2e536dbce4725bc7a5ec3eb6fbeddb16af759d1a6f05d552ce8741053e1c7c6e075da4b8b075425e71a77efa3b1178bbf2554415b7cce3cf5ce9680305294c19c0cf77da38765a7ca4eb8c062aba7dcd7be38184e571dfd647450804d3ba6e154be73237b0faf65125a930f25076bed11102efa52ac571c86aa1fcb45d7600bfef916e4296fa46826843d5a600f2302e476c7d165f969089f9805e41427efa6c48a9df95bb8d15820914fadaf75af6a054d92b660387ec559973aebe2b43074673dc8b206858424cd55091d13793f69409c141c17208d042b462d9c33c5d4ecd41b6d76a9cb0abb1bbb7956608ef9e1f0ba4089139bfc8964a7b0b4e86992f9e1269b16501fcac9e248f0655c75c46122062a61be57bf22f10f7330982ec87090691ac00ce650c367c3be1f86f7092cbba23034dbecee92dfa78634e34620d69bae53d06d2d59a11541cc5c1ce7aba9cb5109d3493cd3b768b55eefed983467ad430dbce99e5e06078dd965927788f25b790dd81d5f3f25c803aa2453ffd50cd6d903cb9885a092247764da1ae859889ec071f963fb988e7279b78373c8a9690126ae120d3fd1c99d48f77302364dd8383c8913ae2b216049059865af372867559304cfaf71197610e673441e37c0221517128b7a09dd747050f7d5f35785504cf866392110dd74f2e822134407c247a650e60c1236747fc574338efe22cb87408f1af5a800fe4802d2759c251369b7305dacdadd11d04bcf5f51c017e010ccffa3e"
+const V_DYN_LEN = 2768
+const V_DYN_CRC = 3219460373
+
+var failures = 0
+
+fn check(label: str, ok: bool) {
+    if ok {
+        println("ok   {label}")
+    } else {
+        failures += 1
+        println("FAIL {label}")
+    }
+}
+
+fn err_text(r: Result<str, str>) -> str {
+    return match r {
+        Result.Ok(v) => "(no error)"
+        Result.Err(e) => e
+    }
+}
+
+// the text that the Python vectors were made from
+fn sample() -> str {
+    var sb = str_builder()
+    sb.add("The quick brown fox jumps over the lazy dog. ".repeat(6))
+    sb.add("Pack my box with five dozen liquor jugs! 0123456789 ".repeat(3))
+    for i in 0..256 { sb.add_byte(byte(i)) }
+    return sb.finish()
+}
+
+fn unhex(h: str) -> str {
+    return hex_decode(h).unwrap()
+}
+
+// repeatable pseudo-random bytes
+fn noise(n: int, seed: int) -> str {
+    var sb = str_builder()
+    var x = seed
+    for i in 0..n {
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        sb.add_byte(byte((x >> 16) & 255))
+    }
+    return sb.finish()
+}
+
+fn is_text(r: Result<str, str>, want: str) -> bool {
+    return r.is_ok() and r.unwrap() == want
+}
+
+fn roundtrip(label: str, data: str, level: int) {
+    check("zlib {label} level {level}", is_text(zlib_decompress(zlib_compress(data, level)), data))
+    check("gzip {label} level {level}", is_text(gzip_decompress(gzip_compress(data, level)), data))
+    check("raw  {label} level {level}", is_text(zlib_inflate_raw(zlib_deflate_raw(data, level)), data))
+}
+
+fn main() -> int {
+    let s = sample()
+
+    // streams made by Python's zlib: fixed Huffman (levels 9 and 1), stored, raw, gzip, empty, dynamic Huffman
+    check("python level 9", is_text(zlib_decompress(unhex(V_Z9)), s))
+    check("python level 1", is_text(zlib_decompress(unhex(V_Z1)), s))
+    check("python stored", is_text(zlib_decompress(unhex(V_Z0)), s))
+    check("python raw deflate", is_text(zlib_inflate_raw(unhex(V_RAW)), s))
+    check("python gzip", is_text(gzip_decompress(unhex(V_GZ)), s))
+    check("python empty", is_text(zlib_decompress(unhex(V_EMPTY)), ""))
+    let dyn = zlib_decompress(unhex(V_DYN))
+    check("python dynamic Huffman", dyn.is_ok() and dyn.unwrap().len() == V_DYN_LEN and hash_crc32(dyn.unwrap()) == V_DYN_CRC)
+
+    // damaged data is reported, never a crash
+    let z9 = unhex(V_Z9)
+    check("truncated", zlib_decompress(z9.substr(0, z9.len() - 10)).is_err())
+    check("only the header", zlib_decompress(z9.substr(0, 2)).is_err())
+    let bad_sum = z9.substr(0, z9.len() - 1) + "\x00"
+    check("bad checksum", err_text(zlib_decompress(bad_sum)).contains("checksum"))
+    check("not zlib", zlib_decompress("hello world, this is not compressed").is_err())
+    check("empty input", zlib_decompress("").is_err())
+    check("not gzip", gzip_decompress("hello world, this is not compressed").is_err())
+    let gz = unhex(V_GZ)
+    check("gzip bad crc", err_text(gzip_decompress(gz.substr(0, gz.len() - 8) + "\x00\x00\x00\x00" + gz.substr(gz.len() - 4, 4))).contains("checksum"))
+    check("gzip truncated", gzip_decompress(gz.substr(0, gz.len() - 12)).is_err())
+    check("bad block type", zlib_inflate_raw("\x07\x00\x00").is_err())
+    check("bad stored length", zlib_inflate_raw("\x01\x05\x00\x00\x00abcde").is_err())
+    check("stored block", is_text(zlib_inflate_raw("\x01\x05\x00\xfa\xffhello"), "hello"))
+    var damaged = 0
+    for i in 2..z9.len() - 4 {
+        // flipping any one byte must give an error or a different text, and must not crash
+        let broken = z9.substr(0, i) + char_str(byte(255 - int(z9.byte_at(i)))) + z9.substr(i + 1, z9.len() - i - 1)
+        let r = zlib_decompress(broken)
+        if r.is_err() or r.unwrap() != s { damaged += 1 }
+    }
+    check("every damaged byte is noticed", damaged == z9.len() - 6)
+
+    // our own compressor and decompressor
+    let sizes = [0, 1, 2, 3, 100, 1000]
+    for n in sizes {
+        for level in [0, 1, 6, 9] { roundtrip("noise {n}", noise(n, n + 1), level) }
+    }
+    for level in [0, 1, 6, 9] {
+        roundtrip("text", s, level)
+        roundtrip("zeros", "\x00".repeat(70000), level)
+        roundtrip("long run", "a".repeat(100000), level)
+        roundtrip("period 3", "abc".repeat(40000), level)
+        roundtrip("noise 200000", noise(200000, 99), level)
+    }
+    var mix = str_builder()
+    for i in 0..300 {
+        mix.add(noise(50, i))
+        mix.add("a repeated phrase, a repeated phrase ".repeat(i % 7))
+    }
+    roundtrip("mixed", mix.finish(), 6)
+
+    let rep = "a".repeat(100000)
+    check("repetitive data gets small", zlib_compress(rep).len() < 1000)
+    check("repetitive text gets smaller", zlib_compress(s).len() < s.len())
+    let nz = noise(200000, 5)
+    check("noise stays nearly the same size", zlib_compress(nz).len() <= nz.len() + 5 * (nz.len() / 65535 + 1) + 6)
+    check("level 0 stores", zlib_compress("hello", 0).len() == 5 + 11)
+    check("zlib header", zlib_compress("x").byte_at(0) == byte(0x78))
+
+    if failures == 0 {
+        println("all zlib tests passed")
+        return 0
+    }
+    println("{failures} zlib tests FAILED")
+    return 1
+}

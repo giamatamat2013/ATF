@@ -1,0 +1,160 @@
+ok   python level 9
+ok   python level 1
+ok   python stored
+ok   python raw deflate
+ok   python gzip
+ok   python empty
+ok   python dynamic Huffman
+ok   truncated
+ok   only the header
+ok   bad checksum
+ok   not zlib
+ok   empty input
+ok   not gzip
+ok   gzip bad crc
+ok   gzip truncated
+ok   bad block type
+ok   bad stored length
+ok   stored block
+ok   every damaged byte is noticed
+ok   zlib noise 0 level 0
+ok   gzip noise 0 level 0
+ok   raw  noise 0 level 0
+ok   zlib noise 0 level 1
+ok   gzip noise 0 level 1
+ok   raw  noise 0 level 1
+ok   zlib noise 0 level 6
+ok   gzip noise 0 level 6
+ok   raw  noise 0 level 6
+ok   zlib noise 0 level 9
+ok   gzip noise 0 level 9
+ok   raw  noise 0 level 9
+ok   zlib noise 1 level 0
+ok   gzip noise 1 level 0
+ok   raw  noise 1 level 0
+ok   zlib noise 1 level 1
+ok   gzip noise 1 level 1
+ok   raw  noise 1 level 1
+ok   zlib noise 1 level 6
+ok   gzip noise 1 level 6
+ok   raw  noise 1 level 6
+ok   zlib noise 1 level 9
+ok   gzip noise 1 level 9
+ok   raw  noise 1 level 9
+ok   zlib noise 2 level 0
+ok   gzip noise 2 level 0
+ok   raw  noise 2 level 0
+ok   zlib noise 2 level 1
+ok   gzip noise 2 level 1
+ok   raw  noise 2 level 1
+ok   zlib noise 2 level 6
+ok   gzip noise 2 level 6
+ok   raw  noise 2 level 6
+ok   zlib noise 2 level 9
+ok   gzip noise 2 level 9
+ok   raw  noise 2 level 9
+ok   zlib noise 3 level 0
+ok   gzip noise 3 level 0
+ok   raw  noise 3 level 0
+ok   zlib noise 3 level 1
+ok   gzip noise 3 level 1
+ok   raw  noise 3 level 1
+ok   zlib noise 3 level 6
+ok   gzip noise 3 level 6
+ok   raw  noise 3 level 6
+ok   zlib noise 3 level 9
+ok   gzip noise 3 level 9
+ok   raw  noise 3 level 9
+ok   zlib noise 100 level 0
+ok   gzip noise 100 level 0
+ok   raw  noise 100 level 0
+ok   zlib noise 100 level 1
+ok   gzip noise 100 level 1
+ok   raw  noise 100 level 1
+ok   zlib noise 100 level 6
+ok   gzip noise 100 level 6
+ok   raw  noise 100 level 6
+ok   zlib noise 100 level 9
+ok   gzip noise 100 level 9
+ok   raw  noise 100 level 9
+ok   zlib noise 1000 level 0
+ok   gzip noise 1000 level 0
+ok   raw  noise 1000 level 0
+ok   zlib noise 1000 level 1
+ok   gzip noise 1000 level 1
+ok   raw  noise 1000 level 1
+ok   zlib noise 1000 level 6
+ok   gzip noise 1000 level 6
+ok   raw  noise 1000 level 6
+ok   zlib noise 1000 level 9
+ok   gzip noise 1000 level 9
+ok   raw  noise 1000 level 9
+ok   zlib text level 0
+ok   gzip text level 0
+ok   raw  text level 0
+ok   zlib zeros level 0
+ok   gzip zeros level 0
+ok   raw  zeros level 0
+ok   zlib long run level 0
+ok   gzip long run level 0
+ok   raw  long run level 0
+ok   zlib period 3 level 0
+ok   gzip period 3 level 0
+ok   raw  period 3 level 0
+ok   zlib noise 200000 level 0
+ok   gzip noise 200000 level 0
+ok   raw  noise 200000 level 0
+ok   zlib text level 1
+ok   gzip text level 1
+ok   raw  text level 1
+ok   zlib zeros level 1
+ok   gzip zeros level 1
+ok   raw  zeros level 1
+ok   zlib long run level 1
+ok   gzip long run level 1
+ok   raw  long run level 1
+ok   zlib period 3 level 1
+ok   gzip period 3 level 1
+ok   raw  period 3 level 1
+ok   zlib noise 200000 level 1
+ok   gzip noise 200000 level 1
+ok   raw  noise 200000 level 1
+ok   zlib text level 6
+ok   gzip text level 6
+ok   raw  text level 6
+ok   zlib zeros level 6
+ok   gzip zeros level 6
+ok   raw  zeros level 6
+ok   zlib long run level 6
+ok   gzip long run level 6
+ok   raw  long run level 6
+ok   zlib period 3 level 6
+ok   gzip period 3 level 6
+ok   raw  period 3 level 6
+ok   zlib noise 200000 level 6
+ok   gzip noise 200000 level 6
+ok   raw  noise 200000 level 6
+ok   zlib text level 9
+ok   gzip text level 9
+ok   raw  text level 9
+ok   zlib zeros level 9
+ok   gzip zeros level 9
+ok   raw  zeros level 9
+ok   zlib long run level 9
+ok   gzip long run level 9
+ok   raw  long run level 9
+ok   zlib period 3 level 9
+ok   gzip period 3 level 9
+ok   raw  period 3 level 9
+ok   zlib noise 200000 level 9
+ok   gzip noise 200000 level 9
+ok   raw  noise 200000 level 9
+ok   zlib mixed level 6
+ok   gzip mixed level 6
+ok   raw  mixed level 6
+ok   repetitive data gets small
+ok   repetitive text gets smaller
+ok   noise stays nearly the same size
+ok   level 0 stores
+ok   zlib header
+all zlib tests passed
