@@ -124,7 +124,10 @@ def main():
     names = sorted(f[:-4] for f in os.listdir(QA) if f.endswith(".atf"))
     if filters:
         names = [n for n in names if any(f in n for f in filters)]
-    build_dir = tempfile.mkdtemp(prefix="atf-qa-")
+    # inside build/, not the temp folder: Windows Defender blocks the programs built in the temp folder
+    qa_root = os.path.join(ROOT, "build", "qa")
+    os.makedirs(qa_root, exist_ok=True)
+    build_dir = tempfile.mkdtemp(prefix="atf-qa-", dir=qa_root)
     os.makedirs(ACTUAL_DIR, exist_ok=True)
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
