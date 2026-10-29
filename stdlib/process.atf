@@ -6,12 +6,17 @@
 //   proc_setenv("MODE", "fast")
 //   println(proc_pid(), proc_cpu_count())
 //
+//   let p = proc_start("cmd /c ping -n 3 127.0.0.1").unwrap()   // does not wait
+//   while p.running() { show(p.read()); ... }                   // read() never blocks
+//
 // run_command and run_process (the prelude) run a program with its output on the console;
 // proc_output and proc_output_args capture it as text instead.
 
 extern "kernel32" fn CreatePipe(read: ptr<int>, write: ptr<int>, sa: ptr<int>, size: int) -> i32
 extern "kernel32" fn SetHandleInformation(h: int, mask: int, flags: int) -> i32
 extern "kernel32" fn SetEnvironmentVariableA(name: ptr<byte>, value: ptr<byte>) -> i32
+extern "kernel32" fn PeekNamedPipe(h: int, buf: int, size: int, got: ptr<int>, avail: ptr<int>, left: int) -> i32
+extern "kernel32" fn TerminateProcess(h: int, code: int) -> i32
 extern "kernel32" fn GetCurrentProcessId() -> i32
 extern "kernel32" fn GetSystemInfo(info: ptr<int>)
 
@@ -84,4 +89,137 @@ fn proc_cpu_count() -> int {
     GetSystemInfo(info)
     // dwNumberOfProcessors is the 32-bit field at byte offset 32
     return info[4] & 0xFFFFFFFF
+}
+
+// A program that is running in the background. Make one with proc_start.
+struct Proc {
+    rd: int
+    hproc: int
+    hthread: int
+    finished: bool = false
+    code: int = -1
+}
+
+// Starts a command line and returns at once; stdout and stderr go into a pipe you read with p.read().
+// Err when the program could not be started.
+fn proc_start(cmdline: str) -> Result<Proc, str> {
+    flush()
+    let sa = __alloc(24) as ptr<int>
+    sa[0] = 24
+    sa[2] = 1
+    let ends = __alloc(16) as ptr<int>
+    if CreatePipe(ends, ends + 1, sa, 0) == 0 { return Result.Err("could not create a pipe") }
+    let rd = ends[0]
+    let wr = ends[1]
+    SetHandleInformation(rd, 1, 0)
+    let si = __alloc(104) as ptr<int>
+    si[0] = 104
+    si[7] = 0x100 << 32
+    si[11] = wr
+    si[12] = wr
+    let pi = __alloc(24) as ptr<int>
+    if CreateProcessA(nil, str_data(cmdline), 0, 0, 1, 0x08000000, 0, 0, si, pi) == 0 {
+        CloseHandle(rd)
+        CloseHandle(wr)
+        return Result.Err("could not start: {cmdline}")
+    }
+    CloseHandle(wr)
+    return Result.Ok(Proc{ rd: rd, hproc: pi[0], hthread: pi[1] })
+}
+
+// like proc_start, for a program and its arguments (they are quoted for you)
+fn proc_start_args(path: str, args: [str]) -> Result<Proc, str> {
+    var cmd = quote_arg(path)
+    for a in args { cmd = cmd + " " + quote_arg(a) }
+    return proc_start(cmd)
+}
+
+impl Proc {
+    // the output written since the last call ("" when there is none); never waits
+    fn read(self) -> str {
+        if self.rd == 0 { return "" }
+        var sb = str_builder()
+        let buf = __alloc_atomic(4096)
+        let got = __alloc(8) as ptr<int>
+        let avail = __alloc(8) as ptr<int>
+        loop {
+            avail[0] = 0
+            if PeekNamedPipe(self.rd, 0, 0, 0 as ptr<int>, avail, 0) == 0 {
+                self.close_pipe()
+                break
+            }
+            if avail[0] <= 0 { break }
+            got[0] = 0
+            if ReadFile(self.rd, buf, 4096, got, 0) == 0 or got[0] <= 0 { break }
+            sb.add(str_from_ptr(buf, got[0]))
+        }
+        if self.finished_now() and self.rd != 0 {
+            // the program ended: take what is left, then the pipe is done
+            avail[0] = 0
+            if PeekNamedPipe(self.rd, 0, 0, 0 as ptr<int>, avail, 0) != 0 and avail[0] > 0 {
+                got[0] = 0
+                if ReadFile(self.rd, buf, 4096, got, 0) != 0 and got[0] > 0 { sb.add(str_from_ptr(buf, got[0])) }
+            } else {
+                self.close_pipe()
+            }
+        }
+        return sb.finish()
+    }
+
+    fn close_pipe(self) {
+        if self.rd != 0 {
+            CloseHandle(self.rd)
+            self.rd = 0
+        }
+    }
+
+    fn finished_now(self) -> bool {
+        if self.finished { return true }
+        if WaitForSingleObject(self.hproc, 0) != 0 { return false }
+        let code = __alloc(8) as ptr<int>
+        GetExitCodeProcess(self.hproc, code)
+        var c = code[0] & 0xFFFFFFFF
+        if c >= 0x80000000 { c -= 0x100000000 }
+        self.code = c
+        self.finished = true
+        return true
+    }
+
+    // true until the program has ended and its output has been read
+    fn running(self) -> bool {
+        if not self.finished_now() { return true }
+        return self.rd != 0
+    }
+
+    // the exit code, or -1 while it is still running
+    fn exit_code(self) -> int {
+        if self.finished_now() { return self.code }
+        return -1
+    }
+
+    // waits for the program to end and returns (exit code, the rest of the output)
+    fn wait(self) -> (int, str) {
+        var sb = str_builder()
+        WaitForSingleObject(self.hproc, -1)
+        let buf = __alloc_atomic(4096)
+        let got = __alloc(8) as ptr<int>
+        while self.rd != 0 {
+            got[0] = 0
+            if ReadFile(self.rd, buf, 4096, got, 0) == 0 or got[0] <= 0 {
+                self.close_pipe()
+                break
+            }
+            sb.add(str_from_ptr(buf, got[0]))
+        }
+        self.finished_now()
+        return (self.code, sb.finish())
+    }
+
+    // stops the program
+    fn kill(self) {
+        if not self.finished_now() { TerminateProcess(self.hproc, 1) }
+        WaitForSingleObject(self.hproc, 2000)
+        self.finished_now()
+        self.close_pipe()
+    }
 }

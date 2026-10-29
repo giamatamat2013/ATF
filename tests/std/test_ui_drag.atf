@@ -1,0 +1,64 @@
+// tests for drag and drop and auto-scroll in std/ui
+import "std/ui"
+
+struct Board {
+    left: [str]
+    right: [str]
+    over: str = ""
+}
+
+fn chip(label: str) -> Node {
+    return text(label).padding(8).height(30).draggable(label)
+}
+
+fn view(b: Board) -> Node {
+    let l: [Node] = []
+    for s in b.left { l.push(chip(s)) }
+    let r: [Node] = []
+    for s in b.right { r.push(text(s).height(30)) }
+    b.over = ui_drag_over()
+    return row([
+        column(l).width(200).height(400).key("left").on_drop(|p| { b.left.push(p) }),
+        column(r).width(200).height(400).key("right").on_drop(|p| {
+            b.right.push(p)
+            b.left = b.left.filter(|x| x != p)
+        }),
+    ])
+}
+
+fn main() {
+    let b = Board{ left: ["a", "b", "c"], right: [] }
+    ui_headless(|| view(b), 420, 420)
+
+    // a press without moving is not a drag
+    ui_click(10, 15)
+    println("click:", b.left, b.right, ui_dragging() == "")
+
+    // drag "b" (second row) to the right column
+    ui_drag(10, 45, 300, 100)
+    println("dropped:", b.left, b.right)
+
+    // dropped on nothing: nothing happens
+    ui_drag(10, 15, 410, 415)
+    println("outside:", b.left, b.right)
+
+    // while dragging, the target under the pointer is known and the payload is set
+    ui_mouse_down(10, 15)
+    ui_mouse_move(300, 200)
+    println("during:", ui_dragging(), ui_drag_over())
+    ui_mouse_move(100, 200)
+    println("over left:", ui_drag_over())
+    ui_mouse_up(100, 200)
+    println("after:", ui_dragging() == "", b.left, b.right)
+
+    // dragging near the bottom edge of a scroll area scrolls it
+    let rows: [Node] = []
+    for i in 0..40 { rows.push(text("row {i}").height(30).draggable("row {i}")) }
+    ui_headless(|| scroll(rows).height(200).width(200), 220, 220)
+    ui_mouse_down(10, 15)
+    ui_mouse_move(10, 195)
+    var moved = 0
+    for v in ui_scrolls.values() { moved += v }
+    ui_mouse_up(10, 195)
+    println("auto-scroll:", moved > 0)
+}

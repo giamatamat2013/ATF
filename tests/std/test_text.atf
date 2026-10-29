@@ -28,4 +28,5 @@ fn main() {
 
     print(text_table([["name", "qty"], ["apple", "3"], ["kiwi", "12"]]))
     print(text_table([["name", "qty"], ["apple", "3"], ["kiwi", "12"]], right: true))
+    println(text_braces("x") + " " + TEXT_LBRACE + TEXT_RBRACE)
 }

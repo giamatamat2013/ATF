@@ -1,4 +1,4 @@
-atf "1.2.0"
+atf "1.3.0"
 
 // A very basic Minecraft-like sandbox (2D side view).
 // A/D or arrows: walk, W/Space/Up: jump, 1-5: pick a block.

@@ -7,7 +7,16 @@
 //   text_template("Hi ${name}!", {"name": "Ana"}) == "Hi Ana!"
 //   print(text_table([["name", "age"], ["Ana", "7"]]))
 //
+//   text_braces("x")                       == "\{x\}"     (programs that write code)
+//
 // Text is bytes: the case functions change only ASCII letters, and widths count bytes.
+
+// the characters { and }, for programs that write code or templates ("{" in a string starts an interpolation)
+const TEXT_LBRACE = "\{"
+const TEXT_RBRACE = "\}"
+
+// wraps text in curly braces
+fn text_braces(s: str) -> str { return TEXT_LBRACE + s + TEXT_RBRACE }
 
 fn text_is_lower_byte(c: byte) -> bool { return c >= 'a' and c <= 'z' }
 fn text_is_upper_byte(c: byte) -> bool { return c >= 'A' and c <= 'Z' }

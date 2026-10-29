@@ -569,6 +569,9 @@ struct Node {
     drag_f: fn(float)? = nil
     draw_f: fn(Canvas)? = nil
     ptr_f: fn(int, int)? = nil
+    drag_payload: str = ""
+    drag_label: str = ""
+    drop_f: fn(str)? = nil
     ovl: int = 0
     opens: bool = false
     blocks: bool = false
@@ -653,6 +656,15 @@ impl Node {
     }
     // while the mouse is pressed on the element: f(position 0.0 .. 1.0 across its width)
     fn on_drag(self, f: fn(float)) -> Node { self.drag_f = f; return self }
+    // drag and drop: pressing this element and moving the mouse picks up `payload`; a small label (the
+    // label, or the payload) follows the pointer and the element under the pointer that has .on_drop(f) gets f(payload)
+    fn draggable(self, payload: str, label: str = "") -> Node {
+        self.drag_payload = payload
+        self.drag_label = if label.len() > 0 { label } else { payload }
+        return self
+    }
+    // the place where a dragged element can be dropped; give it a .key(..) to find out in ui_drag_over() that it is the target
+    fn on_drop(self, f: fn(str)) -> Node { self.drop_f = f; return self }
     // text box: f runs when Enter is pressed
     fn on_submit(self, f: fn()) -> Node { self.submit_f = f; return self }
     // text box: grey text shown while it is empty
@@ -1845,6 +1857,8 @@ fn ui_measure(n: Node, avail_w: int) -> (int, int) {
             if k > 1 { ch += gap * (k - 1) }
         }
     }
+    // a scroll box that grows takes the space it is given, not the height of its content (so it can scroll)
+    if n.content == "\x01scroll" and s.has & UI_B_GROW != 0 { ch = 0 }
     var w = if fw >= 0 { fw } else { ui_clamp_w(s, min(cw + ph, max(limit, ph))) }
     if fw < 0 and n.kind != UI_K_TEXT and n.kind != UI_K_TEXTBOX and n.kind != UI_K_TEXTAREA { w = ui_clamp_w(s, cw + ph) }
     let fh = ui_fixed_h(s, UI_BIG)
@@ -2872,6 +2886,14 @@ fn ui_render(root: Node, w: int, h: int) {
     ui_fill_rect(0, 0, w, h, UI_PAGE)
     ui_paint(root, UI_INK)
     for o in ui_overlays { ui_paint(o, UI_INK) }
+    if ui_dnd_on and ui_mx >= 0 {
+        let f = ui_font(UiText())
+        let tw = ui_text_w(f, ui_dnd_label)
+        let bx = ui_mx + ui_sc(12)
+        let by = ui_my + ui_sc(8)
+        ui_fill_rect(bx, by, tw + ui_sc(20), f.height + ui_sc(12), rgba(30, 41, 59, 0.88))
+        ui_draw_mask(ui_text_mask(f, ui_dnd_label), bx + ui_sc(10), by + ui_sc(6), WHITE)
+    }
 }
 
 // ---------------------------------------------------------------- the window
@@ -3220,6 +3242,50 @@ fn ui_toggle_popup(key: str) {
     if not was { ui_open[key] = true }
 }
 
+// ---- drag and drop
+var ui_dnd_on = false          // an element is being dragged
+var ui_dnd_payload = ""
+var ui_dnd_label = ""
+var ui_dnd_x0 = 0
+var ui_dnd_y0 = 0
+
+// the payload of the element being dragged, "" when nothing is dragged
+fn ui_dragging() -> str { return if ui_dnd_on { ui_dnd_payload } else { "" } }
+
+// the .key(..) of the drop target under the pointer while dragging ("" when there is none)
+fn ui_drag_over() -> str {
+    if not ui_dnd_on { return "" }
+    for c in ui_chain(ui_mx, ui_my) {
+        if c.drop_f != nil { return c.keyname }
+    }
+    return ""
+}
+
+// scrolls the scroll area under the pointer when the pointer is near its top or bottom edge
+fn ui_dnd_autoscroll() {
+    let edge = ui_sc(36)
+    let step = ui_sc(14)
+    for c in ui_chain(ui_mx, ui_my) {
+        if c.content == "scroll" {
+            var d = 0
+            if ui_my < c.y + edge { d = -step } else if ui_my > c.y + c.h - edge { d = step }
+            if d != 0 {
+                let sy = ui_state_sy(c.path)
+                ui_scrolls[c.path] = max(sy + d, 0)
+                ui_layout()
+            }
+            return
+        }
+    }
+}
+
+// called on every timer tick while dragging: keeps scrolling when the pointer rests near an edge
+fn ui_dnd_tick() {
+    if not ui_dnd_on { return }
+    ui_dnd_autoscroll()
+    ui_rebuild()
+}
+
 fn ui_mouse_down(x: int, y: int) {
     ui_mx = x
     ui_my = y
@@ -3266,8 +3332,10 @@ fn ui_mouse_down(x: int, y: int) {
             ui_press = c.path
             break
         }
-        if c.click_f != nil or c.drag_f != nil or c.ptr_f != nil or c.opens {
+        if c.click_f != nil or c.drag_f != nil or c.ptr_f != nil or c.opens or c.drag_payload.len() > 0 {
             ui_press = c.path
+            ui_dnd_x0 = x
+            ui_dnd_y0 = y
             if c.drag_f != nil {
                 ui_drag_to(c, x)
                 ui_rebuild()
@@ -3306,6 +3374,21 @@ fn ui_mouse_up(x: int, y: int) {
     if ui_hwnd != 0 { ReleaseCapture() }
     let was = ui_press
     ui_press = ""
+    if ui_dnd_on {
+        let payload = ui_dnd_payload
+        ui_dnd_on = false
+        ui_dnd_payload = ""
+        for c in ui_chain(x, y) {
+            if let f = c.drop_f {
+                f(payload)
+                break
+            }
+        }
+        ui_rebuild()
+        ui_update_hover()
+        ui_invalidate()
+        return
+    }
     if was.len() > 0 {
         for c in ui_chain(x, y) {
             if c.path == was {
@@ -3331,6 +3414,19 @@ fn ui_mouse_move(x: int, y: int) {
     ui_my = y
     if ui_press.len() > 0 and ui_root != nil {
         if let n = ui_find(ui_root!, ui_press) {
+            if n.drag_payload.len() > 0 {
+                if not ui_dnd_on and (max(x - ui_dnd_x0, ui_dnd_x0 - x) >= 5 or max(y - ui_dnd_y0, ui_dnd_y0 - y) >= 5) {
+                    ui_dnd_on = true
+                    ui_dnd_payload = n.drag_payload
+                    ui_dnd_label = n.drag_label
+                }
+                if ui_dnd_on {
+                    ui_dnd_autoscroll()
+                    ui_rebuild()
+                    ui_invalidate()
+                    return
+                }
+            }
             if n.drag_f != nil {
                 ui_drag_to(n, x)
                 ui_rebuild()
@@ -3837,7 +3933,7 @@ fn ui_paint_window() {
         SetDIBitsToDevice(dc, 0, 0, ui_winw, ui_winh, 0, 0, 0, ui_winh, packed, ui_bmi(ui_winw, -ui_winh), 0)
     }
     EndPaint(ui_hwnd, ps)
-    if ui_animating or ui_view_anim { SetTimer(ui_hwnd, 1, 16, 0) } else { KillTimer(ui_hwnd, 1) }
+    if ui_animating or ui_view_anim or ui_dnd_on { SetTimer(ui_hwnd, 1, 16, 0) } else { KillTimer(ui_hwnd, 1) }
 }
 
 fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
@@ -3905,7 +4001,7 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
     } else if m == 275 {
         let id = wp
         if id == 1 {
-            if ui_view_anim { ui_rebuild() }
+            if ui_dnd_on { ui_dnd_tick() } else if ui_view_anim { ui_rebuild() }
             ui_invalidate()
         } else if id == 2 {
             if ui_focus.len() > 0 {
@@ -4366,8 +4462,8 @@ fn ui_web_pump() {
         ui_caret_on = not ui_caret_on
         ui_dirty = true
     }
-    if ui_view_anim { ui_rebuild() }
-    if ui_animating or ui_view_anim { ui_dirty = true }
+    if ui_dnd_on { ui_dnd_tick() } else if ui_view_anim { ui_rebuild() }
+    if ui_animating or ui_view_anim or ui_dnd_on { ui_dirty = true }
     while ui_web_due.len() < ui_timers.len() {
         ui_web_due.push(now + ui_timer_ms[ui_web_due.len()])
     }

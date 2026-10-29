@@ -16,6 +16,24 @@ fn main() -> int {
     let big = proc_output("cmd /c for /l %i in (1,1,2000) do @echo line %i")
     println("big:", big.0, big.1.lines().len())
 
+    // a program in the background: start returns at once, read never blocks
+    let bg = proc_start("cmd /c echo first& ping -n 2 127.0.0.1 >nul& echo last").unwrap()
+    var seen = ""
+    var polls = 0
+    while bg.running() {
+        seen = seen + bg.read()
+        polls += 1
+    }
+    seen = seen + bg.read()
+    println("background:", bg.exit_code(), seen.lines())
+    let slow = proc_start("cmd /c ping -n 30 127.0.0.1 >nul").unwrap()
+    println("still running:", slow.running(), slow.exit_code())
+    slow.kill()
+    println("killed:", slow.running(), slow.exit_code() != 0)
+    let w = proc_start_args("cmd", ["/c", "echo", "waited"]).unwrap().wait()
+    println("wait:", w.0, w.1.trim())
+    println("bad start:", proc_start("no_such_program_xyz").is_err())
+
     println("setenv:", proc_setenv("ATF_TEST_VAR", "abc"), getenv("ATF_TEST_VAR") ?? "nil")
     println("child sees it:", proc_output("cmd /c echo %ATF_TEST_VAR%").1.trim())
     println("unsetenv:", proc_unsetenv("ATF_TEST_VAR"), getenv("ATF_TEST_VAR") == nil)

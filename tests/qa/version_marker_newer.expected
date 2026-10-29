@@ -1,5 +1,5 @@
 COMPILE ERROR
-warning: this file was written for ATF 9.0.0, but this compiler is ATF 1.2.0; it may not compile
+warning: this file was written for ATF 9.0.0, but this compiler is ATF 1.3.0; it may not compile
 error: type mismatch: expected int but found str
   --> version_marker_newer.atf:3:18
  3 |     let n: int = "not a number"

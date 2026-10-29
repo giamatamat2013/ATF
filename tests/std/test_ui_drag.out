@@ -1,0 +1,7 @@
+click: ["a", "b", "c"] [] true
+dropped: ["a", "c"] ["b"]
+outside: ["a", "c"] ["b"]
+during: a right
+over left: left
+after: true ["a", "c", "a"] ["b"]
+auto-scroll: true

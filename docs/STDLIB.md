@@ -2197,10 +2197,28 @@ let r = proc_output("cmd /c echo hi")
 println(r.0, r.1)                     // 0 "hi\r\n"
 proc_setenv("MODE", "fast")
 println(proc_pid(), proc_cpu_count())
+
+let p = proc_start("cmd /c ping -n 3 127.0.0.1").unwrap()   // does not wait
+while p.running() { show(p.read()); ... }                   // read() never blocks
 ```
 
 run_command and run_process (the prelude) run a program with its output on the console;
 proc_output and proc_output_args capture it as text instead.
+
+**Types**
+
+A program that is running in the background. Make one with proc_start.
+
+```text
+struct Proc {
+    rd: int
+    hproc: int
+    hthread: int
+    finished: bool = false
+    code: int = -1
+}
+```
+
 
 **Functions**
 
@@ -2210,6 +2228,18 @@ proc_output and proc_output_args capture it as text instead.
 - `fn proc_unsetenv(name: str) -> bool` - removes an environment variable
 - `fn proc_pid() -> int` - the id of this process
 - `fn proc_cpu_count() -> int` - the number of logical processors
+- `fn proc_start(cmdline: str) -> Result<Proc, str>` - Starts a command line and returns at once; stdout and stderr go into a pipe you read with p.read(). Err when the program could not be started.
+- `fn proc_start_args(path: str, args: [str]) -> Result<Proc, str>` - like proc_start, for a program and its arguments (they are quoted for you)
+
+**Methods of `Proc`**
+
+- `.read() -> str` - the output written since the last call ("" when there is none); never waits
+- `.close_pipe()`
+- `.finished_now() -> bool`
+- `.running() -> bool` - true until the program has ended and its output has been read
+- `.exit_code() -> int` - the exit code, or -1 while it is still running
+- `.wait() -> (int, str)` - waits for the program to end and returns (exit code, the rest of the output)
+- `.kill()` - stops the program
 
 ## std/random
 
@@ -2639,12 +2669,20 @@ text_snake_case("HelloBigWorld")       == "hello_big_world"
 text_wrap("the quick brown fox", 10)   == ["the quick", "brown fox"]
 text_template("Hi ${name}!", {"name": "Ana"}) == "Hi Ana!"
 print(text_table([["name", "age"], ["Ana", "7"]]))
+
+text_braces("x")                       == "\{x\}"     (programs that write code)
 ```
 
 Text is bytes: the case functions change only ASCII letters, and widths count bytes.
 
+**Constants**
+
+- `TEXT_LBRACE = "\{"` - the characters { and }, for programs that write code or templates ("{" in a string starts an interpolation)
+- `TEXT_RBRACE = "\}"`
+
 **Functions**
 
+- `fn text_braces(s: str) -> str` - wraps text in curly braces
 - `fn text_is_lower_byte(c: byte) -> bool`
 - `fn text_is_upper_byte(c: byte) -> bool`
 - `fn text_is_alnum_byte(c: byte) -> bool`
@@ -2956,6 +2994,8 @@ struct UiColorTween {
 - `.style(st: Style) -> Node` - add the properties of a reusable style
 - `.on_click(f: fn()) -> Node` - run f when the element is clicked (the view is rebuilt afterwards)
 - `.on_drag(f: fn(float)) -> Node` - while the mouse is pressed on the element: f(position 0.0 .. 1.0 across its width)
+- `.draggable(payload: str, label: str = "") -> Node` - drag and drop: pressing this element and moving the mouse picks up `payload`; a small label (the label, or the payload) follows the pointer and the element under the pointer that has .on_drop(f) gets f(payload)
+- `.on_drop(f: fn(str)) -> Node` - the place where a dragged element can be dropped; give it a .key(..) to find out in ui_drag_over() that it is the target
 - `.on_submit(f: fn()) -> Node` - text box: f runs when Enter is pressed
 - `.placeholder(s: str) -> Node` - text box: grey text shown while it is empty
 - `.password() -> Node` - text box: show dots instead of the letters

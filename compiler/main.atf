@@ -23,7 +23,7 @@ import "autoimport"
 import "lineedit"
 import "../stdlib/shell"
 
-const VERSION = "1.2.0 (self-hosted)"
+const VERSION = "1.3.0 (self-hosted)"
 const PRELUDE_SRC = include_str("../atf/stdlib/prelude.atf")
 const PRELUDE_NAME = "<std>/prelude.atf"
 

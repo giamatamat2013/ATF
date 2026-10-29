@@ -75,6 +75,13 @@ Format `FEATURE.SMALL.FIX`, always three parts, starting at `1.0.0`. The format 
 - A release that adds a feature raises the middle number and resets the last to 0 (`1.0.4` -> `1.1.0`). Only the biggest change in the release counts.
 - Any commit after a release needs a new version before the next release.
 - The version appears in `VERSION`, `atf/driver.py`, `compiler/main.atf`, `compiler/main_front.atf` and `editors/vscode/package.json`. Change all of them together; `python tests/check_version.py` fails if one differs. After changing `compiler/`, run `rebuild_compiler.cmd` and commit the new `bin/atf.exe`.
+- **A release updates every place that names the current ATF version, not only the five above.** Find them with `git grep -n "<old version>"`. Change only what means "the current version of ATF itself":
+  - `editors/vscode/snippets/atf.json`: the `atf "X.Y.Z"` snippet for new programs.
+  - `tests/qa/version_marker_newer.expected`: the compiler version in the warning.
+  - Do not touch an `atf "X.Y.Z"` declaration in a program (`examples/`, `tests/`, tutorial and README samples, the skill's samples) unless that program was really changed to need the new version. The declaration says which version the file was written for; an older one still compiles. The printed text of a sample (`written for ATF 1.2.0`) stays in step with the sample.
+  - Also leave `docs/release-notes-v*.md`, `tools/release_status/archive/`, generated files such as `tests/qa/_actual/`, and version numbers that are only data (`std/semver` samples and tests).
+  - After the change, `python tests/check_version.py`, `python tests/check_docs.py` and `python tests/qa/run_qa.py` must pass.
+- **Right after a release is published, move everything to the next version so the repository is ready for the next change.** The next version is the fix number plus 1 (`1.3.0` -> `1.3.1`, with the roll-over rules above). Change the five version places and the places in the list above in one commit ("Prepare vX.Y.Z"), rebuild with `rebuild_compiler.cmd`, run `python tests/check_version.py`, and push. If the next change is a feature, raise the middle number when that change is released (the same way, by editing all places again). Never leave `VERSION` equal to a version that is already released.
 - No pre-releases.
 
 ### Release notes
@@ -112,6 +119,8 @@ A live local page that shows percent done, what is happening now, the pipeline s
 
 1. Update the dashboard (`todo.json`, `log.py`).
 2. Collect what goes in: `git log <last-tag>..HEAD --oneline` (and open issues). Decide the version number.
+   - Read every commit since the last release (`git log <last-tag>..HEAD --stat`, and `git diff <last-tag>..HEAD --stat`) and write the release notes from them: each feature and each fix gets a line, and nothing that is not in the commits. Commits that only touch docs, tests or tools may be summarized in one line.
+   - Decide for each example program which ATF version it needs. `git log <last-tag>..HEAD -- examples/` shows the examples that changed. An example gets `atf "X.Y.Z"` with the version where its newest feature was released (the version being released, if it uses something new in this release); an example that uses nothing newer keeps its old declaration or none. Never raise a declaration just because the release number rose.
 3. Bump the version in all five places and write the release notes.
 4. Rebuild with `rebuild_compiler.cmd` and check the real compiler runs (see rule 1).
 5. Run the local tests with the watcher.
@@ -122,6 +131,7 @@ A live local page that shows percent done, what is happening now, the pipeline s
 10. On success check that the Release has its 2 assets: `atf-X.Y.Z-windows-x64.zip` and `SHA256SUMS.txt`.
 11. Comment the version on every issue the release fixed and close it.
 12. Finish the dashboard: `todo.json` all `done`, a last log line.
+13. Prepare the next version: see the rule in "Version numbers" (all version places to the next fix number, rebuild, commit, push).
 
 Typical durations: tests about 5 minutes on GitHub, the whole workflow about 8 minutes.
 

@@ -4,6 +4,11 @@ stdout and stderr: 0 ["out", "err "]
 missing program: -1 ""
 args: 0 "two words"
 big: 0 2000
+background: 0 ["first", "last"]
+still running: true -1
+killed: false true
+wait: 0 waited
+bad start: true
 setenv: true abc
 child sees it: abc
 unsetenv: true true

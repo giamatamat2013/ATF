@@ -2750,7 +2750,10 @@ notes.tar.gz notes a\b.txt
 
 * `std/fs` lists, copies, moves and removes files and folders (`fs_list_dir`, `fs_make_dirs`, `fs_remove_all`,
   `fs_append_file`, `fs_walk`, ...). `std/process` runs a program and captures what it prints (`proc_output`), and sets
-  environment variables.
+  environment variables. `proc_start(cmdline)` (or `proc_start_args(path, args)`) starts a program in the background and
+  returns `Result<Proc, str>`: `p.read()` gives what it printed so far without waiting, `p.running()`, `p.exit_code()`
+  (-1 while running), `p.wait()` and `p.kill()`. `std/text` has `text_braces(s)` and the constants `TEXT_LBRACE` and
+  `TEXT_RBRACE` for programs that write code.
 
 <!-- id: fs-process -->
 ```atf
@@ -3385,6 +3388,43 @@ fn main() {
     ui_run("Exporter", 300, 200, || column([text("Press Ctrl+S")]).center().grow())
 }
 ```
+
+#### Drag and drop and scrolling
+
+`.draggable(payload, label)` makes a node something the user can pick up (a text `payload` says what it is, `label` is
+shown next to the pointer). `.on_drop(fn(str))` makes a node a place to drop on; it gets the payload. Give drop targets
+a `.key("name")` and `ui_drag_over()` returns the key under the pointer, so the view can highlight it. `ui_dragging()` is true
+while something is held. A press that moves less than 5 pixels is still a click. While dragging near the edge of a
+`scroll` box it scrolls by itself. A `scroll(...).grow()` fills the space it is given (it no longer takes the height
+of its content), so its content scrolls with the mouse wheel.
+
+```atf nocheck
+import "std/ui"
+
+struct App { left: [str], right: [str] }
+
+fn column_of(app: App, items: [str], other: [str], key: str) -> Node {
+    let kids: [Node] = []
+    for it in items { kids.push(text(it).padding(8).bg(hex("#e2e8f0")).radius(6).draggable(it, it)) }
+    var box = column(kids).gap(6).padding(10).width(160).min_height(200).key(key).bg(WHITE).radius(8)
+        .on_drop(|p| {
+            items.push(p)
+            other.remove(other.index_of(p) ?? 0)
+        })
+    if ui_drag_over() == key { box = box.border(3, hex("#fde047")) }
+    return box
+}
+
+fn main() {
+    let app = App{ left: ["a", "b", "c"], right: [] }
+    ui_run("Drag", 420, 300, || row([
+        column_of(app, app.left, app.right, "left"),
+        column_of(app, app.right, app.left, "right"),
+    ]).gap(12).padding(16))
+}
+```
+
+`tools/blocks.atf` and `tools/blocks_kids.atf` are block-programming editors written with this.
 
 #### Testing a program without a window
 

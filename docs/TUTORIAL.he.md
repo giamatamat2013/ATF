@@ -2727,7 +2727,7 @@ notes.tar.gz notes a\b.txt
 ```
 
 * `std/fs` מציג, מעתיק, מעביר ומוחק קבצים ותיקיות (`fs_list_dir`, `fs_make_dirs`, `fs_remove_all`,
-  `fs_append_file`, `fs_walk` ועוד). `std/process` מריץ תוכנית ותופס את מה שהיא מדפיסה (`proc_output`), וקובע משתני סביבה.
+  `fs_append_file`, `fs_walk` ועוד). `std/process` מריץ תוכנית ותופס את מה שהיא מדפיסה (`proc_output`), וקובע משתני סביבה. `proc_start(cmdline)` (או `proc_start_args(path, args)`) מפעיל תוכנית ברקע ומחזיר `Result<Proc, str>`: `p.read()` נותן את מה שהודפס עד עכשיו בלי לחכות, וגם `p.running()`, `p.exit_code()` (‎-1 בזמן ריצה), `p.wait()` ו-`p.kill()`. ב-`std/text` יש `text_braces(s)` והקבועים `TEXT_LBRACE` ו-`TEXT_RBRACE` לתוכניות שכותבות קוד.
 
 ```atf
 import "std/fs"
@@ -3327,6 +3327,42 @@ fn main() {
     ui_run("Exporter", 300, 200, || column([text("Press Ctrl+S")]).center().grow())
 }
 ```
+
+#### גרירה, שחרור וגלילה
+
+`.draggable(payload, label)` הופך רכיב לדבר שאפשר להרים (`payload` הוא טקסט שאומר מה זה, `label` מוצג ליד המצביע).
+`.on_drop(fn(str))` הופך רכיב למקום לשחרר עליו, והוא מקבל את ה-payload. כדאי לתת ליעד `.key("name")`:
+`ui_drag_over()` מחזיר את המפתח שמתחת למצביע, ואפשר להדגיש אותו. `ui_dragging()` נכון כל עוד משהו מוחזק.
+לחיצה שזזה פחות מ-5 פיקסלים נשארת לחיצה. כשגוררים ליד קצה של `scroll` הוא גולל לבד.
+`scroll(...).grow()` ממלא את המקום שנתנו לו (הוא כבר לא לוקח את גובה התוכן), ולכן התוכן שלו נגלל בגלגלת העכבר.
+
+```atf nocheck
+import "std/ui"
+
+struct App { left: [str], right: [str] }
+
+fn column_of(app: App, items: [str], other: [str], key: str) -> Node {
+    let kids: [Node] = []
+    for it in items { kids.push(text(it).padding(8).bg(hex("#e2e8f0")).radius(6).draggable(it, it)) }
+    var box = column(kids).gap(6).padding(10).width(160).min_height(200).key(key).bg(WHITE).radius(8)
+        .on_drop(|p| {
+            items.push(p)
+            other.remove(other.index_of(p) ?? 0)
+        })
+    if ui_drag_over() == key { box = box.border(3, hex("#fde047")) }
+    return box
+}
+
+fn main() {
+    let app = App{ left: ["a", "b", "c"], right: [] }
+    ui_run("Drag", 420, 300, || row([
+        column_of(app, app.left, app.right, "left"),
+        column_of(app, app.right, app.left, "right"),
+    ]).gap(12).padding(16))
+}
+```
+
+`tools/blocks.atf` ו-`tools/blocks_kids.atf` הם עורכי תכנות בבלוקים שנכתבו עם זה.
 
 #### בדיקת תוכנית בלי חלון
 

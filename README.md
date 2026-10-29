@@ -63,18 +63,18 @@ total: 5.25
   `ui_run` and the compiler imports its module itself (a hand-written `import "std/json"` still works). Modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), sounds (`std/sound`), BMP pictures (`std/image`), time-sliced background jobs (`std/task`), lazy iterators (`std/iter`, and
   `for` loops over any type with `next()`), program settings (`std/app`),
-  regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
+  regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs, also in the background with `proc_start` (`std/process`),
   XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers and UDP messages (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`), YAML files (`std/yaml`), whole numbers of any size (`std/bigint`), encryption, secure random bytes and keys from passwords (`std/crypto`), WebSocket clients and servers (`std/websocket`),
   file name patterns (`std/glob`), a test framework with property tests on random values (`std/test`),
   colors, progress bars and boxes in the console (`std/term`), Markdown to HTML (`std/markdown`),
   version numbers and rules like `^1.2` (`std/semver`), the commands of `atf shell` from a program (`std/shell`), questions to Claude, Anthropic's AI model (`std/ai`),
   and the Python-style tools for whole programs:
   command-line parsing (`std/args`, like argparse), leveled logging (`std/log`), text helpers (`std/text`:
-  wrap, title, snake_case, templates, tables), number theory and statistics (`std/math`), and algorithms from
+  wrap, title, snake_case, templates, tables, `text_braces` for programs that write code), number theory and statistics (`std/math`), and algorithms from
   C++, itertools and JavaScript (`std/algo`: binary search, permutations, combinations, group_by, flatten, set operations), Python's `random` extras
   (`std/random`: sample, weighted choice, gauss, UUID) and C++ bit tricks (`std/bits`: rotate, reverse, power of two, Gray code).
   Python method names work next to the ATF ones (`strip`, `startswith`, `endswith`, `ljust`, `rjust`, `zfill`, `isdigit`, `splitlines`, `append`, `update`, `discard`).
-- **Windows and design.** `std/ui` builds graphical programs the way HTML and CSS do, written as ATF code: a view function
+- **Windows and design.** `std/ui` builds graphical programs the way HTML and CSS do, written as ATF code, with drag and drop (`.draggable`, `.on_drop`) and scroll boxes that scroll by themselves while dragging (`tools/blocks.atf` and `tools/blocks_kids.atf` are block-programming editors made with it): a view function
   returns a tree of elements (`column`, `row`, `text`, `button`, `textbox`, ...), styled with chained methods
   (`.padding(8, 16).bg(hex("#4f46e5")).radius(12).shadow(..)`). It supports flexbox and grid layout, gradients, soft shadows,
   hover styles with transitions, reusable styles, images, scrolling, right-to-left text and high-DPI screens.

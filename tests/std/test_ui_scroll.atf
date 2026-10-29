@@ -1,0 +1,25 @@
+// a scroll box that grows takes the space it is given and scrolls its content
+import "std/ui"
+
+fn view() -> Node {
+    let items: [Node] = []
+    for i in 0..30 { items.push(text("row {i}").height(30)) }
+    return column([
+        text("title").height(30),
+        scroll(items).grow(),
+    ])
+}
+
+fn offset() -> int {
+    var m = 0
+    for v in ui_scrolls.values() { m = max(m, v) }
+    return m
+}
+
+fn main() {
+    ui_headless(|| view(), 300, 200)
+    println("first visible: {ui_click_text("row 0")}")
+    println("offset before: {offset()}")
+    for _ in 0..40 { ui_mouse_move(100, 100); ui_wheel(-120) }
+    println("offset after (content 900 - box 170): {offset()}")
+}

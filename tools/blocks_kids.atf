@@ -1,0 +1,507 @@
+// blocks_kids.atf - block programming for kids, written in ATF (English, big buttons, few blocks).
+// Drag a block from the left into the program (or click it), drag blocks to move them, fill in the boxes
+// and press the green button.
+// "say" blocks take plain text: no quotes or braces to remember.
+// Run:   atf run tools/blocks_kids.atf
+
+import "std/ui"
+import "std/process"
+import "std/text"
+
+struct Block {
+    id: int = 0
+    kind: str
+    a: str = ""
+    b: str = ""
+    c: str = ""
+    body: [Block]
+    other: [Block]
+}
+
+struct Editor {
+    root: [Block]
+    target: [Block]
+    proc: Proc? = nil
+    output: str = "Press the green button to run."
+    status: str = ""
+}
+
+let LB = TEXT_LBRACE
+let RB = TEXT_RBRACE
+var blk_next_id = 1
+
+fn mk(kind: str, a: str, b: str, c: str) -> Block {
+    var body: [Block] = []
+    var other: [Block] = []
+    let id = blk_next_id
+    blk_next_id += 1
+    return Block{ id: id, kind: kind, a: a, b: b, c: c, body: body, other: other }
+}
+
+// ---- moving blocks ----
+
+fn find_owner(list: [Block], id: int) -> [Block]? {
+    for b in list {
+        if b.id == id { return list }
+    }
+    for b in list {
+        if let f = find_owner(b.body, id) { return f }
+        if let f = find_owner(b.other, id) { return f }
+    }
+    return nil
+}
+
+fn holds_list(b: Block, list: [Block]) -> bool {
+    if same(b.body, list) or same(b.other, list) { return true }
+    for c in b.body { if holds_list(c, list) { return true } }
+    for c in b.other { if holds_list(c, list) { return true } }
+    return false
+}
+
+fn move_to(app: Editor, id: int, list: [Block], at: int) {
+    let owner = find_owner(app.root, id)
+    if owner == nil { return }
+    let src = owner!
+    var idx = 0
+    for i in 0..src.len() {
+        if src[i].id == id { idx = i }
+    }
+    let b = src[idx]
+    if holds_list(b, list) { return }
+    src.remove(idx)
+    var pos = at
+    if same(src, list) and idx < pos { pos -= 1 }
+    list.insert(min(pos, list.len()), b)
+}
+
+fn drop_into(app: Editor, list: [Block], at: int, payload: str) {
+    if payload.starts_with("new:") {
+        list.insert(min(at, list.len()), new_block(payload[4..]))
+        app.target = list
+    } else if payload.starts_with("move:") {
+        move_to(app, payload[5..].parse_int() ?? -1, list, at)
+    }
+}
+
+fn new_block(kind: str) -> Block {
+    return match kind {
+        "say" => mk(kind, "Hello!", "", "")
+        "print" => mk(kind, "1 + 2", "", "")
+        "input" => mk(kind, "name", "\"Name: \"", "")
+        "comment" => mk(kind, "note", "", "")
+        "let" => mk(kind, "x", "0", "")
+        "var" => mk(kind, "points", "0", "")
+        "set" => mk(kind, "points", "points + 1", "")
+        "change" => mk(kind, "points", "1", "")
+        "if" => mk(kind, "points > 0", "", "")
+        "ifelse" => mk(kind, "points > 0", "", "")
+        "while" => mk(kind, "points < 10", "", "")
+        "repeat" => mk(kind, "3", "", "")
+        "for_range" => mk(kind, "i", "0", "10")
+        "for_each" => mk(kind, "x", "items", "")
+        "break" => mk(kind, "", "", "")
+        "continue" => mk(kind, "", "", "")
+        "fn" => mk(kind, "my_func", "", "")
+        "call" => mk(kind, "my_func()", "", "")
+        "return" => mk(kind, "", "", "")
+        _ => mk(kind, "", "", "")
+    }
+}
+
+// "$hint" is an input field, anything else is a label
+fn parts(kind: str) -> [str] {
+    return match kind {
+        "say" => ["say", "$text"]
+        "print" => ["show", "$value"]
+        "input" => ["ask", "$name", "then", "$question"]
+        "let" => ["create", "$name", "=", "$value"]
+        "var" => ["variable", "$name", "=", "$value"]
+        "set" => ["put in", "$name", "the", "$value"]
+        "change" => ["add to", "$name", "the", "$amount"]
+        "if" => ["if", "$condition"]
+        "ifelse" => ["if", "$condition"]
+        "while" => ["while", "$condition"]
+        "repeat" => ["repeat", "$times", "times"]
+        "for_range" => ["count", "$name", "from", "$start", "to", "$end"]
+        "break" => ["stop"]
+        _ => ["code", "$line"]
+    }
+}
+
+fn title_of(kind: str) -> str {
+    return match kind {
+        "say" => "say"
+        "print" => "show a value"
+        "input" => "ask a question"
+        "var" => "new variable"
+        "set" => "put in variable"
+        "change" => "add to variable"
+        "if" => "if"
+        "ifelse" => "if / else"
+        "while" => "while"
+        "repeat" => "repeat"
+        "for_range" => "count from..to"
+        "break" => "stop"
+        _ => "code"
+    }
+}
+
+fn kind_color(kind: str) -> int {
+    return match kind {
+        "say" | "print" | "input" | "comment" => hex("#3b82f6")
+        "let" | "var" | "set" | "change" => hex("#d97706")
+        "if" | "ifelse" | "while" | "repeat" | "for_range" | "for_each" | "break" | "continue" => hex("#059669")
+        "fn" | "call" | "return" => hex("#7c3aed")
+        _ => hex("#64748b")
+    }
+}
+
+fn is_container(kind: str) -> bool {
+    return kind in ["if", "ifelse", "while", "repeat", "for_range", "for_each", "fn"]
+}
+
+fn get_field(b: Block, k: int) -> str {
+    if k == 0 { return b.a }
+    if k == 1 { return b.b }
+    return b.c
+}
+
+fn set_field(b: Block, k: int, s: str) {
+    if k == 0 { b.a = s } else if k == 1 { b.b = s } else { b.c = s }
+}
+
+// ---- code generation ----
+
+fn or_default(s: str, d: str) -> str {
+    if s.trim().len() == 0 { return d }
+    return s.trim()
+}
+
+fn esc(s: str) -> str {
+    return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("{", "\{")
+}
+
+fn gen_list(list: [Block], ind: int, out: [str]) {
+    let pad = " " * (4 * ind)
+    for b in list {
+        let a = b.a.trim()
+        match b.kind {
+            "say" => out.push("{pad}println(\"{esc(b.a)}\")")
+            "print" => out.push("{pad}println({or_default(b.a, "0")})")
+            "input" => out.push("{pad}let {or_default(a, "name")} = input({or_default(b.b, "\"\"")})")
+            "comment" => out.push("{pad}// {b.a}")
+            "let" => out.push("{pad}let {or_default(a, "x")} = {or_default(b.b, "0")}")
+            "var" => out.push("{pad}var {or_default(a, "n")} = {or_default(b.b, "0")}")
+            "set" => out.push("{pad}{or_default(a, "n")} = {or_default(b.b, "0")}")
+            "change" => out.push("{pad}{or_default(a, "n")} += {or_default(b.b, "1")}")
+            "break" => out.push("{pad}break")
+            "continue" => out.push("{pad}continue")
+            "call" => out.push("{pad}{b.a}")
+            "return" => out.push(if a.len() > 0 { "{pad}return {a}" } else { "{pad}return" })
+            "if" => {
+                out.push("{pad}if {or_default(a, "true")} {LB}")
+                gen_list(b.body, ind + 1, out)
+                out.push("{pad}{RB}")
+            }
+            "ifelse" => {
+                out.push("{pad}if {or_default(a, "true")} {LB}")
+                gen_list(b.body, ind + 1, out)
+                out.push("{pad}{RB} else {LB}")
+                gen_list(b.other, ind + 1, out)
+                out.push("{pad}{RB}")
+            }
+            "while" => {
+                out.push("{pad}while {or_default(a, "true")} {LB}")
+                gen_list(b.body, ind + 1, out)
+                out.push("{pad}{RB}")
+            }
+            "repeat" => {
+                out.push("{pad}for _r in 0..{or_default(a, "1")} {LB}")
+                gen_list(b.body, ind + 1, out)
+                out.push("{pad}{RB}")
+            }
+            "for_range" => {
+                out.push("{pad}for {or_default(a, "i")} in {or_default(b.b, "0")}..{or_default(b.c, "10")} {LB}")
+                gen_list(b.body, ind + 1, out)
+                out.push("{pad}{RB}")
+            }
+            "for_each" => {
+                out.push("{pad}for {or_default(a, "x")} in {or_default(b.b, "items")} {LB}")
+                gen_list(b.body, ind + 1, out)
+                out.push("{pad}{RB}")
+            }
+            "fn" => {
+                var head = "{pad}fn {or_default(a, "my_func")}({b.b.trim()})"
+                if b.c.trim().len() > 0 { head = head + " -> " + b.c.trim() }
+                out.push(head + " {LB}")
+                gen_list(b.body, ind + 1, out)
+                out.push("{pad}{RB}")
+            }
+            _ => out.push("{pad}{b.a}")
+        }
+    }
+}
+
+fn generate(root: [Block]) -> str {
+    let out: [str] = []
+    let loose: [Block] = []
+    var has_main = false
+    for b in root {
+        if b.kind == "fn" {
+            if b.a.trim() == "main" { has_main = true }
+            gen_list([b], 0, out)
+            out.push("")
+        } else {
+            loose.push(b)
+        }
+    }
+    if loose.len() > 0 or not has_main {
+        out.push("fn main() {LB}")
+        gen_list(loose, 1, out)
+        out.push(RB)
+    }
+    return "\n".join(out)
+}
+
+// ---- saving ----
+
+fn clean(s: str) -> str {
+    return s.replace("\t", " ").replace("\n", " ")
+}
+
+fn ser(list: [Block], d: int, s: int, out: [str]) {
+    for b in list {
+        out.push("{d}\t{s}\t{b.kind}\t{clean(b.a)}\t{clean(b.b)}\t{clean(b.c)}")
+        ser(b.body, d + 1, 0, out)
+        ser(b.other, d + 1, 1, out)
+    }
+}
+
+fn deser(text: str) -> [Block] {
+    let root: [Block] = []
+    let stack: [Block] = []
+    for line in text.lines() {
+        let p = line.split("\t")
+        if p.len() < 6 { continue }
+        var d = p[0].parse_int() ?? 0
+        let s = p[1].parse_int() ?? 0
+        let b = mk(p[2], p[3], p[4], p[5])
+        if d > stack.len() { d = stack.len() }
+        while stack.len() > d { stack.pop() }
+        if d == 0 {
+            root.push(b)
+        } else {
+            let parent = stack[d - 1]
+            if s == 1 { parent.other.push(b) } else { parent.body.push(b) }
+        }
+        stack.push(b)
+    }
+    return root
+}
+
+// ---- view ----
+
+let ICON = style().font_size(18).color(rgba(255, 255, 255, 0.75)).padding(2, 6).radius(5).cursor(Cursor.Pointer)
+    .hover(style().bg(rgba(255, 255, 255, 0.25)).color(WHITE)).transition(100)
+let TOOL = style().padding(7, 14).radius(8).bg(hex("#e2e8f0")).color(hex("#0f172a")).border(0, TRANSPARENT)
+    .hover(style().bg(hex("#cbd5e1"))).transition(120)
+let PANEL = style().bg(WHITE).radius(12).padding(12).gap(8).shadow(0, 4, 16, rgba(15, 23, 42, 0.08))
+
+fn field_node(b: Block, k: int, hint: str) -> Node {
+    let w = if hint == "value" or hint == "condition" or hint == "text" or hint == "line" or hint == "question" { 220 } else { 110 }
+    return textbox(get_field(b, k), |s| { set_field(b, k, s) }).placeholder(hint).width(w).color(hex("#0f172a")).font_size(18)
+}
+
+fn move_block(list: [Block], i: int, delta: int) {
+    let j = i + delta
+    if j < 0 or j >= list.len() { return }
+    let t = list[i]
+    list[i] = list[j]
+    list[j] = t
+}
+
+fn slot_node(app: Editor, list: [Block], label: str, key: str) -> Node {
+    let kids: [Node] = []
+    for i in 0..list.len() {
+        kids.push(block_node(app, list, i))
+    }
+    let mine = same(app.target, list)
+    let caption = if mine { "● adding here" } else { "+ add here" }
+    var cap = text(caption).font_size(15).color(WHITE).padding(5, 10).radius(6).cursor(Cursor.Pointer)
+        .on_click(|| { app.target = list })
+    if mine { cap = cap.bg(rgba(0, 0, 0, 0.35)) } else { cap = cap.hover(style().bg(rgba(0, 0, 0, 0.2))) }
+    kids.push(cap)
+    var box = column(kids).gap(6).padding(8).radius(8).bg(rgba(255, 255, 255, 0.16)).min_height(50)
+        .key(key).on_drop(|p| { drop_into(app, list, list.len(), p) })
+    if mine { box = box.border(2, WHITE) }
+    if ui_drag_over() == key { box = box.border(3, hex("#fde047")) }
+    return box
+}
+
+fn block_node(app: Editor, list: [Block], i: int) -> Node {
+    let b = list[i]
+    let kids: [Node] = []
+    var k = 0
+    for p in parts(b.kind) {
+        if p.starts_with("$") {
+            kids.push(field_node(b, k, p[1..]))
+            k += 1
+        } else {
+            kids.push(text(p).color(WHITE).bold().font_size(18))
+        }
+    }
+    kids.push(spacer())
+    kids.push(text("▲").style(ICON).on_click(|| { move_block(list, i, -1) }))
+    kids.push(text("▼").style(ICON).on_click(|| { move_block(list, i, 1) }))
+    kids.push(text("✕").style(ICON).on_click(|| {
+        list.remove(i)
+        app.target = app.root
+    }))
+    let head = row(kids).gap(6).align(Align.Center).draggable("move:{b.id}", title_of(b.kind))
+        .on_drop(|p| { drop_into(app, list, i, p) })
+    let col = kind_color(b.kind)
+    if not is_container(b.kind) {
+        return head.bg(col).radius(8).padding(8, 10)
+    }
+    let inner: [Node] = [head, slot_node(app, b.body, "do", "slot{b.id}:0")]
+    if b.kind == "ifelse" {
+        inner.push(text("else").color(WHITE).bold().font_size(18))
+        inner.push(slot_node(app, b.other, "else", "slot{b.id}:1"))
+    }
+    return column(inner).gap(6).bg(col).radius(8).padding(8, 10)
+}
+
+fn add_block(app: Editor, kind: str) {
+    app.target.push(new_block(kind))
+}
+
+fn palette_item(app: Editor, kind: str) -> Node {
+    return text(title_of(kind)).bg(kind_color(kind)).color(WHITE).bold().font_size(18).padding(11, 16).radius(8)
+        .cursor(Cursor.Pointer).hover(style().opacity(0.85)).on_click(|| { add_block(app, kind) })
+        .draggable("new:{kind}", title_of(kind))
+}
+
+fn palette_group(app: Editor, title: str, kinds: [str]) -> Node {
+    let kids: [Node] = [text(title).color(hex("slate")).font_size(14).bold()]
+    for k in kinds { kids.push(palette_item(app, k)) }
+    return column(kids).gap(6)
+}
+
+fn stop_program(app: Editor) {
+    if let p = app.proc {
+        p.kill()
+        app.output = app.output + "\n[stopped]"
+        app.proc = nil
+        app.status = "Stopped."
+    }
+}
+
+fn run_program(app: Editor) {
+    stop_program(app)
+    let path = "{temp_dir()}\\blocks_run.atf"
+    write_file(path, generate(app.root))
+    var exe = "atf"
+    if file_exists("bin/atf.exe") { exe = "bin/atf.exe" }
+    match proc_start_args(exe, ["run", path]) {
+        Result.Ok(p) => {
+            app.proc = p
+            app.output = ""
+            app.status = "Running..."
+        }
+        Result.Err(e) => {
+            app.output = e
+            app.status = "Could not run."
+        }
+    }
+}
+
+// called by a timer: shows what the running program wrote so far
+fn poll_program(app: Editor) {
+    if let p = app.proc {
+        app.output = app.output + p.read()
+        if not p.running() {
+            app.status = "The program ran!"
+            app.proc = nil
+        }
+    }
+}
+
+fn do_save(app: Editor) {
+    let p = save_file_dialog("Save program", "Blocks|*.atfb|All|*.*", "atfb")
+    if p == nil { return }
+    let out: [str] = []
+    ser(app.root, 0, 0, out)
+    if write_file(p!, "\n".join(out)) { app.status = "Saved!" } else { app.status = "Saving did not work." }
+}
+
+fn do_open(app: Editor) {
+    let p = open_file_dialog("Open program", "Blocks|*.atfb|All|*.*")
+    if p == nil { return }
+    let text = read_file(p!)
+    if text == nil { app.status = "Could not read the file."; return }
+    app.root = deser(text!)
+    app.target = app.root
+    app.status = "Opened!"
+}
+
+fn do_export(app: Editor) {
+    let p = save_file_dialog("Save ATF code", "ATF|*.atf|All|*.*", "atf")
+    if p == nil { return }
+    if write_file(p!, generate(app.root)) { app.status = "Saved!" } else { app.status = "Saving did not work." }
+}
+
+fn view(app: Editor) -> Node {
+    let run_btn = if app.proc == nil {
+        button("▶ Run", || run_program(app)).bg(hex("#059669")).color(WHITE).border(0, TRANSPARENT)
+    } else {
+        button("■ Stop", || stop_program(app)).bg(hex("#dc2626")).color(WHITE).border(0, TRANSPARENT)
+    }
+    let toolbar = row([
+        text("ATF Blocks").font_size(26).bold(),
+        spacer(),
+        text(app.status).color(hex("slate")).font_size(13),
+        run_btn,
+        button("New", || { app.root = []; app.target = app.root; app.status = "New program." }).style(TOOL),
+        button("Open", || do_open(app)).style(TOOL),
+        button("Save", || do_save(app)).style(TOOL),
+        button("Save code", || do_export(app)).style(TOOL),
+    ]).gap(8).align(Align.Center)
+
+    let palette = scroll([
+        palette_group(app, "SAY AND ASK", ["say", "print", "input"]),
+        palette_group(app, "VARIABLES", ["var", "set", "change"]),
+        palette_group(app, "REPEAT AND DECIDE", ["repeat", "for_range", "if", "ifelse", "while", "break"]),
+    ]).gap(16).width(230).grow()
+
+    let work = column([
+        text("My program").color(hex("slate")).font_size(14).bold(),
+        scroll([slot_node(app, app.root, "program", "slotroot").bg(hex("#475569"))]).grow(),
+    ]).style(PANEL).grow()
+
+    let right = column([
+        column([
+            text("The code").color(hex("slate")).font_size(14).bold(),
+            scroll([text(generate(app.root)).family("Consolas").font_size(13)]).grow(),
+        ]).style(PANEL).grow(),
+        column([
+            text("Result").color(hex("slate")).font_size(14).bold(),
+            scroll([text(app.output).family("Consolas").font_size(13)]).grow(),
+        ]).style(PANEL).grow(),
+    ]).gap(12).width(380)
+
+    return column([
+        toolbar,
+        row([column([palette]).style(PANEL), work, right]).gap(12).grow().align(Align.Stretch),
+    ]).gap(12).padding(16).bg(hex("#f1f5f9"))
+}
+
+fn main() {
+    let app = Editor{ root: [], target: [] }
+    app.target = app.root
+    let rep_block = new_block("repeat")
+    rep_block.a = "3"
+    rep_block.body.push(mk("say", "Hello world!", "", ""))
+    app.root.push(rep_block)
+    ui_every(100, || poll_program(app))
+    ui_run("ATF Blocks", 1280, 760, || view(app))
+}

@@ -147,7 +147,7 @@ const PREFIX_MODULES = [
   [/^dt_/, "datetime"], [/^json_/, "json"],
   [/^path_/, "path"], [/^fs_/, "fs"], [/^proc_/, "process"], [/^toml_/, "toml"], [/^yaml_/, "yaml"], [/^bigint(_|$)/, "bigint"], [/^crypto_/, "crypto"], [/^(iter_\w+|Iter)$/, "iter"], [/^(image_\w+|Image)$/, "image"], [/^sound_/, "sound"], [/^task_/, "task"], [/^shell_/, "shell"], [/^(ws_\w+|WebSocket|WsMessage|WsServer)$/, "websocket"],
   [/^(args_parser|ArgParser|ArgSpec|ParsedArgs)$/, "args"], [/^(log_\w+|LOG_\w+)$/, "log"],
-  [/^algo_/, "algo"], [/^bits_/, "bits"], [/^random_/, "random"], [/^text_/, "text"], [/^(math_|stats_)/, "math"],
+  [/^algo_/, "algo"], [/^bits_/, "bits"], [/^random_/, "random"], [/^(text_|TEXT_)/, "text"], [/^(math_|stats_)/, "math"],
   [/^(regex|regex_\w+|Regex|RxMatch)$/, "regex"], [/^(http_\w+|Http\w+)$/, "http"],
   [/^(html_\w+|css_\w+|HtmlNode|h)$/, "html"], [/^(xml_\w+|XmlNode)$/, "xml"], [/^(url_\w+|Url)$/, "url"], [/^(ini_\w+|IniDoc)$/, "ini"], [/^glob_/, "glob"],
   [/^(http_listen|http_listen_env|http_run|http_reply|http_text|http_html|http_json_reply|http_redirect|http_not_found|http_status_text|http_mime|http_file|http_static|http_read_request|http_write_reply|router_new|route_match|HttpRequest|HttpReply|HttpServer|Router|Route)$/, "httpd"], [/^(tcp_\w+|udp_\w+|net_resolve|TcpConn|TcpServer|UdpSocket|UdpPacket)$/, "net"],
