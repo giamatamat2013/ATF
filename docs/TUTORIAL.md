@@ -2504,6 +2504,33 @@ fn main() {
 0 hello
 ```
 
+* `std/yaml` reads and writes YAML files, the common subset that configuration files use: block maps and lists, flow `[..]` and `{..}` on one line, quoted text and `|` / `>` blocks. The result is a `JsonValue`, so `query` and the rest of `std/json` work on it.
+
+<!-- id: yaml-basic -->
+```atf
+import "std/yaml"
+
+fn main() {
+    let text = "name: app\nserver:\n  port: 8080\n  hosts:\n    - a\n    - b\n"
+    match yaml_parse(text) {
+        Result.Ok(v) => {
+            println(v.query("server.port"), v.query("server.hosts[1]"))
+            print(yaml_stringify(v))
+        }
+        Result.Err(e) => println("bad yaml: " + e)
+    }
+}
+```
+```output
+8080 "b"
+name: app
+server:
+  port: 8080
+  hosts:
+    - a
+    - b
+```
+
 * `std/toml` reads and writes TOML configuration files. The result is a `JsonValue`, so `get_str`, `query` and the rest of
   `std/json` work on it.
 

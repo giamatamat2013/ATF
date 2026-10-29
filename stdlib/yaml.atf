@@ -1,0 +1,492 @@
+// std/yaml - reading and writing YAML, the common subset that config files use.
+//
+//   import "std/yaml"
+//
+//   let r = yaml_parse("name: app\nserver:\n  port: 8080\n  hosts: [a, b]\n")
+//   match r {
+//       Result.Ok(v) => println(v.query("server.port"), v.query("server.hosts[1]"))
+//       Result.Err(e) => println("bad yaml: " + e)          // e.g. "line 3: expected 'key: value'"
+//   }
+//   println(yaml_stringify(doc))
+//
+// A document becomes a JsonValue (from std/json, which this module imports), like std/toml does.
+// Supported: block mappings and sequences at any indentation, "- key: value" items, flow [a, b] and {k: v}
+// on one line, plain, 'single' and "double" quoted scalars, | and > block scalars (with |- and >- chomping),
+// comments, and a leading --- line.
+// Not supported: anchors and aliases (&a, *a), tags (!!str), several documents in one text, multi-line flow
+// collections and multi-line plain scalars.
+
+import "std/json"
+
+struct YamlLine {
+    indent: int
+    text: str         // the line without its indentation and without a comment; "" for blank lines
+    raw: str          // the line as written (block scalars need the blank and comment lines too)
+    num: int          // 1-based line number, for error messages
+}
+
+struct YamlParser {
+    lines: [YamlLine]
+    pos: int
+    err: str
+}
+
+struct YamlFlow {
+    s: str
+    i: int
+    err: str
+}
+
+// index of the closing quote of the quoted text that starts at start, or -1
+fn yaml_quote_end(s: str, start: int) -> int {
+    let q = s.byte_at(start)
+    var i = start + 1
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if q == '"' and c == '\\' {
+            i += 2
+            continue
+        }
+        if c == q {
+            if q == '\'' and i + 1 < s.len() and s.byte_at(i + 1) == '\'' {
+                i += 2
+                continue
+            }
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
+
+// the line without a comment; a # starts a comment when it begins the text or follows a space
+fn yaml_strip_comment(s: str) -> str {
+    var i = 0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '#' and (i == 0 or s.byte_at(i - 1) == ' ') { return s[0..i] }
+        if (c == '"' or c == '\'') and (i == 0 or s.byte_at(i - 1) == ' ' or s.byte_at(i - 1) == '[' or s.byte_at(i - 1) == '{' or s.byte_at(i - 1) == ',') {
+            let e = yaml_quote_end(s, i)
+            if e < 0 { return s }
+            i = e + 1
+            continue
+        }
+        i += 1
+    }
+    return s
+}
+
+// index of the ':' that ends a mapping key, or -1 when the text is not "key: ..."
+fn yaml_key_colon(s: str) -> int {
+    if s == "" or s.starts_with("[") or s.starts_with("{") { return -1 }
+    var i = 0
+    if s.byte_at(0) == '"' or s.byte_at(0) == '\'' {
+        let e = yaml_quote_end(s, 0)
+        if e < 0 { return -1 }
+        i = e + 1
+    }
+    while i < s.len() {
+        if s.byte_at(i) == ':' and (i + 1 == s.len() or s.byte_at(i + 1) == ' ') { return i }
+        i += 1
+    }
+    return -1
+}
+
+fn yaml_is_item(t: str) -> bool { return t == "-" or t.starts_with("- ") }
+
+fn yaml_unescape(inner: str) -> str {
+    var sb = str_builder()
+    var i = 0
+    while i < inner.len() {
+        let c = inner.byte_at(i)
+        if c == '\\' and i + 1 < inner.len() {
+            let e = inner.byte_at(i + 1)
+            if e == 'n' {
+                sb.add("\n")
+            } else if e == 't' {
+                sb.add("\t")
+            } else if e == 'r' {
+                sb.add("\r")
+            } else {
+                sb.add_byte(e)
+            }
+            i += 2
+        } else {
+            sb.add_byte(c)
+            i += 1
+        }
+    }
+    return sb.finish()
+}
+
+// the text of a key or a scalar token, without its quotes
+fn yaml_key_text(k: str) -> str {
+    if k.len() >= 2 and k.starts_with("\"") and k.ends_with("\"") { return yaml_unescape(k[1..k.len() - 1]) }
+    if k.len() >= 2 and k.starts_with("'") and k.ends_with("'") { return k[1..k.len() - 1].replace("''", "'") }
+    return k
+}
+
+// what an unquoted scalar means: null, bool, int, float or string
+fn yaml_plain(s: str) -> JsonValue {
+    if s == "" or s == "~" or s == "null" or s == "Null" or s == "NULL" { return JsonValue.Null }
+    if s == "true" or s == "True" or s == "TRUE" { return JsonValue.Bool(true) }
+    if s == "false" or s == "False" or s == "FALSE" { return JsonValue.Bool(false) }
+    let n = s.parse_int()
+    if n != nil { return JsonValue.Int(n!) }
+    let c = s.byte_at(0)
+    if (c >= '0' and c <= '9') or c == '-' or c == '+' or c == '.' {
+        let f = s.parse_float()
+        if f != nil { return JsonValue.Float(f!) }
+    }
+    return JsonValue.Str(s)
+}
+
+// a quoted or plain scalar token
+fn yaml_scalar_token(tok: str) -> JsonValue {
+    if tok.len() >= 2 and tok.starts_with("\"") and tok.ends_with("\"") {
+        return JsonValue.Str(yaml_unescape(tok[1..tok.len() - 1]))
+    }
+    if tok.len() >= 2 and tok.starts_with("'") and tok.ends_with("'") {
+        return JsonValue.Str(tok[1..tok.len() - 1].replace("''", "'"))
+    }
+    return yaml_plain(tok)
+}
+
+// ---- flow collections: [a, b] and {k: v}, on one line ----
+
+fn yaml_flow_skip(f: YamlFlow) {
+    while f.i < f.s.len() and f.s.byte_at(f.i) == ' ' { f.i += 1 }
+}
+
+fn yaml_flow_at(f: YamlFlow, c: byte) -> bool {
+    return f.i < f.s.len() and f.s.byte_at(f.i) == c
+}
+
+// the raw text up to one of the stop characters (a quoted text is taken whole)
+fn yaml_flow_token(f: YamlFlow, stops: str) -> str {
+    yaml_flow_skip(f)
+    let start = f.i
+    if f.i < f.s.len() and (f.s.byte_at(f.i) == '"' or f.s.byte_at(f.i) == '\'') {
+        let e = yaml_quote_end(f.s, f.i)
+        if e < 0 {
+            f.err = "unclosed quote"
+            f.i = f.s.len()
+            return ""
+        }
+        f.i = e + 1
+        return f.s[start..f.i]
+    }
+    while f.i < f.s.len() and not stops.contains(f.s[f.i..f.i + 1]) { f.i += 1 }
+    return f.s[start..f.i].trim()
+}
+
+fn yaml_flow_value(f: YamlFlow) -> JsonValue {
+    yaml_flow_skip(f)
+    if f.i >= f.s.len() { return JsonValue.Null }
+    if yaml_flow_at(f, '[') {
+        f.i += 1
+        var items: [JsonValue] = []
+        yaml_flow_skip(f)
+        if yaml_flow_at(f, ']') {
+            f.i += 1
+            return JsonValue.Array(items)
+        }
+        while f.err == "" {
+            items.push(yaml_flow_value(f))
+            yaml_flow_skip(f)
+            if f.i >= f.s.len() {
+                f.err = "unclosed ["
+                break
+            }
+            let d = f.s.byte_at(f.i)
+            f.i += 1
+            if d == ']' { break }
+            if d != ',' {
+                f.err = "expected ',' or ']' in flow sequence"
+                break
+            }
+        }
+        return JsonValue.Array(items)
+    }
+    if yaml_flow_at(f, '{') {
+        f.i += 1
+        var m: {str: JsonValue} = {}
+        yaml_flow_skip(f)
+        if yaml_flow_at(f, '}') {
+            f.i += 1
+            return JsonValue.Object(m)
+        }
+        while f.err == "" {
+            let key = yaml_key_text(yaml_flow_token(f, ":,}"))
+            yaml_flow_skip(f)
+            if not yaml_flow_at(f, ':') {
+                f.err = "expected ':' in flow mapping"
+                break
+            }
+            f.i += 1
+            m[key] = yaml_flow_value(f)
+            yaml_flow_skip(f)
+            if f.i >= f.s.len() {
+                f.err = "unclosed {"
+                break
+            }
+            let d = f.s.byte_at(f.i)
+            f.i += 1
+            if d == '}' { break }
+            if d != ',' {
+                f.err = "expected ',' or '}' in flow mapping"
+                break
+            }
+        }
+        return JsonValue.Object(m)
+    }
+    return yaml_scalar_token(yaml_flow_token(f, ",]}"))
+}
+
+// ---- the block structure ----
+
+// splits the text into lines, dropping comments and the --- and ... document markers
+fn yaml_split(text: str) -> [YamlLine] {
+    var out: [YamlLine] = []
+    var num = 0
+    for raw in text.lines() {
+        num += 1
+        var indent = 0
+        while indent < raw.len() and raw.byte_at(indent) == ' ' { indent += 1 }
+        var body = yaml_strip_comment(raw[indent..]).trim()
+        if body == "---" or body.starts_with("--- ") or body == "..." { body = "" }
+        out.push(YamlLine{ indent: indent, text: body, raw: raw, num: num })
+    }
+    return out
+}
+
+fn yaml_skip_blank(p: YamlParser) {
+    while p.pos < p.lines.len() and p.lines[p.pos].text == "" { p.pos += 1 }
+}
+
+// reports an error at the line with index k
+fn yaml_fail(p: YamlParser, k: int, msg: str) {
+    if p.err == "" and p.lines.len() > 0 {
+        let at = if k < p.lines.len() { k } else { p.lines.len() - 1 }
+        p.err = "line {p.lines[at].num}: {msg}"
+    }
+}
+
+// a value that starts on the next line (after "key:" or "-"), indented deeper than n
+fn yaml_child(p: YamlParser, n: int) -> JsonValue {
+    yaml_skip_blank(p)
+    if p.pos >= p.lines.len() { return JsonValue.Null }
+    let line = p.lines[p.pos]
+    if line.indent > n { return yaml_node(p) }
+    if line.indent == n and yaml_is_item(line.text) { return yaml_sequence(p, n) }
+    return JsonValue.Null
+}
+
+// the value written on the same line as its key or dash; n is the indentation of that line
+fn yaml_inline_value(p: YamlParser, text: str, n: int) -> JsonValue {
+    if text == "|" or text == "|-" or text == "|+" or text == ">" or text == ">-" or text == ">+" {
+        return JsonValue.Str(yaml_block_scalar(p, text, n))
+    }
+    if text.starts_with("[") or text.starts_with("{") {
+        var f = YamlFlow{ s: text, i: 0, err: "" }
+        let v = yaml_flow_value(f)
+        if f.err != "" { yaml_fail(p, p.pos - 1, f.err) }
+        return v
+    }
+    return yaml_scalar_token(text)
+}
+
+// the lines of a | or > block: everything indented deeper than n (blank lines included)
+fn yaml_block_scalar(p: YamlParser, style: str, n: int) -> str {
+    var parts: [str] = []
+    var content = -1
+    while p.pos < p.lines.len() {
+        let line = p.lines[p.pos]
+        if line.raw.trim() == "" {
+            parts.push("")
+            p.pos += 1
+            continue
+        }
+        if line.indent <= n { break }
+        if content < 0 { content = line.indent }
+        var s = if line.indent >= content { line.raw[content..] } else { line.raw.trim() }
+        if s.ends_with("\r") { s = s[0..s.len() - 1] }
+        parts.push(s)
+        p.pos += 1
+    }
+    while parts.len() > 0 and parts.last() == "" { parts.pop() }
+    var sb = str_builder()
+    if style.starts_with("|") {
+        sb.add(parts.join("\n"))
+    } else {
+        var prev_text = false
+        for s in parts {
+            if s == "" {
+                sb.add("\n")
+                prev_text = false
+            } else {
+                if prev_text { sb.add(" ") }
+                sb.add(s)
+                prev_text = true
+            }
+        }
+    }
+    if not style.ends_with("-") and parts.len() > 0 { sb.add("\n") }
+    return sb.finish()
+}
+
+// "- item" lines at indentation n
+fn yaml_sequence(p: YamlParser, n: int) -> JsonValue {
+    var items: [JsonValue] = []
+    while p.err == "" {
+        yaml_skip_blank(p)
+        if p.pos >= p.lines.len() { break }
+        let line = p.lines[p.pos]
+        if line.indent != n or not yaml_is_item(line.text) { break }
+        let rest = line.text[1..].trim()
+        if rest == "" {
+            p.pos += 1
+            items.push(yaml_child(p, n))
+        } else if yaml_is_item(rest) or yaml_key_colon(rest) >= 0 {
+            // "- key: value" starts a mapping whose lines are indented to the column of "key"
+            let col = n + line.text.len() - rest.len()
+            line.indent = col
+            line.text = rest
+            items.push(yaml_node(p))
+        } else {
+            p.pos += 1
+            items.push(yaml_inline_value(p, rest, n))
+        }
+    }
+    return JsonValue.Array(items)
+}
+
+// "key: value" lines at indentation n
+fn yaml_mapping(p: YamlParser, n: int) -> JsonValue {
+    var m: {str: JsonValue} = {}
+    while p.err == "" {
+        yaml_skip_blank(p)
+        if p.pos >= p.lines.len() { break }
+        let line = p.lines[p.pos]
+        if line.indent != n or yaml_is_item(line.text) { break }
+        let colon = yaml_key_colon(line.text)
+        if colon < 0 {
+            yaml_fail(p, p.pos, "expected 'key: value'")
+            break
+        }
+        let key = yaml_key_text(line.text[0..colon].trim())
+        let rest = line.text[colon + 1..].trim()
+        p.pos += 1
+        if rest == "" {
+            m[key] = yaml_child(p, n)
+        } else {
+            m[key] = yaml_inline_value(p, rest, n)
+        }
+    }
+    return JsonValue.Object(m)
+}
+
+// the block that starts at the next significant line
+fn yaml_node(p: YamlParser) -> JsonValue {
+    yaml_skip_blank(p)
+    if p.pos >= p.lines.len() { return JsonValue.Null }
+    let line = p.lines[p.pos]
+    if yaml_is_item(line.text) { return yaml_sequence(p, line.indent) }
+    if yaml_key_colon(line.text) >= 0 { return yaml_mapping(p, line.indent) }
+    p.pos += 1
+    return yaml_inline_value(p, line.text, line.indent)
+}
+
+fn yaml_parse(text: str) -> Result<JsonValue, str> {
+    var p = YamlParser{ lines: yaml_split(text), pos: 0, err: "" }
+    let v = yaml_node(p)
+    yaml_skip_blank(p)
+    if p.pos < p.lines.len() { yaml_fail(p, p.pos, "unexpected text after the document") }
+    if p.err != "" { return Result.Err(p.err) }
+    return Result.Ok(v)
+}
+
+// ---- writing ----
+
+fn yaml_is_container(v: JsonValue) -> bool {
+    return match v {
+        JsonValue.Array(_) => true
+        JsonValue.Object(_) => true
+        _ => false
+    }
+}
+
+fn yaml_is_empty(v: JsonValue) -> bool {
+    return match v {
+        JsonValue.Array(items) => items.len() == 0
+        JsonValue.Object(m) => m.len() == 0
+        _ => false
+    }
+}
+
+// quotes a string when a plain scalar would read back as something else
+fn yaml_needs_quotes(s: str) -> bool {
+    if s == "" or s.starts_with(" ") or s.ends_with(" ") or s.ends_with(":") { return true }
+    if s.contains(": ") or s.contains(" #") or s.contains("\n") or s.contains("\t") { return true }
+    if "-?:,[]\{\}#&*!|>'\"%@`".contains(s[0..1]) { return true }
+    return match yaml_plain(s) {
+        JsonValue.Str(_) => false
+        _ => true
+    }
+}
+
+fn yaml_scalar_text(s: str) -> str {
+    if yaml_needs_quotes(s) { return json_quote(s) }
+    return s
+}
+
+// a scalar, or an empty collection, on one line
+fn yaml_inline(v: JsonValue) -> str {
+    return match v {
+        JsonValue.Null => "null"
+        JsonValue.Bool(b) => if b { "true" } else { "false" }
+        JsonValue.Int(i) => str(i)
+        JsonValue.Float(f) => str(f)
+        JsonValue.Str(s) => yaml_scalar_text(s)
+        JsonValue.Array(items) => if items.len() == 0 { "[]" } else { "" }
+        JsonValue.Object(m) => if m.len() == 0 { "\{\}" } else { "" }
+    }
+}
+
+// a non-empty collection as indented lines, each ending in a newline
+fn yaml_block(v: JsonValue, indent: int) -> str {
+    let pad = " ".repeat(indent)
+    var sb = str_builder()
+    match v {
+        JsonValue.Object(m) => {
+            for k, val in m {
+                sb.add(pad + yaml_scalar_text(k) + ":")
+                if yaml_is_container(val) and not yaml_is_empty(val) {
+                    sb.add("\n")
+                    sb.add(yaml_block(val, indent + 2))
+                } else {
+                    sb.add(" " + yaml_inline(val) + "\n")
+                }
+            }
+        }
+        JsonValue.Array(items) => {
+            for it in items {
+                sb.add(pad + "-")
+                if yaml_is_container(it) and not yaml_is_empty(it) {
+                    // the first line of the item goes on the dash's line, so its padding is dropped
+                    let inner = yaml_block(it, indent + 2)
+                    sb.add(" " + inner[indent + 2..])
+                } else {
+                    sb.add(" " + yaml_inline(it) + "\n")
+                }
+            }
+        }
+        _ => sb.add(yaml_inline(v) + "\n")
+    }
+    return sb.finish()
+}
+
+fn yaml_stringify(v: JsonValue) -> str {
+    if yaml_is_container(v) and not yaml_is_empty(v) { return yaml_block(v, 0) }
+    return yaml_inline(v) + "\n"
+}

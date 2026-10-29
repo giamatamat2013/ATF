@@ -145,7 +145,7 @@ const symbolProvider = {
 const PREFIX_MODULES = [
   [/^b64_/, "base64"], [/^hex_/, "hex"], [/^hash_/, "hash"], [/^csv_/, "csv"],
   [/^dt_/, "datetime"], [/^json_/, "json"],
-  [/^path_/, "path"], [/^fs_/, "fs"], [/^proc_/, "process"], [/^toml_/, "toml"],
+  [/^path_/, "path"], [/^fs_/, "fs"], [/^proc_/, "process"], [/^toml_/, "toml"], [/^yaml_/, "yaml"],
   [/^(args_parser|ArgParser|ArgSpec|ParsedArgs)$/, "args"], [/^(log_\w+|LOG_\w+)$/, "log"],
   [/^algo_/, "algo"], [/^bits_/, "bits"], [/^random_/, "random"], [/^text_/, "text"], [/^(math_|stats_)/, "math"],
   [/^(regex|regex_\w+|Regex|RxMatch)$/, "regex"], [/^(http_\w+|Http\w+)$/, "http"],

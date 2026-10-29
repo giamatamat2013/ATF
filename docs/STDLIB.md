@@ -56,6 +56,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/ui](#stdui)
   - [std/url](#stdurl)
   - [std/xml](#stdxml)
+  - [std/yaml](#stdyaml)
   - [std/zlib](#stdzlib)
 
 ## Built-in functions
@@ -2715,6 +2716,88 @@ struct XmlParser {
 - `.name() -> str`
 - `.decode(raw: str) -> str` - replaces the entities in raw text
 - `.element() -> XmlNode?` - reads an element; the position is at its '<'
+
+## std/yaml
+
+Reading and writing YAML, the common subset that config files use.
+
+```text
+import "std/yaml"
+
+let r = yaml_parse("name: app\nserver:\n  port: 8080\n  hosts: [a, b]\n")
+match r {
+    Result.Ok(v) => println(v.query("server.port"), v.query("server.hosts[1]"))
+    Result.Err(e) => println("bad yaml: " + e)          // e.g. "line 3: expected 'key: value'"
+}
+println(yaml_stringify(doc))
+```
+
+A document becomes a JsonValue (from std/json, which this module imports), like std/toml does.
+Supported: block mappings and sequences at any indentation, "- key: value" items, flow [a, b] and {k: v}
+on one line, plain, 'single' and "double" quoted scalars, | and > block scalars (with |- and >- chomping),
+comments, and a leading --- line.
+Not supported: anchors and aliases (&a, *a), tags (!!str), several documents in one text, multi-line flow
+collections and multi-line plain scalars.
+
+**Types**
+
+```text
+struct YamlLine {
+    indent: int
+    text: str         // the line without its indentation and without a comment; "" for blank lines
+    raw: str          // the line as written (block scalars need the blank and comment lines too)
+    num: int          // 1-based line number, for error messages
+}
+```
+
+```text
+struct YamlParser {
+    lines: [YamlLine]
+    pos: int
+    err: str
+}
+```
+
+```text
+struct YamlFlow {
+    s: str
+    i: int
+    err: str
+}
+```
+
+
+**Functions**
+
+- `fn yaml_quote_end(s: str, start: int) -> int` - index of the closing quote of the quoted text that starts at start, or -1
+- `fn yaml_strip_comment(s: str) -> str` - the line without a comment; a # starts a comment when it begins the text or follows a space
+- `fn yaml_key_colon(s: str) -> int` - index of the ':' that ends a mapping key, or -1 when the text is not "key: ..."
+- `fn yaml_is_item(t: str) -> bool`
+- `fn yaml_unescape(inner: str) -> str`
+- `fn yaml_key_text(k: str) -> str` - the text of a key or a scalar token, without its quotes
+- `fn yaml_plain(s: str) -> JsonValue` - what an unquoted scalar means: null, bool, int, float or string
+- `fn yaml_scalar_token(tok: str) -> JsonValue` - a quoted or plain scalar token
+- `fn yaml_flow_skip(f: YamlFlow)`
+- `fn yaml_flow_at(f: YamlFlow, c: byte) -> bool`
+- `fn yaml_flow_token(f: YamlFlow, stops: str) -> str` - the raw text up to one of the stop characters (a quoted text is taken whole)
+- `fn yaml_flow_value(f: YamlFlow) -> JsonValue`
+- `fn yaml_split(text: str) -> [YamlLine]` - splits the text into lines, dropping comments and the --- and ... document markers
+- `fn yaml_skip_blank(p: YamlParser)`
+- `fn yaml_fail(p: YamlParser, k: int, msg: str)` - reports an error at the line with index k
+- `fn yaml_child(p: YamlParser, n: int) -> JsonValue` - a value that starts on the next line (after "key:" or "-"), indented deeper than n
+- `fn yaml_inline_value(p: YamlParser, text: str, n: int) -> JsonValue` - the value written on the same line as its key or dash; n is the indentation of that line
+- `fn yaml_block_scalar(p: YamlParser, style: str, n: int) -> str` - the lines of a | or > block: everything indented deeper than n (blank lines included)
+- `fn yaml_sequence(p: YamlParser, n: int) -> JsonValue` - "- item" lines at indentation n
+- `fn yaml_mapping(p: YamlParser, n: int) -> JsonValue` - "key: value" lines at indentation n
+- `fn yaml_node(p: YamlParser) -> JsonValue` - the block that starts at the next significant line
+- `fn yaml_parse(text: str) -> Result<JsonValue, str>`
+- `fn yaml_is_container(v: JsonValue) -> bool`
+- `fn yaml_is_empty(v: JsonValue) -> bool`
+- `fn yaml_needs_quotes(s: str) -> bool` - quotes a string when a plain scalar would read back as something else
+- `fn yaml_scalar_text(s: str) -> str`
+- `fn yaml_inline(v: JsonValue) -> str` - a scalar, or an empty collection, on one line
+- `fn yaml_block(v: JsonValue, indent: int) -> str` - a non-empty collection as indented lines, each ending in a newline
+- `fn yaml_stringify(v: JsonValue) -> str`
 
 ## std/zlib
 

@@ -400,6 +400,16 @@ const lessons = [
     "atf": "import \"std/httpd\"\n\nfn main() {\n    var app = router_new()\n    app.get(\"/\", |req| http_html(\"<h1>Hello</h1>\"))\n    app.get(\"/users/:id\", |req| http_text(\"user \" + (req.params[\"id\"])))\n    app.post(\"/echo\", |req| http_text(req.body))\n\n    let reqs = [\n        HttpRequest{ method: \"GET\", target: \"/users/42\", path: \"/users/42\" },\n        HttpRequest{ method: \"POST\", target: \"/echo\", path: \"/echo\", body: \"ping\" },\n        HttpRequest{ method: \"GET\", target: \"/echo\", path: \"/echo\" },\n        HttpRequest{ method: \"GET\", target: \"/nope\", path: \"/nope\" },\n    ]\n    for req in reqs {\n        let reply = app.handle(req)\n        println(req.method, req.path, \"->\", reply.status, reply.body.trim())\n    }\n}\n",
     "py": null,
     "output": "GET /users/42 -> 200 user 42\nPOST /echo -> 200 ping\nGET /echo -> 405 405 Method Not Allowed\nGET /nope -> 404 404 Not Found"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/yaml",
+    "text": [
+      "`std/yaml` קורא וכותב YAML בתת-קבוצה שקבצי הגדרות משתמשים בה: מפות ורשימות בהזחה, מערכים וטבלאות בשורה אחת, ומחרוזות במירכאות או בלוקים `|` ו-`>`. התוצאה היא `JsonValue`, ולכן אפשר לשלוף ממנה ערכים עם `query`."
+    ],
+    "atf": "import \"std/yaml\"\n\nfn main() {\n    let text = \"name: app\\nserver:\\n  port: 8080\\n  hosts:\\n    - a\\n    - b\\n\"\n    match yaml_parse(text) {\n        Result.Ok(v) => {\n            println(v.query(\"server.port\"), v.query(\"server.hosts[1]\"))\n            print(yaml_stringify(v))\n        }\n        Result.Err(e) => println(\"bad yaml: \" + e)\n    }\n}\n",
+    "py": null,
+    "output": "8080 \"b\"\nname: app\nserver:\n  port: 8080\n  hosts:\n    - a\n    - b"
   }
 ];
 // LESSONS-END

@@ -1,0 +1,25 @@
+ok   map: {"a":1,"b":"two"}
+ok   nested: {"x":{"y":{"z":true}}}
+ok   sequence: [1,2.5,null]
+ok   sequence of maps: [{"a":1,"b":2},{"a":3}]
+ok   sequence under key: {"k":["x","y"]}
+ok   flow: {"v":[1,{"x":"y"},"q, r"]}
+ok   empty flow: {"e":[],"f":{}}
+ok   single quotes: {"t":"it's"}
+ok   comments: {"a":1,"b":2}
+ok   literal block: {"t":"a\nb\n"}
+ok   folded block: {"t":"a b"}
+ok   numbers and words: {"i":42,"f":1.5,"n":-3,"s":"yes"}
+ok   document marker: {"a":1}
+ok   empty text: null
+ok   bad line: Err(line 2: expected 'key: value')
+ok   round trip: {"name":"app","hosts":["a","b"],"users":[{"name":"ada","roles":["admin","dev"]}]}
+ok   write string: "a: b"
+
+ok   write number-like string: "42"
+
+ok   write map: n: 1
+
+ok   write empty: []
+
+failures: 0

@@ -2309,7 +2309,7 @@ fn main() {
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
-* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/xml`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
+* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/yaml`, `std/xml`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
 * `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
 * `std/app` - תיקייה והגדרות לתוכנית שנשמרות בין הרצות (ראו בהמשך הפרק).
 
@@ -2515,6 +2515,33 @@ fn main() {
 ```output
 ["one", "two"]
 0 hello
+```
+
+* `std/yaml` קורא וכותב קובצי YAML (בתת-קבוצה שקבצי הגדרות משתמשים בה: מפות ורשימות בהזחה, מערכים וטבלאות בשורה אחת, מחרוזות במירכאות ובלוקים `|` ו-`>`). התוצאה היא `JsonValue`, ולכן `query` ושאר הפונקציות של `std/json` עובדות עליה.
+
+<!-- id: yaml-basic -->
+```atf
+import "std/yaml"
+
+fn main() {
+    let text = "name: app\nserver:\n  port: 8080\n  hosts:\n    - a\n    - b\n"
+    match yaml_parse(text) {
+        Result.Ok(v) => {
+            println(v.query("server.port"), v.query("server.hosts[1]"))
+            print(yaml_stringify(v))
+        }
+        Result.Err(e) => println("bad yaml: " + e)
+    }
+}
+```
+```output
+8080 "b"
+name: app
+server:
+  port: 8080
+  hosts:
+    - a
+    - b
 ```
 
 * `std/toml` קורא וכותב קובצי הגדרות TOML. התוצאה היא `JsonValue`, ולכן `get_str`, `query` ושאר הפונקציות של `std/json` עובדות עליה.
