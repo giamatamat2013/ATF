@@ -3364,6 +3364,30 @@ fn main() {
 
 `tools/blocks.atf` ו-`tools/blocks_kids.atf` הם עורכי תכנות בבלוקים שנכתבו עם זה.
 
+#### ציור צורות על קנבס: `Canvas.polygon`
+
+`c.polygon(points, color)` ממלא מצולע שעובר דרך רשימה של פינות `(x, y)`, בפיקסלים של הקנבס. הפינות מחוברות לפי הסדר,
+והאחרונה חוזרת לראשונה. גם צורות עם שקע עובדות. הקצוות אינם מוחלקים. השתמשו בזה למשולשים, לריבועים מסובבים ולכל דבר
+ש-`rect` ו-`circle` לא יכולים לצייר.
+
+```atf nocheck
+import "std/ui"
+
+fn main() {
+    // כוכב: הפינות מתחלפות בין רדיוס גדול לרדיוס קטן
+    var pts: [(float, float)] = []
+    for i in 0..10 {
+        let r = if i % 2 == 0 { 50.0 } else { 20.0 }
+        let a = float(i) * PI / 5.0
+        pts.push((60.0 + r * cos(a), 60.0 + r * sin(a)))
+    }
+    ui_run("Shapes", 120, 120, || canvas(|c| {
+        c.rect(0, 0, c.w, c.h, WHITE)
+        c.polygon(pts, hex("#f59e0b"))
+    }).size(120, 120))
+}
+```
+
 #### בדיקת תוכנית בלי חלון
 
 `ui_headless(view, width, height)` מריץ את הממשק בלי חלון, ו-`ui_click(x, y)`, `ui_click_text("label")`,

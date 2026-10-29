@@ -1,0 +1,356 @@
+atf "1.3.1"
+
+// A Geometry Dash style runner. The cube runs forward by itself: hold Space, Up, W or the left mouse
+// button to jump (holding it keeps you jumping as you land). Touch a spike or a block from the side,
+// or fall into a hole, and the attempt starts again. Reach the end to complete the level.
+
+const VW = 960
+const VH = 540
+const TILE = 48
+const TILE_F = 48.0
+const ROWS = 9                // height of the level in tiles, row 0 is the ground
+const CAM_X = 3.0             // the cube stays this many tiles from the left edge
+const SPEED = 0.12            // tiles per tick
+const GRAV = 0.04
+const JUMP = 0.55
+const MAX_FALL = 0.9
+const DEATH_TICKS = 50
+const WIN_TICKS = 240
+const EMPTY = 0
+const SOLID = 1
+const SPIKE = 2
+
+const SKY_TOP = 0xFF1E3A8A
+const SKY_BOTTOM = 0xFF60A5FA
+const HILL = 0x881E40AF
+const GROUND = 0xFF1E40AF
+const GROUND_TOP = 0xFF93C5FD
+const BLOCK_EDGE = 0xFF1E3A8A
+const BLOCK = 0xFF2563EB
+const BLOCK_INNER = 0xFF60A5FA
+const SPIKE_COLOR = 0xFFF8FAFC
+const CUBE_EDGE = 0xFF0F172A
+const CUBE = 0xFF22D3EE
+const CUBE_INNER = 0xFF0EA5E9
+const BAR = 0xFF84CC16
+const BAR_BG = 0x66000000
+
+struct Particle { x: float, y: float, vx: float, vy: float, life: int, color: int }
+
+struct Game {
+    cells: [int],            // cells[row * w + col]: EMPTY, SOLID or SPIKE
+    w: int,
+    x: float = 0.0,          // distance travelled, in tiles
+    y: float = 1.0,          // feet of the cube; the ground surface is at 1.0
+    vy: float = 0.0,
+    on_ground: bool = true,
+    angle: float = 0.0,      // rotation of the cube in degrees
+    jump: bool = false,      // a jump key or the mouse button is held down
+    dead: bool = false,
+    dead_ticks: int = 0,
+    won: bool = false,
+    won_ticks: int = 0,
+    attempt: int = 1,
+    best: int = 0,
+    particles: [Particle],
+    settings: Settings,
+}
+
+// ---------------------------------------------------------------- the level
+
+fn put(cells: [int], w: int, col: int, row: int, kind: int) {
+    cells[row * w + col] = kind
+}
+
+// Builds a level of w columns from a seed: the ground, then random spikes, walls, pits and platforms.
+fn build_cells(w: int, seed: int) -> [int] {
+    var cells = array_repeat(EMPTY, w * ROWS)
+    for col in 0..w { put(cells, w, col, 0, SOLID) }
+    rand_seed(seed)
+    var x = 12
+    while x < w - 14 {
+        let kind = rand_int(0, 5)
+        if kind <= 1 {
+            put(cells, w, x, 1, SPIKE)
+            x += rand_int(6, 8)
+        } else if kind == 2 {
+            put(cells, w, x, 1, SPIKE)
+            put(cells, w, x + 1, 1, SPIKE)
+            x += rand_int(8, 10)
+        } else if kind == 3 {
+            put(cells, w, x, 1, SOLID)
+            x += rand_int(7, 9)
+        } else if kind == 4 {
+            put(cells, w, x, 1, SOLID)
+            put(cells, w, x, 2, SOLID)
+            x += rand_int(8, 10)
+        } else if kind == 5 {
+            put(cells, w, x, 0, EMPTY)
+            put(cells, w, x + 1, 0, EMPTY)
+            x += rand_int(8, 10)
+        } else {
+            for dx in 0..3 { put(cells, w, x + dx, 3, SOLID) }
+            x += rand_int(7, 9)
+        }
+    }
+    return cells
+}
+
+fn cell(g: Game, col: int, row: int) -> int {
+    // the ground goes on to the left of the level too, the camera starts before the first column
+    if col < 0 { return if row == 0 { SOLID } else { EMPTY } }
+    if col >= g.w or row < 0 or row >= ROWS { return EMPTY }
+    return g.cells[row * g.w + col]
+}
+
+// do the rectangles a and b overlap? Touching edges do not count.
+fn overlap(ax0: float, ay0: float, ax1: float, ay1: float, bx0: float, by0: float, bx1: float, by1: float) -> bool {
+    return ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1
+}
+
+// does the cube at (x, y) overlap a cell of this kind? Solid tiles are checked with the cube's box
+// (0.1 tile in from each side), spikes with their smaller hitbox at the bottom of the tile.
+fn hits(g: Game, x: float, y: float, kind: int) -> bool {
+    for row in int(floor(y))..=int(floor(y + 1.0)) {
+        for col in int(floor(x))..=int(floor(x + 1.0)) {
+            if cell(g, col, row) != kind { continue }
+            let fx = float(col)
+            let fy = float(row)
+            if kind == SPIKE {
+                if overlap(x + 0.1, y, x + 0.9, y + 1.0, fx + 0.25, fy, fx + 0.75, fy + 0.7) { return true }
+            } else if overlap(x + 0.1, y, x + 0.9, y + 1.0, fx, fy, fx + 1.0, fy + 1.0) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+// ---------------------------------------------------------------- the game
+
+fn level_percent(g: Game) -> int {
+    if g.won { return 100 }
+    return clamp(int(g.x / float(g.w - 6) * 100.0), 0, 99)
+}
+
+fn record_best(g: Game) {
+    let p = level_percent(g)
+    if p > g.best {
+        g.best = p
+        g.settings.set_int("best", p)
+        g.settings.save()
+    }
+}
+
+fn die(g: Game) {
+    if g.dead { return }
+    g.dead = true
+    g.dead_ticks = 0
+    record_best(g)
+    for i in 0..30 {
+        let a = rand_float() * 2.0 * PI
+        let s = 0.04 + rand_float() * 0.2
+        g.particles.push(Particle{ x: g.x + 0.5, y: g.y + 0.5, vx: cos(a) * s, vy: sin(a) * s, life: 30 + rand_int(0, 30), color: CUBE })
+    }
+}
+
+fn restart(g: Game) {
+    g.x = 0.0
+    g.y = 1.0
+    g.vy = 0.0
+    g.on_ground = true
+    g.angle = 0.0
+    g.dead = false
+    g.dead_ticks = 0
+    g.won = false
+    g.won_ticks = 0
+    g.attempt += 1
+    g.particles = []
+}
+
+// move the cube up or down by dy, in steps of at most 0.1 tile so it never skips a tile
+fn move_y(g: Game, dy: float) {
+    let n = max(1, ceil_int(abs(dy) / 0.1))
+    let part = dy / float(n)
+    for i in 0..n {
+        g.y += part
+        if hits(g, g.x, g.y, SPIKE) {
+            die(g)
+            return
+        }
+        if hits(g, g.x, g.y, SOLID) {
+            if part < 0.0 {
+                g.y = floor(g.y) + 1.0
+                g.on_ground = true
+            } else {
+                g.y = floor(g.y + 1.0) - 1.0
+            }
+            g.vy = 0.0
+            return
+        }
+    }
+}
+
+fn update_particles(g: Game) {
+    var alive: [Particle] = []
+    for p in g.particles {
+        p.x += p.vx
+        p.y += p.vy
+        p.vy -= 0.004
+        p.life -= 1
+        if p.life > 0 { alive.push(p) }
+    }
+    g.particles = alive
+}
+
+fn step(g: Game) {
+    g.jump = ui_key_down("space") or ui_key_down("up") or ui_key_down("w") or ui_mouse_held(0)
+    update_particles(g)
+    if g.won {
+        g.won_ticks += 1
+        if g.won_ticks > WIN_TICKS { restart(g) }
+        return
+    }
+    if g.dead {
+        g.dead_ticks += 1
+        if g.dead_ticks > DEATH_TICKS { restart(g) }
+        return
+    }
+    if g.jump and g.on_ground { g.vy = JUMP }
+    g.on_ground = false
+    g.vy = max(g.vy - GRAV, -MAX_FALL)
+    g.x += SPEED
+    if g.x >= float(g.w - 6) {
+        g.won = true
+        record_best(g)
+        return
+    }
+    if hits(g, g.x, g.y, SOLID) or hits(g, g.x, g.y, SPIKE) {
+        die(g)
+        return
+    }
+    move_y(g, g.vy)
+    if g.y < -1.0 { die(g) }
+    if g.on_ground {
+        g.angle = float(round_int(g.angle / 90.0)) * 90.0
+    } else {
+        g.angle += 6.0
+    }
+}
+
+// ---------------------------------------------------------------- drawing
+
+// the corners of a square with half size h, centred at (cx, cy) and turned by deg degrees
+fn square(cx: float, cy: float, h: float, deg: float) -> [(float, float)] {
+    let a = deg * PI / 180.0
+    let ca = cos(a)
+    let sa = sin(a)
+    var pts: [(float, float)] = []
+    for (dx, dy) in [(-h, -h), (h, -h), (h, h), (-h, h)] {
+        pts.push((cx + dx * ca - dy * sa, cy + dx * sa + dy * ca))
+    }
+    return pts
+}
+
+fn draw_sky(c: Canvas) {
+    let bands = 18
+    for i in 0..bands {
+        c.rect(0, i * VH / bands, VW, VH / bands + 1, mix(SKY_TOP, SKY_BOTTOM, float(i) / float(bands - 1)))
+    }
+}
+
+// dark hills that move slower than the level: they show the cube is running
+fn draw_hills(g: Game, c: Canvas) {
+    let base = float(VH - TILE)
+    let shift = g.x * 0.35 - floor(g.x * 0.35 / 8.0) * 8.0
+    for k in -1..=3 {
+        let x0 = (float(k) * 8.0 - shift) * TILE_F
+        let w = 8.0 * TILE_F
+        c.polygon([(x0, base), (x0 + w * 0.5, base - 3.0 * TILE_F), (x0 + w, base)], HILL)
+    }
+}
+
+fn draw_ground(c: Canvas, x: float, y: float) {
+    c.frect(x, y, TILE_F, TILE_F, GROUND)
+    c.frect(x, y, TILE_F, 4.0, GROUND_TOP)
+}
+
+fn draw_block(c: Canvas, x: float, y: float) {
+    c.frect(x, y, TILE_F, TILE_F, BLOCK_EDGE)
+    c.frect(x + 4.0, y + 4.0, TILE_F - 8.0, TILE_F - 8.0, BLOCK)
+    c.frect(x + 12.0, y + 12.0, TILE_F - 24.0, TILE_F - 24.0, BLOCK_INNER)
+}
+
+// a spike standing on the line y = base (screen pixels)
+fn draw_spike(c: Canvas, x: float, base: float) {
+    c.polygon([(x, base), (x + TILE_F * 0.5, base - TILE_F), (x + TILE_F, base)], SPIKE_COLOR)
+}
+
+fn draw_level(g: Game, c: Canvas, cam: float) {
+    let first = int(floor(cam)) - 1
+    let last = min(g.w - 1, int(floor(cam)) + VW / TILE + 1)
+    for col in first..=last {
+        let x = (float(col) - cam) * TILE_F
+        for row in 0..ROWS {
+            let v = cell(g, col, row)
+            if v == SOLID {
+                let y = float(VH - (row + 1) * TILE)
+                if row == 0 { draw_ground(c, x, y) } else { draw_block(c, x, y) }
+            } else if v == SPIKE {
+                draw_spike(c, x, float(VH - row * TILE))
+            }
+        }
+    }
+}
+
+fn draw_particles(g: Game, c: Canvas, cam: float) {
+    for p in g.particles {
+        let a = clamp(float(p.life) / 30.0, 0.0, 1.0)
+        c.fcircle((p.x - cam) * TILE_F, float(VH) - p.y * TILE_F, 4.0, fade(p.color, a))
+    }
+}
+
+fn draw_cube(g: Game, c: Canvas, cam: float) {
+    let cx = (g.x + 0.5 - cam) * TILE_F
+    let cy = float(VH) - (g.y + 0.5) * TILE_F
+    let h = TILE_F * 0.46
+    c.polygon(square(cx, cy, h + 3.0, g.angle), CUBE_EDGE)
+    c.polygon(square(cx, cy, h, g.angle), CUBE)
+    c.polygon(square(cx, cy, h * 0.45, g.angle), CUBE_INNER)
+}
+
+fn draw_hud(g: Game, c: Canvas) {
+    c.rect(0, 0, VW, 10, BAR_BG)
+    c.rect(0, 0, VW * level_percent(g) / 100, 10, BAR)
+    let info = "Attempt {g.attempt}   {level_percent(g)}%   best {g.best}%"
+    c.text((VW - c.text_width(info, 18, true)) / 2, 22, info, WHITE, 18, true)
+    if g.won {
+        c.rect(0, 0, VW, VH, rgba(0, 0, 0, 0.4))
+        let s = "LEVEL COMPLETE"
+        c.text((VW - c.text_width(s, 56, true)) / 2, VH / 2 - 40, s, WHITE, 56, true)
+    }
+}
+
+fn draw(g: Game, c: Canvas) {
+    let cam = g.x - CAM_X
+    draw_sky(c)
+    draw_hills(g, c)
+    draw_level(g, c, cam)
+    draw_particles(g, c, cam)
+    if not g.dead { draw_cube(g, c, cam) }
+    draw_hud(g, c)
+}
+
+fn new_game() -> Game {
+    let settings = settings_open("geometry_dash")
+    let w = 240
+    return Game{ cells: build_cells(w, 7), w: w, settings: settings, best: settings.get_int("best", 0), particles: [] }
+}
+
+fn main() {
+    let g = new_game()
+    ui_every(16, || { step(g) })
+    ui_run("Geometry Dash", VW, VH, || {
+        return canvas(|c| { draw(g, c) }).size(VW, VH)
+    })
+}

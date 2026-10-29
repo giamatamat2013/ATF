@@ -3020,6 +3020,7 @@ struct UiColorTween {
 - `.circle(cx: int, cy: int, r: int, c: int)`
 - `.ring(cx: int, cy: int, r: int, bw: int, c: int)` - only the border of a circle
 - `.line(x1: int, y1: int, x2: int, y2: int, width: int, c: int)` - a straight line with round ends, width pixels thick
+- `.polygon(pts: [(float, float)], c: int)` - a filled polygon through the corners pts, in canvas pixels (floats are fine). The corners are joined in order and the last one back to the first. Concave shapes work too: a point is inside when a ray from it crosses the edges an odd number of times. The edges are not smoothed.
 - `.text(x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false)` - one line of text with its top left corner at (x, y)
 - `.text_width(s: str, size: int = 15, bold: bool = false) -> int` - the width text would take
 - `.pixel_w() -> int` - the size of the canvas in real screen pixels (w and h are at 100% scale, so on a high-DPI screen the canvas has more pixels): render a software scene at pixel_w() x pixel_h() for full sharpness, no scaling

@@ -234,6 +234,19 @@ fn smooth_view() -> Node {
     return canvas(|c| { c.pixels_smooth(0, 0, 40, 40, pic, 2, 2) }).size(40, 40)
 }
 
+fn polygon_view() -> Node {
+    // a U shape with a notch at the top: the corners of the notch must stay empty
+    return canvas(|c| {
+        c.polygon([(0.0, 0.0), (12.0, 0.0), (12.0, 28.0), (28.0, 28.0), (28.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0)], hex("#ff0000"))
+    }).size(40, 40)
+}
+
+fn polygon_pixels() {
+    println("polygon")
+    let pic = render(polygon_view, 40, 40)
+    println(px(pic, 40, 40, 6, 10), px(pic, 40, 40, 20, 10), px(pic, 40, 40, 34, 10), px(pic, 40, 40, 20, 35))
+}
+
 fn game_input() {
     println("pixels and mouse look")
     let pic = render(pixel_view, 40, 40)
@@ -281,6 +294,7 @@ fn main() {
     area()
     layers()
     canvas_pixels()
+    polygon_pixels()
     game_input()
     shortcuts_and_dialogs()
     delete_file(SHOT)

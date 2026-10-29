@@ -3426,6 +3426,30 @@ fn main() {
 
 `tools/blocks.atf` and `tools/blocks_kids.atf` are block-programming editors written with this.
 
+#### Drawing shapes on a canvas: `Canvas.polygon`
+
+`c.polygon(points, color)` fills a polygon through a list of `(x, y)` corners, in canvas pixels. The corners are joined in
+order and the last one back to the first. Concave shapes work too. The edges are not smoothed. Use it for triangles, rotated
+squares and anything else that `rect` and `circle` cannot draw.
+
+```atf nocheck
+import "std/ui"
+
+fn main() {
+    // a star: corners alternate between a big and a small radius
+    var pts: [(float, float)] = []
+    for i in 0..10 {
+        let r = if i % 2 == 0 { 50.0 } else { 20.0 }
+        let a = float(i) * PI / 5.0
+        pts.push((60.0 + r * cos(a), 60.0 + r * sin(a)))
+    }
+    ui_run("Shapes", 120, 120, || canvas(|c| {
+        c.rect(0, 0, c.w, c.h, WHITE)
+        c.polygon(pts, hex("#f59e0b"))
+    }).size(120, 120))
+}
+```
+
 #### Testing a program without a window
 
 `ui_headless(view, width, height)` runs the interface without a window, and `ui_click(x, y)`, `ui_click_text("label")`,

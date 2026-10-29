@@ -1017,6 +1017,46 @@ impl Canvas {
     fn line(self, x1: int, y1: int, x2: int, y2: int, width: int, c: int) {
         ui_line(float(self.ox + ui_sc(x1)) + 0.5, float(self.oy + ui_sc(y1)) + 0.5, float(self.ox + ui_sc(x2)) + 0.5, float(self.oy + ui_sc(y2)) + 0.5, float(max(ui_sc(width), 1)) / 2.0, c)
     }
+    // a filled polygon through the corners pts, in canvas pixels (floats are fine). The corners are joined in
+    // order and the last one back to the first. Concave shapes work too: a point is inside when a ray from it
+    // crosses the edges an odd number of times. The edges are not smoothed.
+    fn polygon(self, pts: [(float, float)], c: int) {
+        let n = pts.len()
+        if n < 3 { return }
+        let s = ui_scale
+        let ox = float(self.ox)
+        let oy = float(self.oy)
+        var top = 1000000000.0
+        var bottom = -1000000000.0
+        for (px, py) in pts {
+            top = min(top, oy + py * s)
+            bottom = max(bottom, oy + py * s)
+        }
+        for yy in floor_int(top)..=ceil_int(bottom) {
+            // where the edges cross the middle of this pixel row, left to right
+            let sy = float(yy) + 0.5
+            var xs: [float] = []
+            for i in 0..n {
+                let a = pts[i]
+                let b = pts[(i + 1) % n]
+                let ay = oy + a.1 * s
+                let by = oy + b.1 * s
+                if (ay <= sy and by > sy) or (by <= sy and ay > sy) {
+                    let ax = ox + a.0 * s
+                    let bx = ox + b.0 * s
+                    xs.push(ax + (sy - ay) * (bx - ax) / (by - ay))
+                }
+            }
+            xs.sort()
+            var k = 0
+            while k + 1 < xs.len() {
+                let x0 = floor_int(xs[k] + 0.5)
+                let x1 = floor_int(xs[k + 1] + 0.5)
+                if x1 > x0 { ui_fill_rect(x0, yy, x1 - x0, 1, c) }
+                k += 2
+            }
+        }
+    }
     // one line of text with its top left corner at (x, y)
     fn text(self, x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false) {
         let t = UiText()
