@@ -1,0 +1,96 @@
+// A ruler at real size. The window is as wide as the screen, and its marks are drawn in millimetres and
+// inches from the size the monitor reports (ui_screen_info), so 1 cm on the screen is 1 cm of the ruler.
+// Below it, a credit card is drawn at its real size (85.60 x 53.98 mm): hold a real card against it.
+// If the edges do not match, the monitor's size is a little off. The buttons correct it, and the
+// correction is saved for the next start.
+import "std/ui"
+import "std/app"
+
+let RULER_PAPER = hex("#fff6cf")
+let RULER_INK = hex("#1f2937")
+let RULER_MM = 30.0      // height of the ruler strip
+let CARD_TOP_MM = 38.0   // the card starts this far below the top of the window
+let CARD_W_MM = 85.60
+let CARD_H_MM = 53.98
+
+// factor is the correction in thousandths: 1000 keeps the size the monitor reports
+struct RulerState {
+    factor: int
+}
+
+fn clamp_factor(v: int) -> int { return max(900, min(1100, v)) }
+
+fn set_factor(st: RulerState, store: Settings, v: int) {
+    st.factor = clamp_factor(v)
+    store.set_int("factor", st.factor)
+    store.save()
+}
+
+// mmx and mmy are the logical units (100% scale) of one millimetre, already corrected
+fn draw_ruler(c: Canvas, mmx: float, mmy: float) {
+    c.clear(hex("#f3f4f6"))
+    c.frect(0.0, 0.0, float(c.w), RULER_MM * mmy, RULER_PAPER)
+
+    // millimetres from the top edge: centimetres long, then halves, then millimetres
+    var mm = 0
+    while float(mm) * mmx <= float(c.w) {
+        let x = float(mm) * mmx
+        let len = if mm % 10 == 0 { 10.0 } else if mm % 5 == 0 { 6.0 } else { 3.0 }
+        c.frect(x, 0.0, 1.0, len * mmy, RULER_INK)
+        if mm > 0 and mm % 10 == 0 { c.text(int(x) + 3, int((len + 1.0) * mmy), "{mm / 10}", RULER_INK, 11) }
+        mm += 1
+    }
+
+    // inches from the bottom edge: an inch is 25.4 mm, so a quarter is 6.35 mm
+    var q = 0
+    while float(q) * 6.35 * mmx <= float(c.w) {
+        let x = float(q) * 6.35 * mmx
+        let len = if q % 4 == 0 { 10.0 } else if q % 2 == 0 { 7.0 } else { 4.0 }
+        c.frect(x, (RULER_MM - len) * mmy, 1.0, len * mmy, RULER_INK)
+        if q > 0 and q % 4 == 0 { c.text(int(x) + 3, int((RULER_MM - 12.0) * mmy), "{q / 4} in", RULER_INK, 11) }
+        q += 1
+    }
+
+    // a credit card at its real size: its outline must match the card you hold against the screen
+    let x0 = 10.0 * mmx
+    let y0 = CARD_TOP_MM * mmy
+    let cw = CARD_W_MM * mmx
+    let ch = CARD_H_MM * mmy
+    c.frect(x0, y0, cw, ch, hex("#dbeafe"))
+    c.frect(x0, y0, cw, 1.5, RULER_INK)
+    c.frect(x0, y0 + ch - 1.5, cw, 1.5, RULER_INK)
+    c.frect(x0, y0, 1.5, ch, RULER_INK)
+    c.frect(x0 + cw - 1.5, y0, 1.5, ch, RULER_INK)
+    c.text(int(x0), int(y0 + ch) + 8, "credit card, 85.60 x 53.98 mm: hold a real card against this outline", RULER_INK, 12)
+    c.text(int(x0), int(y0 + ch) + 30, "screen width {float(c.w) / mmx / 10.0:.1f} cm", RULER_INK, 12)
+}
+
+fn ruler_view(st: RulerState, store: Settings, lmx: float, lmy: float) -> Node {
+    let f = float(st.factor) / 1000.0
+    let pct = float(st.factor) / 10.0 - 100.0
+    return column([
+        canvas(|c| { draw_ruler(c, lmx * f, lmy * f) }).grow(),
+        row([
+            button("-1%", || { set_factor(st, store, st.factor - 10) }),
+            button("-0.1%", || { set_factor(st, store, st.factor - 1) }),
+            text("correction {pct:.1f}%"),
+            button("+0.1%", || { set_factor(st, store, st.factor + 1) }),
+            button("+1%", || { set_factor(st, store, st.factor + 10) }),
+            button("reset", || { set_factor(st, store, 1000) }),
+        ]).gap(8).padding(10),
+    ]).grow()
+}
+
+fn main() {
+    let info = ui_screen_info()
+    let scale = float(info.dpi) / 96.0
+    // logical units (100% scale) of one millimetre, from the size the monitor reports
+    let lmx = float(info.width) / float(info.mm_width) / scale
+    let lmy = float(info.height) / float(info.mm_height) / scale
+    let store = settings_open("atf-ruler")
+    let st = RulerState(clamp_factor(store.get_int("factor", 1000)))
+    // as wide as the screen; tall enough for the ruler, the card, its labels and the buttons
+    let w = int(float(info.width) / scale)
+    let h = int((CARD_TOP_MM + CARD_H_MM + 4.0) * lmy) + 100
+    ui_run("ATF ruler", w, h, || ruler_view(st, store, lmx, lmy))
+}

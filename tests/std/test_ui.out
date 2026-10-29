@@ -61,3 +61,5 @@ save2 run del  false
 false Sure? true
 true C:\x\y.txt C:\x\y.txt
 copied
+screen
+true true true true true

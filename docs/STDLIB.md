@@ -2864,6 +2864,18 @@ struct UiColorTween {
 }
 ```
 
+The primary screen: its size in device pixels, its size in millimetres as the monitor reports it, and the system DPI (96 at 100% scale). Device pixels are not scaled, so width / mm_width is the real pixel density. The millimetres come from the monitor's own data and can be a few percent off; when the monitor reports none, they are worked out from the pixels and the DPI.
+
+```text
+struct ScreenInfo {
+    width: int
+    height: int
+    mm_width: int
+    mm_height: int
+    dpi: int
+}
+```
+
 
 **Functions**
 
@@ -2923,6 +2935,7 @@ struct UiColorTween {
 - `fn ui_refresh()` - ask for the view to be rebuilt and the window to be redrawn (after changing data outside an event)
 - `fn ui_quit()` - close the window (ui_run returns; in the browser the page reports that the program has closed)
 - `fn ui_title(title: str)` - change the window title
+- `fn ui_screen_info() -> ScreenInfo`
 - `fn ui_every(ms: int, f: fn())` - run f every ms milliseconds while the window is open; the view is rebuilt after each call
 - `fn ui_mouse_move(x: int, y: int)` - move the mouse pointer to (x, y) without clicking: hover styles and tooltips react (use it in tests)
 - `fn ui_shortcut(combo: str, f: fn())` - Run f when the key combination is pressed anywhere in the window: ui_shortcut("ctrl+s", save). Modifiers: ctrl, shift, alt. Keys: a-z, 0-9, f1-f12, enter, esc, tab, space, delete, backspace, home, end, pageup, pagedown, left, right, up, down. A key without ctrl or alt (like "delete") does nothing while the user is typing in a text field. Registering the same combination again replaces the first one, so it can be called from the view function.

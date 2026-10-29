@@ -74,6 +74,8 @@ extern "user32" fn EmptyClipboard() -> i32
 extern "user32" fn GetClipboardData(fmt: int) -> int
 extern "user32" fn SetClipboardData(fmt: int, h: int) -> int
 extern "user32" fn GetSystemMetricsForDpi(i: int, dpi: int) -> i32
+extern "user32" fn GetDC(h: int) -> int
+extern "user32" fn ReleaseDC(h: int, dc: int) -> i32
 extern "user32" fn MessageBoxW(h: int, text: ptr<byte>, caption: ptr<byte>, flags: int) -> i32
 extern "comdlg32" fn GetOpenFileNameW(ofn: ptr<int>) -> i32
 extern "comdlg32" fn GetSaveFileNameW(ofn: ptr<int>) -> i32
@@ -95,6 +97,7 @@ extern "gdi32" fn TextOutW(dc: int, x: int, y: int, s: ptr<byte>, n: int) -> i32
 extern "gdi32" fn GetTextExtentPoint32W(dc: int, s: ptr<byte>, n: int, sz: ptr<int>) -> i32
 extern "gdi32" fn GetTextMetricsW(dc: int, tm: ptr<int>) -> i32
 extern "gdi32" fn GdiFlush() -> i32
+extern "gdi32" fn GetDeviceCaps(dc: int, index: int) -> i32
 extern "gdi32" fn SetDIBitsToDevice(dc: int, x: int, y: int, w: int, h: int, sx: int, sy: int, start: int, lines: int, bits: ptr<int>, bmi: ptr<int>, use: int) -> i32
 extern "gdiplus" fn GdiplusStartup(token: ptr<int>, input: ptr<int>, output: int) -> i32
 extern "gdiplus" fn GdipCreateBitmapFromFile(file: ptr<byte>, bmp: ptr<int>) -> i32
@@ -3097,6 +3100,32 @@ fn ui_screen_center() -> (int, int) {
     p[0] = (ui_winw / 2) | ((ui_winh / 2) << 32)
     ClientToScreen(ui_hwnd, p)
     return (ui_signed32(p[0]), ui_signed32(p[0] >> 32))
+}
+
+// The primary screen: its size in device pixels, its size in millimetres as the monitor reports it, and
+// the system DPI (96 at 100% scale). Device pixels are not scaled, so width / mm_width is the real pixel
+// density. The millimetres come from the monitor's own data and can be a few percent off; when the
+// monitor reports none, they are worked out from the pixels and the DPI.
+struct ScreenInfo {
+    width: int
+    height: int
+    mm_width: int
+    mm_height: int
+    dpi: int
+}
+
+fn ui_screen_info() -> ScreenInfo {
+    SetProcessDpiAwarenessContext(-4)
+    let dc = GetDC(0)
+    let w = int(GetDeviceCaps(dc, 8))
+    let h = int(GetDeviceCaps(dc, 10))
+    var mw = int(GetDeviceCaps(dc, 4))
+    var mh = int(GetDeviceCaps(dc, 6))
+    let dpi = max(int(GetDeviceCaps(dc, 88)), 96)
+    ReleaseDC(0, dc)
+    if mw <= 0 { mw = int(float(w) * 25.4 / float(dpi) + 0.5) }
+    if mh <= 0 { mh = int(float(h) * 25.4 / float(dpi) + 0.5) }
+    return ScreenInfo(w, h, mw, mh, dpi)
 }
 
 // Mouse look: hide the pointer and keep it in the middle of the window. Read how far it moved with

@@ -3241,6 +3241,22 @@ fn main() {
 true
 ```
 
+#### The real size of the screen
+
+`ui_screen_info()` returns the primary screen's size in pixels, its size in millimetres as the monitor reports it, and its DPI (96 at 100% scale). The pixels per millimetre are `width / mm_width`, so a program can draw things at their real size, such as a ruler or the outline of a credit card. `examples/ui/ruler.atf` is a ruler like that: its window is as wide as the screen, and its marks are drawn in millimetres. The monitor's size can be a few percent off, so the ruler has a correction that you set by holding a real card against it.
+
+```atf
+import "std/ui"
+
+fn main() {
+    let s = ui_screen_info()
+    println(s.width > 0, s.mm_width > 0, s.dpi >= 96)
+}
+```
+```output
+true true true
+```
+
 #### The same program in a browser
 
 With the environment variable `ATF_UI_WEB=8080` set, `ui_run` does not open a window. It serves the program at

@@ -80,7 +80,7 @@ total: 5.25
   hover styles with transitions, reusable styles, images, scrolling, right-to-left text and high-DPI screens.
   It also has what a whole application needs: multi-line text editing with selection, undo and the clipboard, menus and
   menu bars, select lists, tabs, dialogs, tooltips, keyboard shortcuts, standard file dialogs, a drawing canvas, and a
-  way to test the interface without a window (`ui_headless`, `ui_click`, `ui_type`). `std/app` keeps settings between runs.
+  way to test the interface without a window (`ui_headless`, `ui_click`, `ui_type`). `std/app` keeps settings between runs. `ui_screen_info()` gives the real size of the screen in millimetres, and `examples/ui/ruler.atf` is a ruler at that size.
   The same program also runs in a browser, without any change to it: `ATF_UI_WEB=8080 bin/atf.exe run examples/ui/counter.atf`,
   then open `http://127.0.0.1:8080/`. The page shows the picture the window would draw and sends the mouse and keyboard back.
   To serve it to other people, add `ATF_UI_WEB_HOST=0.0.0.0` or use the `Dockerfile` (any host that takes Docker; see

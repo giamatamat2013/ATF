@@ -32,6 +32,7 @@ let SAME_METHODS_AS: {str: str} = {"Node": "Style"}
 let PUBLIC_UI: {str: bool} = make_set([
     "ui_run", "ui_screenshot", "ui_refresh", "ui_quit", "ui_title", "ui_every", "ui_shortcut", "ui_headless", "ui_answers",
     "ui_last_dialog", "ui_click", "ui_drag", "ui_type", "ui_keypress", "ui_click_text", "ui_mouse_move",
+    "ui_screen_info",
 ])
 
 fn mentions_internal_type(s: str) -> bool {

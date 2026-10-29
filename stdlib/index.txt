@@ -57,6 +57,8 @@ GetClipboardData ui
 GetCurrentDirectoryA fs
 GetCurrentProcessId process
 GetCursorPos ui
+GetDC ui
+GetDeviceCaps ui
 GetDpiForWindow ui
 GetFileAttributesA fs
 GetForegroundWindow ui
@@ -122,6 +124,7 @@ Proc process
 Regex regex
 RegisterClassExW ui
 ReleaseCapture ui
+ReleaseDC ui
 RemoveDirectoryA fs
 Route httpd
 Router httpd
@@ -132,6 +135,7 @@ RxState regex
 SOUND_FLAGS_FILE sound
 SOUND_FLAGS_MEMORY sound
 SOUND_RATE sound
+ScreenInfo ui
 SelectObject ui
 SemVer semver
 SetBkMode ui
@@ -1154,6 +1158,7 @@ ui_scale ui
 ui_scale_forced ui
 ui_scaled ui
 ui_screen_center ui
+ui_screen_info ui
 ui_screenshot ui
 ui_scrolls ui
 ui_set ui

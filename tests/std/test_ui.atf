@@ -286,6 +286,13 @@ fn shortcuts_and_dialogs() {
     println(clipboard_get())
 }
 
+// the screen size: the numbers depend on the machine, so only that they are real are checked
+fn screen() {
+    println("screen")
+    let s = ui_screen_info()
+    println(s.width > 0, s.height > 0, s.mm_width > 0, s.mm_height > 0, s.dpi >= 96)
+}
+
 fn main() {
     colors()
     layout()
@@ -297,5 +304,6 @@ fn main() {
     polygon_pixels()
     game_input()
     shortcuts_and_dialogs()
+    screen()
     delete_file(SHOT)
 }
