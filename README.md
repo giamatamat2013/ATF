@@ -59,7 +59,8 @@ total: 5.25
   (`text |> str.trim |> parse`, where `x |> f(a)` means `f(x, a)`), modules, `defer`,
   `try`/`catch`, labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
-  available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
+  available; the standard library modules need no `import` line either: use a name such as `json_parse` or
+  `ui_run` and the compiler imports its module itself (a hand-written `import "std/json"` still works). Modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), sounds (`std/sound`), BMP pictures (`std/image`), time-sliced background jobs (`std/task`), lazy iterators (`std/iter`, and
   `for` loops over any type with `next()`), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
@@ -229,7 +230,8 @@ Every code sample in these documents is compiled and run by `python tests/check_
 bin/atf.exe            the compiler (built from compiler/)
 compiler/              the compiler, written in ATF
 atf/                   the bootstrap compiler in Python (stage 0) and the prelude (stdlib/prelude.atf)
-stdlib/                importable modules:  import "std/json", import "std/ui", import "std/app"
+stdlib/                standard library modules (imported by the compiler when used, or by hand:  import "std/json");
+                       index.txt maps each name to its module (bin/atf.exe run tools/make_stdlib_index.atf)
 docs/                  tutorial, reference and library documentation
 examples/              example programs with their expected output
 tests/                 test suites (see below)
