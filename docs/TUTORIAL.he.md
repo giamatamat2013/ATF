@@ -2666,6 +2666,32 @@ ping
 pong
 ```
 
+* UDP שולח הודעות בודדות בלי חיבור: `udp_bind(port)` (0 = כל פורט פנוי) מחזיר `UdpSocket` עם
+  `send_to(host, port, data)` ו-`receive()`, שמחזיר `UdpPacket` (`data`, וה-`host` וה-`port` של השולח)
+  או `nil` כשלא הגיע כלום בזמן המוקצב (`set_timeout(ms)`). כל הודעה מגיעה שלמה, או לא מגיעה בכלל.
+
+```atf
+import "std/net"
+
+fn main() {
+    let a = udp_bind().unwrap()                      // port 0: any free port
+    let b = udp_bind().unwrap()
+    a.send_to("127.0.0.1", b.port, "ping")
+    if let m = b.receive() {
+        println(m.data, m.port == a.port)
+        b.send_to(m.host, m.port, "pong")            // answer the sender
+    }
+    if let m = a.receive() { println(m.data) }
+    b.set_timeout(100)
+    println(b.receive() == nil)                      // nothing more came
+}
+```
+```output
+ping true
+pong
+true
+```
+
 * `std/url` מפרק ובונה כתובות אינטרנט: `url_parse(text)` מחזיר `Url` (`scheme`, `host`, `port`, `path`, `query`,
   `fragment`, `param(name)`), `url_join(base, link)` עוקב אחרי קישור כמו דפדפן, ו-`url_encode` / `url_decode` מטפלים ב-%.
 

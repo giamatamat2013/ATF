@@ -1918,7 +1918,8 @@ The statistics functions take [float] and panic on an empty array (and the sampl
 
 ## std/net
 
-TCP connections: a client (tcp_connect) and a server (tcp_listen), built on the Windows socket library.
+TCP connections: a client (tcp_connect) and a server (tcp_listen), and UDP messages (udp_bind),
+built on the Windows socket library.
 
 ```text
 import "std/net"
@@ -1934,6 +1935,11 @@ match tcp_connect("example.com", 80) {
 
 let server = tcp_listen(0).unwrap()     // port 0 picks a free port: server.port
 let client = server.accept().unwrap()   // waits for the next connection
+
+let a = udp_bind().unwrap()             // UDP: single messages, no connection
+let b = udp_bind().unwrap()
+a.send_to("127.0.0.1", b.port, "ping")
+if let m = b.receive() { println(m.data, m.port == a.port) }   // ping true
 ```
 
 Reads wait at most `timeout_ms` (30 seconds unless changed with set_timeout); a read that times out
@@ -1959,16 +1965,37 @@ struct TcpServer {
 }
 ```
 
+a UDP socket: sends and receives single messages (datagrams) without a connection. A message may be lost or arrive out of order; each one arrives whole or not at all.
+
+```text
+struct UdpSocket {
+    sock: int
+    port: int           // the local port (useful after udp_bind(0))
+}
+```
+
+a message that arrived, and who sent it
+
+```text
+struct UdpPacket {
+    data: str
+    host: str           // the sender's IPv4 address, like "127.0.0.1"
+    port: int           // the sender's port, where an answer goes
+}
+```
+
 
 **Functions**
 
 - `fn net_start()`
 - `fn net_error_text(code: int) -> str` - a readable message for a Windows socket error code
 - `fn net_last_error() -> str`
-- `fn net_lookup(host: str, port: int, passive: bool) -> Result<int, str>` - looks up a host and port; returns the addrinfo list (free it with net_freeaddrinfo) or an error
+- `fn net_lookup(host: str, port: int, passive: bool, udp: bool = false) -> Result<int, str>` - looks up a host and port; returns the addrinfo list (free it with net_freeaddrinfo) or an error
 - `fn net_resolve(host: str) -> [str]` - the IPv4 addresses of a host name, like ["93.184.215.14"]; empty when it cannot be found
 - `fn tcp_connect(host: str, port: int, timeout_ms: int = 10000) -> Result<TcpConn, str>` - connects to host:port; waits at most timeout_ms for the other side to answer
 - `fn tcp_listen(port: int, host: str = "127.0.0.1") -> Result<TcpServer, str>` - listens on a port; host "" listens on every network, "127.0.0.1" (the default) only on this computer
+- `fn net_local_port(s: int) -> int` - the local port a socket is bound to
+- `fn udp_bind(port: int = 0, host: str = "127.0.0.1") -> Result<UdpSocket, str>` - a UDP socket on a local port (0 picks a free port); host "" receives from every network, "127.0.0.1" (the default) only from this computer
 
 **Methods of `TcpConn`**
 
@@ -1987,6 +2014,13 @@ struct TcpServer {
 
 - `.accept() -> Result<TcpConn, str>` - waits for the next connection
 - `.close()` - stops listening
+
+**Methods of `UdpSocket`**
+
+- `.set_timeout(ms: int)` - how long receive waits, in milliseconds; 0 waits forever
+- `.send_to(host: str, port: int, data: str) -> bool` - sends one message to host:port; false when it could not be sent (that it arrives is not checked)
+- `.receive(max: int = 65536) -> UdpPacket?` - the next message (cut to max bytes if it is longer); nil when none arrived in time
+- `.close()` - closes the socket
 
 ## std/path
 

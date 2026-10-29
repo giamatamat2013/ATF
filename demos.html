@@ -430,6 +430,16 @@ const lessons = [
     "atf": "import \"std/crypto\"\nimport \"std/hash\"\n\nfn main() {\n    let salt = crypto_random_bytes(16)\n    let key = crypto_pbkdf2(\"my password\", salt, 100000)\n    let box = crypto_encrypt(key, \"secret text\").unwrap()\n    println(box.len(), crypto_decrypt(key, box).unwrap())\n\n    let wrong = crypto_pbkdf2(\"guess\", salt, 100000)\n    match crypto_decrypt(wrong, box) {\n        Result.Ok(text) => println(\"opened: \" + text)\n        Result.Err(e) => println(e)\n    }\n    println(hash_to_hex(crypto_pbkdf2(\"password\", \"salt\", 1))[0..16])\n}\n",
     "py": null,
     "output": "39 secret text\ncannot decrypt: wrong key or the data was changed\n120fb6cffcf8b32c"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "UDP: messages without a connection",
+    "text": [
+      "UDP שולח הודעות בודדות בלי חיבור: כל הודעה מגיעה שלמה עם הכתובת והפורט של השולח, כך שקל לענות לו."
+    ],
+    "atf": "import \"std/net\"\n\nfn main() {\n    let a = udp_bind().unwrap()                      // port 0: any free port\n    let b = udp_bind().unwrap()\n    a.send_to(\"127.0.0.1\", b.port, \"ping\")\n    if let m = b.receive() {\n        println(m.data, m.port == a.port)\n        b.send_to(m.host, m.port, \"pong\")            // answer the sender\n    }\n    if let m = a.receive() { println(m.data) }\n    b.set_timeout(100)\n    println(b.receive() == nil)                      // nothing more came\n}\n",
+    "py": null,
+    "output": "ping true\npong\ntrue"
   }
 ];
 // LESSONS-END

@@ -2658,6 +2658,33 @@ ping
 pong
 ```
 
+* UDP sends single messages with no connection: `udp_bind(port)` (0 = any free port) gives a `UdpSocket` with
+  `send_to(host, port, data)` and `receive()`, which returns a `UdpPacket` (`data`, `host`, `port` of the sender)
+  or `nil` when nothing came within the timeout (`set_timeout(ms)`). Each message arrives whole or not at all.
+
+<!-- id: udp-basic -->
+```atf
+import "std/net"
+
+fn main() {
+    let a = udp_bind().unwrap()                      // port 0: any free port
+    let b = udp_bind().unwrap()
+    a.send_to("127.0.0.1", b.port, "ping")
+    if let m = b.receive() {
+        println(m.data, m.port == a.port)
+        b.send_to(m.host, m.port, "pong")            // answer the sender
+    }
+    if let m = a.receive() { println(m.data) }
+    b.set_timeout(100)
+    println(b.receive() == nil)                      // nothing more came
+}
+```
+```output
+ping true
+pong
+true
+```
+
 * `std/url` takes web addresses apart and builds them: `url_parse(text)` gives a `Url` (`scheme`, `host`, `port`, `path`,
   `query`, `fragment`, `param(name)`), `url_join(base, link)` follows a link the way a browser does, and `url_encode` /
   `url_decode` do the %-escapes.

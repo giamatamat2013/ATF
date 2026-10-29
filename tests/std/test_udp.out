@@ -1,0 +1,7 @@
+ping 127.0.0.1 true
+pong
+one two 0
+abc
+still here
+true
+failures: 0

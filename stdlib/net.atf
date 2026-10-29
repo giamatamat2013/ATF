@@ -1,4 +1,5 @@
-// std/net - TCP connections: a client (tcp_connect) and a server (tcp_listen), built on the Windows socket library.
+// std/net - TCP connections: a client (tcp_connect) and a server (tcp_listen), and UDP messages (udp_bind),
+// built on the Windows socket library.
 //
 //   import "std/net"
 //
@@ -14,6 +15,11 @@
 //   let server = tcp_listen(0).unwrap()     // port 0 picks a free port: server.port
 //   let client = server.accept().unwrap()   // waits for the next connection
 //
+//   let a = udp_bind().unwrap()             // UDP: single messages, no connection
+//   let b = udp_bind().unwrap()
+//   a.send_to("127.0.0.1", b.port, "ping")
+//   if let m = b.receive() { println(m.data, m.port == a.port) }   // ping true
+//
 // Reads wait at most `timeout_ms` (30 seconds unless changed with set_timeout); a read that times out
 // returns nil, the same as a closed connection. Data is bytes in a str.
 
@@ -28,6 +34,8 @@ extern "ws2_32" fn net_listen(s: int, backlog: int) -> i32 as "listen"
 extern "ws2_32" fn net_accept(s: int, addr: int, len: int) -> int as "accept"
 extern "ws2_32" fn net_send(s: int, buf: ptr<byte>, len: int, flags: int) -> i32 as "send"
 extern "ws2_32" fn net_recv(s: int, buf: ptr<byte>, len: int, flags: int) -> i32 as "recv"
+extern "ws2_32" fn net_sendto(s: int, buf: ptr<byte>, len: int, flags: int, to: int, to_len: int) -> i32 as "sendto"
+extern "ws2_32" fn net_recvfrom(s: int, buf: ptr<byte>, len: int, flags: int, from: ptr<int>, from_len: ptr<int>) -> i32 as "recvfrom"
 extern "ws2_32" fn net_setsockopt(s: int, level: int, opt: int, value: ptr<int>, len: int) -> i32 as "setsockopt"
 extern "ws2_32" fn net_getsockname(s: int, addr: ptr<int>, len: ptr<int>) -> i32 as "getsockname"
 extern "ws2_32" fn net_ioctlsocket(s: int, cmd: int, arg: ptr<int>) -> i32 as "ioctlsocket"
@@ -62,11 +70,11 @@ fn net_error_text(code: int) -> str {
 fn net_last_error() -> str { return net_error_text(WSAGetLastError()) }
 
 // looks up a host and port; returns the addrinfo list (free it with net_freeaddrinfo) or an error
-fn net_lookup(host: str, port: int, passive: bool) -> Result<int, str> {
+fn net_lookup(host: str, port: int, passive: bool, udp: bool = false) -> Result<int, str> {
     net_start()
     let hints = __alloc(48) as ptr<int>
     hints[0] = (2 << 32) | (if passive { 1 } else { 0 })     // ai_flags (AI_PASSIVE), ai_family = AF_INET
-    hints[1] = 1 | (6 << 32)                                  // SOCK_STREAM, IPPROTO_TCP
+    hints[1] = if udp { 2 | (17 << 32) } else { 1 | (6 << 32) }   // SOCK_DGRAM, IPPROTO_UDP or SOCK_STREAM, IPPROTO_TCP
     let res = __alloc(8) as ptr<int>
     var node = str_data(host)
     if host == "" { node = 0 as ptr<byte> }
@@ -281,13 +289,17 @@ fn tcp_listen(port: int, host: str = "127.0.0.1") -> Result<TcpServer, str> {
         return Result.Err(e + " (port {port})")
     }
     net_freeaddrinfo(list)
+    return Result.Ok(TcpServer{ sock: s, port: net_local_port(s) })
+}
+
+// the local port a socket is bound to
+fn net_local_port(s: int) -> int {
     let addr = __alloc(32) as ptr<int>
     let len = __alloc(8) as ptr<int>
     len[0] = 32
     net_getsockname(s, addr, len)
     let b = addr as ptr<byte>
-    let real_port = int(b[2]) * 256 + int(b[3])
-    return Result.Ok(TcpServer{ sock: s, port: real_port })
+    return int(b[2]) * 256 + int(b[3])
 }
 
 impl TcpServer {
@@ -301,6 +313,93 @@ impl TcpServer {
     }
 
     // stops listening
+    fn close(self) {
+        if self.sock != -1 {
+            net_closesocket(self.sock)
+            self.sock = -1
+        }
+    }
+}
+
+// a UDP socket: sends and receives single messages (datagrams) without a connection. A message may be
+// lost or arrive out of order; each one arrives whole or not at all.
+struct UdpSocket {
+    sock: int
+    port: int           // the local port (useful after udp_bind(0))
+}
+
+// a message that arrived, and who sent it
+struct UdpPacket {
+    data: str
+    host: str           // the sender's IPv4 address, like "127.0.0.1"
+    port: int           // the sender's port, where an answer goes
+}
+
+// a UDP socket on a local port (0 picks a free port); host "" receives from every network,
+// "127.0.0.1" (the default) only from this computer
+fn udp_bind(port: int = 0, host: str = "127.0.0.1") -> Result<UdpSocket, str> {
+    let r = net_lookup(host, port, true, true)
+    if r.is_err() { return Result.Err(r.err()!) }
+    let list = r.unwrap()
+    let p = list as ptr<int>
+    let s = net_socket(2, 2, 17)
+    if s == -1 {
+        net_freeaddrinfo(list)
+        return Result.Err(net_last_error())
+    }
+    if net_bind(s, p[4], p[2] & 0xFFFFFFFF) != 0 {
+        let e = net_last_error()
+        net_freeaddrinfo(list)
+        net_closesocket(s)
+        return Result.Err(e + " (port {port})")
+    }
+    net_freeaddrinfo(list)
+    let u = UdpSocket{ sock: s, port: net_local_port(s) }
+    u.set_timeout(30000)
+    return Result.Ok(u)
+}
+
+impl UdpSocket {
+    // how long receive waits, in milliseconds; 0 waits forever
+    fn set_timeout(self, ms: int) {
+        let v = __alloc(8) as ptr<int>
+        v[0] = ms
+        net_setsockopt(self.sock, 0xFFFF, 0x1006, v, 4)      // SO_RCVTIMEO
+    }
+
+    // sends one message to host:port; false when it could not be sent (that it arrives is not checked)
+    fn send_to(self, host: str, port: int, data: str) -> bool {
+        let r = net_lookup(host, port, false, true)
+        if r.is_err() { return false }
+        let list = r.unwrap()
+        let p = list as ptr<int>
+        let n = net_sendto(self.sock, str_data(data), data.len(), 0, p[4], p[2] & 0xFFFFFFFF)
+        net_freeaddrinfo(list)
+        return n == data.len()
+    }
+
+    // the next message (cut to max bytes if it is longer); nil when none arrived in time
+    fn receive(self, max: int = 65536) -> UdpPacket? {
+        let buf = __alloc_atomic(max)
+        let addr = __alloc(16) as ptr<int>
+        let len = __alloc(8) as ptr<int>
+        loop {
+            len[0] = 16
+            var n = net_recvfrom(self.sock, buf, max, 0, addr, len)
+            if n < 0 {
+                let code = WSAGetLastError()
+                if code == 10054 { continue }               // an earlier message hit a closed port: ignore
+                if code != 10040 { return nil }             // 10040: longer than max, keep the first max bytes
+                n = max
+            }
+            let b = addr as ptr<byte>
+            let host = "{int(b[4])}.{int(b[5])}.{int(b[6])}.{int(b[7])}"
+            return UdpPacket{ data: str_from_ptr(buf, n), host: host, port: int(b[2]) * 256 + int(b[3]) }
+        }
+        return nil
+    }
+
+    // closes the socket
     fn close(self) {
         if self.sock != -1 {
             net_closesocket(self.sock)

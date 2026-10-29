@@ -1,0 +1,74 @@
+// tests for the UDP part of std/net
+import "std/net"
+
+var failures = 0
+
+fn check(name: str, ok: bool) {
+    if not ok {
+        println("FAIL " + name)
+        failures += 1
+    }
+}
+
+// the data of a message, or "nil" when none came
+fn got(p: UdpPacket?) -> str {
+    if let m = p { return m.data }
+    return "nil"
+}
+
+fn main() -> int {
+    let a = udp_bind().unwrap()
+    let b = udp_bind().unwrap()
+    check("free ports", a.port > 0 and b.port > 0 and a.port != b.port)
+
+    // a message and its sender
+    check("send", a.send_to("127.0.0.1", b.port, "ping"))
+    if let m = b.receive() {
+        println(m.data, m.host, m.port == a.port)
+        // answer the sender
+        b.send_to(m.host, m.port, "pong")
+    } else {
+        check("received ping", false)
+    }
+    println(got(a.receive()))
+
+    // messages keep their borders, and "localhost" works as a host name
+    a.send_to("localhost", b.port, "one")
+    a.send_to("localhost", b.port, "two")
+    a.send_to("localhost", b.port, "")
+    println(got(b.receive()), got(b.receive()), got(b.receive()).len())
+
+    // binary data survives
+    let bytes = "\x00\x01\xFF\x7F" + "x".repeat(1000)
+    a.send_to("127.0.0.1", b.port, bytes)
+    check("binary", got(b.receive()) == bytes)
+
+    // a message longer than max is cut
+    a.send_to("127.0.0.1", b.port, "abcdefgh")
+    println(got(b.receive(3)))
+
+    // sending to a closed port does not break the next receive
+    let gone = udp_bind().unwrap()
+    let gone_port = gone.port
+    gone.close()
+    a.send_to("127.0.0.1", gone_port, "nobody")
+    b.send_to("127.0.0.1", a.port, "still here")
+    a.set_timeout(2000)
+    println(got(a.receive()))
+
+    // nothing arrives: nil after the timeout
+    b.set_timeout(200)
+    check("timeout", b.receive() == nil)
+
+    // errors
+    match udp_bind(a.port) {
+        Result.Ok(_) => println("second bind worked")
+        Result.Err(e) => println(e.starts_with("the address is already in use"))
+    }
+    check("bad host", not a.send_to("no-such-host.invalid", 9, "x"))
+
+    a.close()
+    b.close()
+    println("failures:", failures)
+    return failures
+}
