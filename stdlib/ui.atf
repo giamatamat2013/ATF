@@ -1485,6 +1485,24 @@ fn ui_sc(v: int) -> int {
     return int(float(v) * ui_scale + (if v >= 0 { 0.5 } else { -0.5 }))
 }
 
+// a length in logical pixels as physical pixels at the given scale (at least 1)
+fn ui_px(v: int, scale: float) -> int { return max(int(float(v) * scale + 0.5), 1) }
+
+// the scale ATF_UI_SCALE asks for (2, 1.5, ...), or def when it is not set: it makes a window or a
+// picture file render as on a screen with that scale, for tests and screenshots of high-DPI screens
+var ui_scale_forced = false
+fn ui_env_scale(def: float) -> float {
+    if let s = getenv("ATF_UI_SCALE") {
+        if let f = s.parse_float() {
+            if f > 0.0 {
+                ui_scale_forced = true
+                return f
+            }
+        }
+    }
+    return def
+}
+
 fn ui_fb_size(w: int, h: int) {
     if w == ui_fbw and h == ui_fbh and ui_fb != 0 { return }
     ui_fb = __alloc_atomic(max(w * h, 1) * 8) as int
@@ -4055,6 +4073,8 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
         }
         return 0
     } else if m == 736 {
+        // the scale was set with ATF_UI_SCALE: keep it when the screen's scale changes
+        if ui_scale_forced { return 0 }
         ui_scale = float((wp >> 16) & 0xFFFF) / 96.0
         let r = lp as ptr<int>
         let left = ui_lo32s(r[0])
@@ -4081,7 +4101,7 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
 fn ui_run(title: str, width: int, height: int, view: fn() -> Node) {
     if let shot = getenv("ATF_UI_SCREENSHOT") {
         if shot.len() > 0 {
-            if not ui_screenshot(view, width, height, shot) { panic("ui_run: could not write {shot}") }
+            if not ui_screenshot(view, width, height, shot, -1, -1, ui_env_scale(1.0)) { panic("ui_run: could not write {shot}") }
             return
         }
     }
@@ -4115,11 +4135,11 @@ fn ui_run(title: str, width: int, height: int, view: fn() -> Node) {
     ui_hwnd = CreateWindowExW(0, cls, ui_wide(title), style, 0x80000000, 0x80000000, width, height, 0, 0, inst, 0)
     if ui_hwnd == 0 { panic("ui_run: could not create the window") }
     let dpi = GetDpiForWindow(ui_hwnd)
-    ui_scale = if dpi > 0 { float(dpi) / 96.0 } else { 1.0 }
+    ui_scale = ui_env_scale(if dpi > 0 { float(dpi) / 96.0 } else { 1.0 })
     let r = __alloc_atomic(16) as ptr<int>
     r[0] = 0
     r[1] = (int(float(width) * ui_scale) & 0xFFFFFFFF) | (int(float(height) * ui_scale) << 32)
-    AdjustWindowRectExForDpi(r, style, 0, 0, max(dpi, 96))
+    AdjustWindowRectExForDpi(r, style, 0, 0, max(int(ui_scale * 96.0 + 0.5), 96))
     let ww = ui_lo32s(r[1]) - ui_lo32s(r[0])
     let wh = (r[1] >> 32) - (r[0] >> 32)
     SetWindowPos(ui_hwnd, 0, 0, 0, ww, wh, 2 | 4)
@@ -4244,20 +4264,24 @@ fn ui_click_text(s: str) -> bool {
     return false
 }
 
-// Draw view() into a picture file (.bmp) of width x height pixels without opening a window
-// (for tests, documentation and thumbnails). hover_x, hover_y: optional mouse position to show hover styles.
-fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1) -> bool {
+// Draw view() into a picture file (.bmp) of width x height logical pixels without opening a window
+// (for tests, documentation and thumbnails). scale is the screen scale: 2 draws the picture at twice the
+// pixels, with the same layout, as on a 200% screen. hover_x, hover_y: optional mouse position in
+// picture pixels, to show hover styles. ATF_UI_SCREENSHOT uses ATF_UI_SCALE for scale.
+fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1, scale: float = 1.0) -> bool {
     ui_is_headless = true
     ui_views = [view]
-    ui_scale = 1.0
-    ui_winw = width
-    ui_winh = height
+    ui_scale = scale
+    let pw = ui_px(width, scale)
+    let ph = ui_px(height, scale)
+    ui_winw = pw
+    ui_winh = ph
     ui_mx = hover_x
     ui_my = hover_y
     ui_rebuild()
-    ui_render(ui_root!, width, height)
-    let rowb = width * 4
-    let size = 54 + rowb * height
+    ui_render(ui_root!, pw, ph)
+    let rowb = pw * 4
+    let size = 54 + rowb * ph
     let out = str_new(size)
     let d = str_data(out)
     for i in 0..size { d[i] = 0 }
@@ -4266,16 +4290,16 @@ fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x
     ui_put32(d, 2, size)
     ui_put32(d, 10, 54)
     ui_put32(d, 14, 40)
-    ui_put32(d, 18, width)
-    ui_put32(d, 22, height)
+    ui_put32(d, 18, pw)
+    ui_put32(d, 22, ph)
     d[26] = 1
     d[28] = 32
-    ui_put32(d, 34, rowb * height)
+    ui_put32(d, 34, rowb * ph)
     let fb = ui_fb as ptr<int>
-    for y in 0..height {
-        let o = 54 + (height - 1 - y) * rowb
-        for x in 0..width {
-            let p = fb[y * width + x]
+    for y in 0..ph {
+        let o = 54 + (ph - 1 - y) * rowb
+        for x in 0..pw {
+            let p = fb[y * pw + x]
             d[o + x * 4] = byte(p & 255)
             d[o + x * 4 + 1] = byte((p >> 8) & 255)
             d[o + x * 4 + 2] = byte((p >> 16) & 255)
@@ -4351,6 +4375,30 @@ fn ui_web_run(title: str, width: int, height: int, view: fn() -> Node, port: int
     ui_web_on = false
 }
 
+// the number of query parameter name (name=12 in ?s=12&w=3), or def when it is missing or not a number
+fn ui_web_param(query: str, name: str, def: int) -> int {
+    for part in query.split("&") {
+        if part.starts_with(name + "=") { return part[name.len() + 1..].parse_int() ?? def }
+    }
+    return def
+}
+
+// the page's size (w, h, in CSS pixels) and device pixel ratio (z, in percent): the picture is drawn at
+// device pixels, so it is sharp on every screen, and it follows the size of the browser window like a
+// window that is resized. A request without a size (w = 0) changes nothing.
+fn ui_web_resize(w: int, h: int, z: int) {
+    if w <= 0 or h <= 0 { return }
+    let scale = clamp(float(z) / 100.0, 0.25, 8.0)
+    let pw = ui_px(w, scale)
+    let ph = ui_px(h, scale)
+    if pw == ui_winw and ph == ui_winh and scale == ui_scale { return }
+    ui_scale = scale
+    ui_winw = pw
+    ui_winh = ph
+    ui_rebuild()
+    ui_web_draw()
+}
+
 // answer one browser request: read it, refuse it unless it comes from this computer, run the events it
 // carries and the timers, then answer with the picture when it changed. Tests call this directly.
 fn ui_web_step(srv: TcpServer) {
@@ -4402,8 +4450,9 @@ fn ui_web_step(srv: TcpServer) {
     }
     if parts[0] == "POST" and path == "/ev" {
         ui_web_events(body)
+        ui_web_resize(ui_web_param(query, "w", 0), ui_web_param(query, "h", 0), ui_web_param(query, "z", 100))
         ui_web_pump()
-        let seen = if query.starts_with("s=") { query[2..].parse_int() ?? -1 } else { -1 }
+        let seen = ui_web_param(query, "s", -1)
         if seen == ui_web_seq {
             ui_web_reply(conn, "204 No Content", "text/plain; charset=utf-8", ui_web_state(), "")
         } else {
@@ -4584,8 +4633,7 @@ fn ui_web_page() -> str {
 <title>ATF</title>
 <style>
 html, body { margin: 0; height: 100%; background: #1e1e1e; overflow: hidden; }
-body { display: flex; align-items: center; justify-content: center; }
-canvas { display: block; max-width: 100vw; max-height: 100vh; width: auto; height: auto; touch-action: none; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4); }
+canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
 #msg { position: fixed; left: 16px; right: 16px; top: 40%; text-align: center; color: #ddd; font: 16px sans-serif; display: none; }
 </style>
 </head>
@@ -4694,7 +4742,8 @@ canvas { display: block; max-width: 100vw; max-height: 100vh; width: auto; heigh
     queue = [];
     var quit = false;
     try {
-      var r = await fetch('/ev?s=' + seq, { method: 'POST', body: body, cache: 'no-store' });
+      var size = '&w=' + window.innerWidth + '&h=' + window.innerHeight + '&z=' + Math.round((window.devicePixelRatio || 1) * 100);
+      var r = await fetch('/ev?s=' + seq + size, { method: 'POST', body: body, cache: 'no-store' });
       if (r.status !== 200 && r.status !== 204) {
         show('The program did not answer (HTTP ' + r.status + ').');
         return;

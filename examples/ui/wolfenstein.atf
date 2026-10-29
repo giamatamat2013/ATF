@@ -1,92 +1,479 @@
-// wolfenstein.atf - a small first-person shooter in the style of Wolfenstein 3D (1992).
-// Shows: a software ray caster written in ATF (DDA walls, textures, fog), sprites with a depth buffer,
-//        enemy AI with line of sight, hit scan shooting, a mini map, all drawn on one canvas at 30 frames a second.
+// wolfenstein.atf - a first-person shooter in the style of the 1992 classic, written in ATF.
+// Six episodes of ten floors, a secret floor, bosses, locked doors, pushwalls, four weapons, items, lives,
+// score and a par time. Every floor is built from a seed, so it is the same each time it is played.
+// Shows: a software ray caster (DDA walls, doors, pushwalls), 3D enemies (boxes ray cast in their own frame),
+//        enemy AI with line of sight, hit scan shooting, a mini map with fog of war, all drawn on one canvas.
 // Run:   atf run examples/ui/wolfenstein.atf
-// Keys:  W A S D move, mouse or left/right arrows turn, left click or Space shoots, R restarts, Esc quits.
+// Keys:  W A S D move, mouse or left/right arrows turn, left click or Space fire, E use (doors, pushwalls,
+//        elevators), 1-4 pick a weapon, P or Esc pause, R restart the floor, Esc quits from the title screen.
+// Not in this version: sound (std/ui has no audio API yet).
 
 import "std/ui"
 
 const WF_WIN_W = 1152    // the window starts at this size; it can be resized (or maximized) and the scene follows
 const WF_WIN_H = 720
-const WF_N = 16
+const WF_N = 32          // a floor is a WF_N x WF_N grid of tiles
+const WF_EPISODES = 6
+const WF_FLOORS = 10     // floor 10 of each episode is the boss floor
 
-let WF_MAP = [
-    "################",
-    "#P.....#.......#",
-    "#......#...E...#",
-    "#..##..#...##..#",
-    "#..#.......#...#",
-    "#..#..###..#..E#",
-    "#.........#....#",
-    "####.####..##.##",
-    "#..E.....#.....#",
-    "#.......##..E..#",
-    "#..222..#......#",
-    "#..2.2......##.#",
-    "#..2.2..E...#..#",
-    "#..222......#..#",
-    "#.....E........#",
-    "################",
-]
+// tiles (the wall tiles are 1 to 6 and 9, see wf_is_wall)
+const WF_T_FLOOR = 0
+const WF_T_BRICK = 1
+const WF_T_STONE = 2
+const WF_T_GREY = 3
+const WF_T_DOOR = 4      // wooden door: E opens it, it closes again by itself
+const WF_T_GOLD = 5      // locked: opens with the gold key and stays open
+const WF_T_SILVER = 6    // locked: opens with the silver key and stays open
+const WF_T_EXIT = 7      // elevator: stand on it and press E to leave the floor
+const WF_T_SECRET = 8    // secret elevator: stand on it and press E for the secret floor
+const WF_T_PUSH = 9      // pushwall: face it and press E, it moves two tiles and then is a plain wall
+const WF_T_OPEN = 10     // an open door: walkable, rays pass through it
 
-struct Enemy { x: float, y: float, hp: int = 3, cool: float = 1.0, hurt: float = 0.0, seen: bool = false }
+// enemies
+const WF_E_GUARD = 0
+const WF_E_OFFICER = 1
+const WF_E_SS = 2
+const WF_E_MUTANT = 3
+const WF_E_DOG = 4
+const WF_E_BOSS_DOCTOR = 5
+const WF_E_BOSS_COMMANDER = 6
+const WF_E_BOSS_MECH = 7
+const WF_E_GHOST = 8     // the secret floor
 
-var wf_grid: [int] = []
+// items
+const WF_I_FOOD = 0
+const WF_I_FIRST_AID = 1
+const WF_I_AMMO = 2
+const WF_I_MACHINE = 3       // machine gun (weapon 3)
+const WF_I_CHAIN = 4         // chaingun (weapon 4)
+const WF_I_GOLD = 5
+const WF_I_SILVER = 6
+const WF_I_TREASURE = 7      // score only
+const WF_I_LIFE = 8
+const WF_I_DOG_FOOD = 9
+const WF_I_DOT = 10          // secret floor: a dot to eat
+const WF_I_POWER = 11        // secret floor: the ghosts can be eaten for a while
+
+// weapons, in the order of the number keys 1 to 4
+const WF_W_KNIFE = 0
+const WF_W_PISTOL = 1
+const WF_W_MACHINE = 2
+const WF_W_CHAIN = 3
+
+// game modes
+const WF_M_TITLE = 0
+const WF_M_PLAY = 1
+const WF_M_PAUSE = 2
+const WF_M_DEAD = 3
+const WF_M_INTER = 4
+const WF_M_OVER = 5
+const WF_M_WIN = 6
+
+// the keys the game polls every tick (wf_poll); a key that is in this list gives an edge with wf_pressed
+let WF_KEYS = ["enter", "esc", "p", "q", "r", "e", "1", "2", "3", "4", "up", "down", "left", "right"]
+
+// kind: a WF_E_* value. hp: hit points left. fx, fy: the way it faces. walk: the stride phase while it moves.
+// scale: the size of its model. speed: tiles a second. dmg: damage per hit. rng: how far it shoots. uni, skin: colours.
+struct Enemy { x: float, y: float, kind: int = 0, hp: int = 5, cool: float = 1.0, hurt: float = 0.0, seen: bool = false, fx: float = 1.0, fy: float = 0.0, walk: float = 0.0, moving: bool = false, scale: float = 1.0, speed: float = 1.2, dmg: int = 4, rng: float = 8.0, uni: int = 0, skin: int = 0 }
+
+// a pickup or a score object on the floor; val is its score
+struct WfItem { x: float, y: float, kind: int, val: int = 0, alive: bool = true }
+
+var wf_grid: [int] = []        // the tiles of the floor, index y * WF_N + x
+var wf_dclose: [int] = []      // a door that closes again: the tile it closes to (0 for a door that stays open)
+var wf_dtime: [float] = []     // seconds an open door has left before it closes
+var wf_seen: [bool] = []       // tiles the player has seen (the mini map shows only these)
 var wf_enemies: [Enemy] = []
-// The scene is ray cast at the real size of the canvas (every screen pixel is a column or a row of the picture).
-// If a frame takes too long the resolution drops a step (wf_q = 2: half as many pixels in each direction) and the
-// picture is scaled up smoothly; with time to spare it climbs back to full resolution.
+var wf_items: [WfItem] = []
+var wf_exit_x = -1             // the elevator and the secret elevator of this floor (-1 when there is none)
+var wf_exit_y = -1
+var wf_sec_x = -1
+var wf_sec_y = -1
+var wf_held: {str: bool} = {}  // the state of each polled key at the last tick
+var wf_edge: {str: bool} = {}  // the keys that went down in this tick
+
+// the scene
 var wf_rw = 0
 var wf_rh = 0
-var wf_q = 1
+var wf_q = 1                   // every screen pixel is a column or a row of the picture, wf_q of them at a time when slow
 var wf_ms = 0.0
 var wf_buf: [int] = []
 var wf_zbuf: [float] = []
 var wf_px = 1.5
 var wf_py = 1.5
-var wf_a = 0.6          // the angle the player looks at
+var wf_a = 0.0                 // the angle the player looks at
+var wf_bob = 0.0               // head bob phase
+var wf_bob_amt = 0.0           // how much the head bobs (0 when standing still)
+var wf_pain = 0.0              // red screen time left
+var wf_pain_side = 0.0         // the side the last hit came from: below 0 left, above 0 right
+
+// the game
+var wf_mode = WF_M_TITLE
+var wf_ep = 0                  // episode 0..5
+var wf_fl = 0                  // floor 0..9
+var wf_secret_floor = false
+var wf_spawn_frac = 1.0        // the chance that an enemy of a floor is there (difficulty)
+var wf_dmg_mul = 1.0           // damage the enemies do (difficulty)
+var wf_sel_ep = 0              // the title screen choices
+var wf_sel_diff = 1
+var wf_row = 0
 var wf_hp = 100
-var wf_ammo = 60
+var wf_lives = 3
+var wf_score = 0
+var wf_next_life = 20000
+var wf_ammo = 8
+var wf_owned: [bool] = [true, true, false, false]   // knife, pistol, machine gun, chaingun
+var wf_weapon = WF_W_PISTOL
+var wf_cool = 0.0              // seconds until the next shot
+var wf_flash = 0.0            // muzzle flash time left
+var wf_gold = false
+var wf_silver = false
 var wf_kills = 0
-var wf_fire_cool = 0.0
-var wf_flash = 0.0      // muzzle flash time left
-var wf_pain = 0.0       // red screen time left
-var wf_over = false
-var wf_won = false
+var wf_kill_total = 0
+var wf_treas = 0
+var wf_treas_total = 0
+var wf_secrets = 0
+var wf_secret_total = 0
+var wf_dots = 0
+var wf_power = 0.0             // secret floor: seconds the ghosts can be eaten
+var wf_time = 0.0              // seconds on this floor
+var wf_par = 60.0
+var wf_bonus = 0
+var wf_timer = 0.0             // time left on the death screen
+var wf_msg = ""
+var wf_msg_t = 0.0
 
-// results of the last wf_cast
-var wf_side = 0
-var wf_tile = 0
-var wf_u = 0.0
+// ---------------------------------------------------------------- keys
 
-fn wf_reset() {
+// reads the polled keys once per tick; an edge is a key that went down since the last tick
+fn wf_poll() {
+    for name in WF_KEYS {
+        let now = ui_key_down(name)
+        wf_edge[name] = now and not wf_held.get(name, false)
+        wf_held[name] = now
+    }
+}
+
+fn wf_pressed(name: str) -> bool { return wf_edge.get(name, false) }
+
+// ---------------------------------------------------------------- the floor grid
+
+fn wf_idx(x: int, y: int) -> int { return y * WF_N + x }
+
+// true inside the grid, not on its outer edge
+fn wf_inside(x: int, y: int) -> bool { return x > 0 and y > 0 and x < WF_N - 1 and y < WF_N - 1 }
+
+fn wf_is_wall(t: int) -> bool { return (t >= 1 and t <= 6) or t == 9 }
+
+fn wf_clear_floor() {
     wf_grid = array_make::<int>(WF_N * WF_N)
+    wf_dclose = array_make::<int>(WF_N * WF_N)
+    wf_dtime = array_make::<float>(WF_N * WF_N)
+    wf_seen = array_make::<bool>(WF_N * WF_N)
+    wf_items = []
     wf_enemies = []
-    for y in 0..WF_N {
-        for x in 0..WF_N {
-            let ch = WF_MAP[y][x..x + 1]
-            if ch == "#" { wf_grid[y * WF_N + x] = 1 }
-            else if ch == "2" { wf_grid[y * WF_N + x] = 2 }
-            else if ch == "P" { wf_px = float(x) + 0.5; wf_py = float(y) + 0.5 }
-            else if ch == "E" { wf_enemies.push(Enemy{ x: float(x) + 0.5, y: float(y) + 0.5 }) }
+    wf_exit_x = -1
+    wf_exit_y = -1
+    wf_sec_x = -1
+    wf_sec_y = -1
+    wf_power = 0.0
+    wf_kill_total = 0
+    wf_treas_total = 0
+    wf_secret_total = 0
+    wf_dots = 0
+}
+
+fn wf_add_item(kind: int, x: float, y: float, val: int) {
+    wf_items.push(WfItem{ x: x, y: y, kind: kind, val: val })
+    if kind == WF_I_TREASURE { wf_treas_total += 1 }
+    if kind == WF_I_DOT { wf_dots += 1 }
+}
+
+fn wf_add_enemy(kind: int, x: float, y: float) {
+    wf_enemies.push(wf_enemy_new(kind, x, y))
+    if kind != WF_E_GHOST { wf_kill_total += 1 }
+}
+
+// the stats and the look of each kind of enemy
+fn wf_enemy_new(kind: int, x: float, y: float) -> Enemy {
+    var e = Enemy{ x: x, y: y, kind: kind }
+    if kind == WF_E_GUARD {
+        e.hp = 5; e.speed = 1.2; e.dmg = 4; e.rng = 8.0; e.uni = wf_pack(120, 84, 48); e.skin = wf_pack(230, 190, 150)
+    } else if kind == WF_E_OFFICER {
+        e.hp = 8; e.speed = 1.4; e.dmg = 6; e.rng = 8.0; e.uni = wf_pack(196, 196, 204); e.skin = wf_pack(230, 190, 150)
+    } else if kind == WF_E_SS {
+        e.hp = 14; e.speed = 1.5; e.dmg = 8; e.rng = 9.0; e.uni = wf_pack(70, 80, 120); e.skin = wf_pack(230, 190, 150)
+    } else if kind == WF_E_MUTANT {
+        e.hp = 10; e.speed = 2.2; e.dmg = 8; e.rng = 6.0; e.uni = wf_pack(70, 140, 70); e.skin = wf_pack(110, 170, 90)
+    } else if kind == WF_E_DOG {
+        e.hp = 4; e.speed = 2.6; e.dmg = 6; e.rng = 0.0; e.scale = 0.6; e.uni = wf_pack(140, 100, 60); e.skin = wf_pack(140, 100, 60)
+    } else if kind == WF_E_BOSS_DOCTOR {
+        e.hp = 60; e.speed = 1.0; e.dmg = 10; e.rng = 9.0; e.scale = 1.5; e.uni = wf_pack(230, 230, 230); e.skin = wf_pack(200, 170, 140)
+    } else if kind == WF_E_BOSS_COMMANDER {
+        e.hp = 90; e.speed = 1.2; e.dmg = 12; e.rng = 9.0; e.scale = 1.5; e.uni = wf_pack(100, 60, 70); e.skin = wf_pack(220, 180, 150)
+    } else if kind == WF_E_BOSS_MECH {
+        e.hp = 150; e.speed = 1.0; e.dmg = 14; e.rng = 10.0; e.scale = 1.8; e.uni = wf_pack(150, 150, 160); e.skin = wf_pack(80, 80, 90)
+    } else {
+        e.hp = 1; e.speed = 1.5; e.dmg = 8; e.rng = 0.0; e.seen = true; e.uni = wf_pack(220, 40, 40); e.skin = e.uni
+    }
+    return e
+}
+
+// the kind of enemy a floor brings: later floors bring the harder ones
+fn wf_pick_kind(fl: int) -> int {
+    let r = rand_int(0, 99)
+    if fl < 3 {
+        if r < 60 { return WF_E_GUARD }
+        if r < 85 { return WF_E_DOG }
+        return WF_E_OFFICER
+    }
+    if fl < 6 {
+        if r < 35 { return WF_E_GUARD }
+        if r < 60 { return WF_E_OFFICER }
+        if r < 75 { return WF_E_DOG }
+        return WF_E_SS
+    }
+    if r < 15 { return WF_E_GUARD }
+    if r < 35 { return WF_E_OFFICER }
+    if r < 65 { return WF_E_SS }
+    if r < 90 { return WF_E_MUTANT }
+    return WF_E_DOG
+}
+
+fn wf_boss_kind(ep: int) -> int {
+    if ep == 1 or ep == 3 { return WF_E_BOSS_COMMANDER }
+    if ep == 5 { return WF_E_BOSS_MECH }
+    return WF_E_BOSS_DOCTOR
+}
+
+fn wf_treasure_value() -> int {
+    let r = rand_int(0, 3)
+    if r == 0 { return 100 }
+    if r == 1 { return 500 }
+    if r == 2 { return 1000 }
+    return 2000
+}
+
+// A normal floor: rooms joined in a chain by corridors. The doors sit in the corridors, the keys lie in the
+// rooms before the locked doors and the elevator is in the last room, so every floor can be finished.
+// The same seed gives the same floor every time.
+fn wf_gen_floor(ep: int, fl: int) {
+    rand_seed(ep * 1000 + fl * 17 + 7)
+    wf_clear_floor()
+    let wall = if ep % 2 == 0 { WF_T_BRICK } else { WF_T_STONE }
+    for i in 0..WF_N * WF_N {
+        wf_grid[i] = wall
+        if rand_int(0, 5) == 0 { wf_grid[i] = WF_T_GREY }
+    }
+
+    // rooms, placed at random without touching each other
+    var rx: [int] = []
+    var ry: [int] = []
+    var rw: [int] = []
+    var rh: [int] = []
+    var tries = 0
+    let want = 6 + rand_int(0, 3)
+    while rx.len() < want and tries < 400 {
+        tries += 1
+        let w = rand_int(4, 7)
+        let h = rand_int(4, 6)
+        let x = rand_int(2, WF_N - w - 3)
+        let y = rand_int(2, WF_N - h - 3)
+        var free = true
+        for i in 0..rx.len() {
+            if x < rx[i] + rw[i] + 3 and rx[i] < x + w + 3 and y < ry[i] + rh[i] + 3 and ry[i] < y + h + 3 { free = false }
+        }
+        if free {
+            rx.push(x)
+            ry.push(y)
+            rw.push(w)
+            rh.push(h)
         }
     }
-    wf_a = 0.6
-    wf_hp = 100
-    wf_ammo = 60
-    wf_kills = 0
-    wf_fire_cool = 0.0
-    wf_flash = 0.0
-    wf_pain = 0.0
-    wf_over = false
-    wf_won = false
+    let n = rx.len()
+    for i in 0..n {
+        for y in ry[i]..ry[i] + rh[i] {
+            for x in rx[i]..rx[i] + rw[i] { wf_grid[wf_idx(x, y)] = WF_T_FLOOR }
+        }
+    }
+
+    // corridors: an L from the middle of each room to the middle of the next one; a door goes where it is one tile wide
+    var door_x: [int] = []
+    var door_y: [int] = []
+    for i in 0..n - 1 {
+        let ax = rx[i] + rw[i] / 2
+        let ay = ry[i] + rh[i] / 2
+        let bx = rx[i + 1] + rw[i + 1] / 2
+        let by = ry[i + 1] + rh[i + 1] / 2
+        for x in min(ax, bx)..max(ax, bx) + 1 { wf_grid[wf_idx(x, ay)] = WF_T_FLOOR }
+        for y in min(ay, by)..max(ay, by) + 1 { wf_grid[wf_idx(bx, y)] = WF_T_FLOOR }
+        var dx = -1
+        var dy = -1
+        for x in min(ax, bx) + 1..max(ax, bx) {
+            if dx < 0 and wf_is_wall(wf_grid[wf_idx(x, ay - 1)]) and wf_is_wall(wf_grid[wf_idx(x, ay + 1)]) and wf_grid[wf_idx(x, ay)] == WF_T_FLOOR {
+                dx = x
+                dy = ay
+            }
+        }
+        for y in min(ay, by) + 1..max(ay, by) {
+            if dx < 0 and wf_is_wall(wf_grid[wf_idx(bx - 1, y)]) and wf_is_wall(wf_grid[wf_idx(bx + 1, y)]) and wf_grid[wf_idx(bx, y)] == WF_T_FLOOR {
+                dx = bx
+                dy = y
+            }
+        }
+        door_x.push(dx)
+        door_y.push(dy)
+    }
+
+    // doors: a locked silver door in corridor 2 (its key lies in room 1), a locked gold door in corridor 4
+    // (its key lies in room 3), the other corridors get a plain door now and then
+    for i in 0..n - 1 {
+        let x = door_x[i]
+        let y = door_y[i]
+        if x < 0 { continue }
+        let at = wf_idx(x, y)
+        if i == 2 and n >= 4 {
+            wf_grid[at] = WF_T_SILVER
+            wf_add_item(WF_I_SILVER, float(rx[1] + rw[1] / 2) + 0.5, float(ry[1] + rh[1] / 2) + 0.5, 0)
+        } else if i == 4 and n >= 6 {
+            wf_grid[at] = WF_T_GOLD
+            wf_add_item(WF_I_GOLD, float(rx[3] + rw[3] / 2) + 0.5, float(ry[3] + rh[3] / 2) + 0.5, 0)
+        } else if rand_int(0, 9) < 6 {
+            wf_grid[at] = WF_T_DOOR
+            wf_dclose[at] = WF_T_DOOR
+        }
+    }
+
+    // the start in the first room, the elevator in the last one
+    wf_px = float(rx[0] + rw[0] / 2) + 0.5
+    wf_py = float(ry[0] + rh[0] / 2) + 0.5
+    wf_a = 0.0
+    let ex = rx[n - 1] + rw[n - 1] / 2
+    let ey = ry[n - 1] + rh[n - 1] / 2
+    wf_grid[wf_idx(ex, ey)] = WF_T_EXIT
+    wf_exit_x = ex
+    wf_exit_y = ey
+
+    // the secret elevator (episodes 3 and 4, floor 7) sits in the room before the last one
+    if fl == 6 and (ep == 2 or ep == 3) and n >= 3 {
+        let kx = rx[n - 2] + 1
+        let ky = ry[n - 2] + 1
+        wf_grid[wf_idx(kx, ky)] = WF_T_SECRET
+        wf_sec_x = kx
+        wf_sec_y = ky
+    }
+
+    // a secret room: a pushwall in the east wall of a room, a stub corridor in front of it, and a treasure behind it
+    var k = 1
+    var placed = false
+    while k < n - 1 and not placed {
+        let y0 = ry[k] + 1
+        let sx = rx[k] + rw[k] + 3
+        var clear = sx + 4 < WF_N - 1 and y0 + 2 < WF_N - 1 and y0 - 1 > 0
+        if clear {
+            for x in rx[k] + rw[k]..sx + 4 {
+                for y in y0 - 1..y0 + 3 {
+                    if not wf_is_wall(wf_grid[wf_idx(x, y)]) { clear = false }
+                }
+            }
+        }
+        if clear {
+            for x in rx[k] + rw[k]..sx - 1 { wf_grid[wf_idx(x, y0)] = WF_T_FLOOR }
+            wf_grid[wf_idx(sx - 1, y0)] = WF_T_PUSH
+            for y in y0 - 1..y0 + 3 {
+                for x in sx..sx + 4 { wf_grid[wf_idx(x, y)] = WF_T_FLOOR }
+            }
+            wf_add_item(WF_I_TREASURE, float(sx + 2) + 0.5, float(y0) + 0.5, 1000)
+            wf_secret_total += 1
+            placed = true
+        }
+        k += 1
+    }
+
+    // enemies: up to two in each room, the boss waits in the last room on the boss floor
+    for r in 1..n {
+        let count = rand_int(0, 2)
+        for i in 0..count {
+            if rand_float() < wf_spawn_frac {
+                let x = float(rx[r] + rand_int(0, rw[r] - 1)) + 0.5
+                let y = float(ry[r] + rand_int(0, rh[r] - 1)) + 0.5
+                wf_add_enemy(wf_pick_kind(fl), x, y)
+            }
+        }
+    }
+    if fl == WF_FLOORS - 1 {
+        wf_add_enemy(wf_boss_kind(ep), float(ex) - 1.5, float(ey) + 0.5)
+    }
+
+    // loot: ammo, food, first aid and treasure in most rooms; a weapon on floors 2 and 5; an extra life every third floor
+    for r in 0..n {
+        let x = float(rx[r] + 1) + 0.5
+        let y = float(ry[r] + 1) + 0.5
+        let roll = rand_int(0, 99)
+        if roll < 30 { wf_add_item(WF_I_AMMO, x, y, 0) }
+        else if roll < 45 { wf_add_item(WF_I_FOOD, x, y, 0) }
+        else if roll < 55 { wf_add_item(WF_I_FIRST_AID, x, y, 0) }
+        else if roll < 65 { wf_add_item(WF_I_TREASURE, x, y, wf_treasure_value()) }
+    }
+    if fl == 1 {
+        wf_add_item(WF_I_MACHINE, float(rx[2] + 1) + 0.5, float(ry[2] + 1) + 0.5, 0)
+    }
+    if fl == 4 {
+        wf_add_item(WF_I_CHAIN, float(rx[n / 2] + 1) + 0.5, float(ry[n / 2] + 1) + 0.5, 0)
+    }
+    if fl % 3 == 2 {
+        wf_add_item(WF_I_LIFE, float(rx[n / 2] + 2) + 0.5, float(ry[n / 2] + 1) + 0.5, 0)
+    }
 }
+
+// The secret floor: a pillared maze full of dots. Four ghosts chase the player, the power dots make them
+// edible for a while, and four extra lives lie in the maze. The floor is done when every dot is eaten.
+fn wf_gen_maze(ep: int) {
+    rand_seed(ep * 1000 + 999)
+    wf_clear_floor()
+    for y in 0..WF_N {
+        for x in 0..WF_N {
+            let edge = x == 0 or y == 0 or x == WF_N - 1 or y == WF_N - 1
+            if edge {
+                wf_grid[wf_idx(x, y)] = WF_T_STONE
+            } else if x % 4 == 2 and y % 4 == 2 {
+                wf_grid[wf_idx(x, y)] = WF_T_GREY
+            } else {
+                wf_grid[wf_idx(x, y)] = WF_T_FLOOR
+                let start = x <= 3 and y <= 3
+                let house = x >= 14 and x <= 17 and y >= 14 and y <= 17
+                if not start and not house {
+                    let power = x % 4 == 1 and y % 4 == 1 and (x == 5 or x == 25) and (y == 5 or y == 25)
+                    if power {
+                        wf_add_item(WF_I_POWER, float(x) + 0.5, float(y) + 0.5, 0)
+                    } else {
+                        wf_add_item(WF_I_DOT, float(x) + 0.5, float(y) + 0.5, 10)
+                    }
+                }
+            }
+        }
+    }
+    wf_add_item(WF_I_LIFE, 29.5, 3.5, 0)
+    wf_add_item(WF_I_LIFE, 3.5, 29.5, 0)
+    wf_add_item(WF_I_LIFE, 15.5, 1.5, 0)
+    wf_add_item(WF_I_LIFE, 1.5, 15.5, 0)
+    wf_px = 1.5
+    wf_py = 1.5
+    wf_a = 0.0
+    for i in 0..4 {
+        let gx = 15.5 + float(i % 2)
+        let gy = 15.5 + float(i / 2)
+        wf_add_enemy(WF_E_GHOST, gx, gy)
+    }
+}
+
+// ---------------------------------------------------------------- collision and rays
 
 fn wf_solid(x: float, y: float) -> bool {
     let mx = int(floor(x))
     let my = int(floor(y))
     if mx < 0 or my < 0 or mx >= WF_N or my >= WF_N { return true }
-    return wf_grid[my * WF_N + mx] > 0
+    return wf_is_wall(wf_grid[my * WF_N + mx])
 }
 
 // the player and the enemies are a little square, so test its four corners
@@ -96,6 +483,10 @@ fn wf_blocked(x: float, y: float) -> bool {
 }
 
 // distance from (ox, oy) to the first wall along (dx, dy); sets wf_side, wf_tile and wf_u
+var wf_side = 0
+var wf_tile = 0
+var wf_u = 0.0
+
 fn wf_cast(ox: float, oy: float, dx: float, dy: float) -> float {
     var mx = int(floor(ox))
     var my = int(floor(oy))
@@ -110,12 +501,12 @@ fn wf_cast(ox: float, oy: float, dx: float, dy: float) -> float {
     if dx < 0.0 { stepx = -1; sdx = (ox - float(mx)) * ddx }
     if dy < 0.0 { stepy = -1; sdy = (oy - float(my)) * ddy }
     var steps = 0
-    while steps < 40 {
+    while steps < 64 {
         var side = 0
         if sdx < sdy { sdx += ddx; mx += stepx } else { sdy += ddy; my += stepy; side = 1 }
         if mx < 0 or my < 0 or mx >= WF_N or my >= WF_N { break }
         let t = wf_grid[my * WF_N + mx]
-        if t > 0 {
+        if wf_is_wall(t) {
             wf_tile = t
             wf_side = side
             var d = sdx - ddx
@@ -126,7 +517,7 @@ fn wf_cast(ox: float, oy: float, dx: float, dy: float) -> float {
         }
         steps += 1
     }
-    return 40.0
+    return 64.0
 }
 
 fn wf_clear_shot(ax: float, ay: float, bx: float, by: float) -> bool {
@@ -136,65 +527,474 @@ fn wf_clear_shot(ax: float, ay: float, bx: float, by: float) -> bool {
     return wf_cast(ax, ay, dx / dist, dy / dist) >= dist
 }
 
-// ---------------------------------------------------------------- game logic
+// ---------------------------------------------------------------- the player
 
-fn wf_shoot() {
-    if wf_fire_cool > 0.0 or wf_ammo <= 0 or wf_over { return }
-    wf_fire_cool = 0.28
-    wf_flash = 0.07
-    wf_ammo -= 1
+// the living enemy nearest in front of the player, closer than `limit` and within `width` to either side
+fn wf_target(limit: float, width: float) -> Enemy? {
+    var best: Enemy? = nil
+    var best_d = limit
     let dx = cos(wf_a)
     let dy = sin(wf_a)
-    let wall = wf_cast(wf_px, wf_py, dx, dy)
-    var best: Enemy? = nil
-    var best_d = 999.0
     for e in wf_enemies {
         if e.hp <= 0 { continue }
         let rx = e.x - wf_px
         let ry = e.y - wf_py
         let depth = rx * dx + ry * dy
         let side = abs(-rx * dy + ry * dx)
-        if depth > 0.2 and depth < wall and side < 0.3 and depth < best_d {
+        if depth > 0.2 and depth < best_d and side < width {
             best = e
             best_d = depth
         }
     }
-    if let e = best {
-        e.hp -= 1
-        e.hurt = 0.15
-        e.seen = true
-        if e.hp <= 0 { wf_kills += 1 }
+    return best
+}
+
+fn wf_say(s: str) {
+    wf_msg = s
+    wf_msg_t = 2.0
+}
+
+fn wf_add_score(n: int) {
+    wf_score += n
+    while wf_score >= wf_next_life {
+        wf_lives += 1
+        wf_next_life += 20000
+        wf_say("Extra life")
     }
 }
 
-fn wf_enemy_step(e: Enemy, dt: float) {
-    e.hurt -= dt
-    let rx = wf_px - e.x
-    let ry = wf_py - e.y
-    let dist = sqrt(rx * rx + ry * ry)
-    if dist < 9.0 and wf_clear_shot(e.x, e.y, wf_px, wf_py) { e.seen = true }
-    if not e.seen { return }
-    if dist > 1.1 {
-        let sp = 1.3 * dt
-        let nx = e.x + rx / dist * sp
-        let ny = e.y + ry / dist * sp
-        if not wf_blocked(nx, e.y) { e.x = nx }
-        if not wf_blocked(e.x, ny) { e.y = ny }
+fn wf_points(kind: int) -> int {
+    if kind == WF_E_GUARD { return 100 }
+    if kind == WF_E_DOG or kind == WF_E_GHOST { return 200 }
+    if kind == WF_E_OFFICER { return 400 }
+    if kind == WF_E_SS { return 500 }
+    if kind == WF_E_MUTANT { return 700 }
+    return 5000
+}
+
+fn wf_kill(e: Enemy) {
+    e.hp = 0
+    if e.kind != WF_E_GHOST { wf_kills += 1 }
+    wf_add_score(wf_points(e.kind))
+    if e.kind == WF_E_GUARD or e.kind == WF_E_OFFICER or e.kind == WF_E_SS {
+        if rand_int(0, 2) == 0 { wf_add_item(WF_I_AMMO, e.x, e.y, 0) }
     }
-    e.cool -= dt
-    if e.cool <= 0.0 and dist < 8.0 and wf_clear_shot(e.x, e.y, wf_px, wf_py) {
-        e.cool = 1.0 + rand_float()
-        if rand_float() < 0.45 or dist < 1.3 {
-            wf_hp -= 4 + rand_int(0, 5)
-            wf_pain = 0.2
+    if e.kind >= WF_E_BOSS_DOCTOR and e.kind <= WF_E_BOSS_MECH { wf_say("Boss defeated") }
+}
+
+fn wf_hurt_enemy(e: Enemy, dmg: int) {
+    e.hp -= dmg
+    e.hurt = 0.15
+    e.seen = true
+    if e.hp <= 0 { wf_kill(e) }
+}
+
+// the player takes damage from e; the red edge on the screen shows the side it came from
+fn wf_harm(e: Enemy, base: int) {
+    wf_hp -= int(float(base) * wf_dmg_mul) + rand_int(0, 2)
+    wf_pain = 0.3
+    let ex = e.x - wf_px
+    let ey = e.y - wf_py
+    wf_pain_side = ex * (-sin(wf_a)) + ey * cos(wf_a)
+}
+
+fn wf_pick_weapon(w: int) {
+    if not wf_owned[w] {
+        wf_say("You do not have that yet")
+        return
+    }
+    wf_weapon = w
+    wf_say(wf_weapon_name(w))
+}
+
+fn wf_weapon_name(w: int) -> str {
+    if w == WF_W_KNIFE { return "knife" }
+    if w == WF_W_PISTOL { return "pistol" }
+    if w == WF_W_MACHINE { return "machine gun" }
+    return "chaingun"
+}
+
+// the knife hits the nearest enemy within reach; the guns hit the nearest one in front of the wall
+fn wf_fire() {
+    if wf_cool > 0.0 { return }
+    if wf_weapon == WF_W_KNIFE {
+        wf_cool = 0.5
+        if let e = wf_target(1.2, 0.5) { wf_hurt_enemy(e, 10 + rand_int(0, 4)) }
+        return
+    }
+    if wf_ammo <= 0 {
+        wf_say("No ammo")
+        wf_cool = 0.4
+        return
+    }
+    wf_ammo -= 1
+    wf_flash = 0.07
+    if wf_weapon == WF_W_PISTOL { wf_cool = 0.3 } else if wf_weapon == WF_W_MACHINE { wf_cool = 0.12 } else { wf_cool = 0.07 }
+    let wall = wf_cast(wf_px, wf_py, cos(wf_a), sin(wf_a))
+    if let e = wf_target(wall, 0.3) { wf_hurt_enemy(e, 5 + rand_int(0, 2)) }
+}
+
+// takes an item the player walks over; false when it stays on the floor (health or ammo already full)
+fn wf_take(item: WfItem) -> bool {
+    let k = item.kind
+    if k == WF_I_FOOD or k == WF_I_FIRST_AID or k == WF_I_DOG_FOOD {
+        if wf_hp >= 100 { return false }
+        if k == WF_I_FOOD {
+            wf_hp = min(wf_hp + 10, 100)
+            wf_say("Food")
+        } else if k == WF_I_FIRST_AID {
+            wf_hp = min(wf_hp + 25, 100)
+            wf_say("First aid")
+        } else {
+            wf_hp = min(wf_hp + 4, 100)
+            wf_say("Dog food")
+        }
+        return true
+    }
+    if k == WF_I_AMMO {
+        if wf_ammo >= 99 { return false }
+        wf_ammo = min(wf_ammo + 8, 99)
+        wf_say("Ammo")
+        return true
+    }
+    if k == WF_I_MACHINE {
+        wf_owned[WF_W_MACHINE] = true
+        wf_ammo = min(wf_ammo + 6, 99)
+        if wf_weapon < WF_W_MACHINE { wf_weapon = WF_W_MACHINE }
+        wf_say("Machine gun")
+        return true
+    }
+    if k == WF_I_CHAIN {
+        wf_owned[WF_W_CHAIN] = true
+        wf_ammo = min(wf_ammo + 20, 99)
+        wf_weapon = WF_W_CHAIN
+        wf_say("Chaingun")
+        return true
+    }
+    if k == WF_I_GOLD {
+        wf_gold = true
+        wf_say("Gold key")
+        return true
+    }
+    if k == WF_I_SILVER {
+        wf_silver = true
+        wf_say("Silver key")
+        return true
+    }
+    if k == WF_I_TREASURE {
+        wf_treas += 1
+        wf_add_score(item.val)
+        wf_say("Treasure")
+        return true
+    }
+    if k == WF_I_LIFE {
+        wf_lives += 1
+        wf_say("Extra life")
+        return true
+    }
+    if k == WF_I_DOT {
+        wf_dots -= 1
+        wf_add_score(10)
+        return true
+    }
+    if k == WF_I_POWER {
+        wf_power = 6.0
+        wf_say("The ghosts can be eaten!")
+        return true
+    }
+    return false
+}
+
+fn wf_collect() {
+    for item in wf_items {
+        if not item.alive { continue }
+        let dx = item.x - wf_px
+        let dy = item.y - wf_py
+        if dx * dx + dy * dy < 0.2 and wf_take(item) { item.alive = false }
+    }
+}
+
+// the door, pushwall or elevator in front of the player (E); the elevator is under the player
+fn wf_use() {
+    let cx = int(floor(wf_px))
+    let cy = int(floor(wf_py))
+    let here = wf_grid[wf_idx(cx, cy)]
+    if here == WF_T_EXIT {
+        wf_exit_floor()
+        return
+    }
+    if here == WF_T_SECRET {
+        wf_enter_secret()
+        return
+    }
+    // the neighbour cell the player faces
+    let fx = cos(wf_a)
+    let fy = sin(wf_a)
+    var nx = 0
+    var ny = 0
+    var best = 0.5
+    for d in 0..4 {
+        var dx = 0
+        var dy = 0
+        if d == 0 { dx = 1 } else if d == 1 { dx = -1 } else if d == 2 { dy = 1 } else { dy = -1 }
+        let dot = float(dx) * fx + float(dy) * fy
+        if dot > best {
+            best = dot
+            nx = dx
+            ny = dy
+        }
+    }
+    if nx == 0 and ny == 0 { return }
+    let x = cx + nx
+    let y = cy + ny
+    let at = wf_idx(x, y)
+    let t = wf_grid[at]
+    if t == WF_T_DOOR {
+        wf_grid[at] = WF_T_OPEN
+        wf_dtime[at] = 4.0
+    } else if t == WF_T_GOLD {
+        if wf_gold {
+            wf_grid[at] = WF_T_OPEN
+            wf_dclose[at] = 0
+        } else {
+            wf_say("A gold key opens this door")
+        }
+    } else if t == WF_T_SILVER {
+        if wf_silver {
+            wf_grid[at] = WF_T_OPEN
+            wf_dclose[at] = 0
+        } else {
+            wf_say("A silver key opens this door")
+        }
+    } else if t == WF_T_PUSH {
+        wf_push(x, y, nx, ny)
+    }
+}
+
+// the pushwall moves two tiles away from the player when the two tiles behind it are free; then it is a plain wall
+fn wf_push(x: int, y: int, dx: int, dy: int) {
+    let x1 = x + dx
+    let y1 = y + dy
+    let x2 = x + 2 * dx
+    let y2 = y + 2 * dy
+    if (not wf_inside(x2, y2)) or wf_grid[wf_idx(x1, y1)] != WF_T_FLOOR or wf_grid[wf_idx(x2, y2)] != WF_T_FLOOR {
+        wf_say("The wall does not move")
+        return
+    }
+    wf_grid[wf_idx(x, y)] = WF_T_FLOOR
+    wf_grid[wf_idx(x1, y1)] = WF_T_FLOOR
+    wf_grid[wf_idx(x2, y2)] = WF_T_BRICK
+    wf_secrets += 1
+    wf_say("A secret wall moves!")
+}
+
+// the open doors that close again: after 4 seconds, when nobody stands in them
+fn wf_doors(dt: float) {
+    let here = wf_idx(int(floor(wf_px)), int(floor(wf_py)))
+    for i in 0..WF_N * WF_N {
+        if wf_grid[i] == WF_T_OPEN and wf_dclose[i] > 0 {
+            wf_dtime[i] -= dt
+            if wf_dtime[i] <= 0.0 and i != here and not wf_occupied(i) {
+                wf_grid[i] = wf_dclose[i]
+            }
         }
     }
 }
 
-fn wf_step() {
-    if ui_key_down("r") { wf_reset() }
-    if wf_over { return }
+fn wf_occupied(i: int) -> bool {
+    for e in wf_enemies {
+        if e.hp > 0 and wf_idx(int(floor(e.x)), int(floor(e.y))) == i { return true }
+    }
+    return false
+}
+
+// the tiles near the player are seen (a simple distance test, not a line of sight test)
+fn wf_reveal() {
+    let cx = int(floor(wf_px))
+    let cy = int(floor(wf_py))
+    for y in cy - 4..cy + 5 {
+        for x in cx - 4..cx + 5 {
+            if wf_inside(x, y) { wf_seen[wf_idx(x, y)] = true }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- enemies
+
+fn wf_enemy_step(e: Enemy, dt: float) {
+    e.hurt -= dt
+    e.cool -= dt
+    let rx = wf_px - e.x
+    let ry = wf_py - e.y
+    let dist = sqrt(rx * rx + ry * ry)
+    if e.kind == WF_E_GHOST {
+        wf_ghost_step(e, dt, dist)
+        return
+    }
+    if dist < 9.0 and wf_clear_shot(e.x, e.y, wf_px, wf_py) { e.seen = true }
+    if not e.seen { return }
+    if dist > 0.01 {
+        e.fx = rx / dist
+        e.fy = ry / dist
+    }
+    e.moving = false
+    let stop = if e.kind == WF_E_DOG { 0.8 } else { 1.1 }
+    if dist > stop {
+        let sp = e.speed * dt
+        let nx = e.x + rx / dist * sp
+        let ny = e.y + ry / dist * sp
+        if not wf_blocked(nx, e.y) { e.x = nx; e.moving = true }
+        if not wf_blocked(e.x, ny) { e.y = ny; e.moving = true }
+        if e.moving { e.walk += dt * e.speed * 6.0 }
+    }
+    if e.cool > 0.0 { return }
+    if e.kind == WF_E_DOG {
+        if dist < 1.0 {
+            e.cool = 0.7
+            wf_harm(e, e.dmg)
+        }
+        return
+    }
+    if e.rng > 0.0 and dist < e.rng and wf_clear_shot(e.x, e.y, wf_px, wf_py) {
+        e.cool = 1.0 + rand_float()
+        if rand_float() < 0.45 or dist < 1.3 { wf_harm(e, e.dmg) }
+    }
+}
+
+// the ghosts of the secret floor chase the player; while a power dot is active, touching one eats it
+fn wf_ghost_step(e: Enemy, dt: float, dist: float) {
+    if e.hp <= 0 { return }
+    if dist < 0.6 {
+        if wf_power > 0.0 {
+            wf_kill(e)
+            return
+        }
+        if e.cool <= 0.0 {
+            e.cool = 1.0
+            wf_harm(e, e.dmg)
+        }
+        return
+    }
+    if dist > 0.01 {
+        var sp = e.speed * dt
+        if wf_power > 0.0 { sp *= 0.6 }
+        let nx = e.x + (wf_px - e.x) / dist * sp
+        let ny = e.y + (wf_py - e.y) / dist * sp
+        if not wf_blocked(nx, e.y) { e.x = nx }
+        if not wf_blocked(e.x, ny) { e.y = ny }
+    }
+}
+
+// ---------------------------------------------------------------- the floors and the game flow
+
+// the floor the player is on, from the seed of its episode and floor (or the maze of the secret floor)
+fn wf_load_floor() {
+    if wf_secret_floor {
+        wf_gen_maze(wf_ep)
+    } else {
+        wf_gen_floor(wf_ep, wf_fl)
+    }
+    wf_kills = 0
+    wf_treas = 0
+    wf_secrets = 0
+    wf_gold = false
+    wf_silver = false
+    wf_time = 0.0
+    wf_par = 60.0 + float(wf_fl) * 15.0
+    wf_bob_amt = 0.0
+    wf_pain = 0.0
+    wf_cool = 0.0
+    wf_flash = 0.0
+    wf_hp = 100
+    wf_mode = WF_M_PLAY
+}
+
+// a new game from an episode and a difficulty (0 Easy, 1 Normal, 2 Hard, 3 Nightmare)
+fn wf_new_game(ep: int, diff: int) {
+    wf_ep = ep
+    if diff == 0 {
+        wf_spawn_frac = 0.6
+        wf_dmg_mul = 0.75
+    } else if diff == 1 {
+        wf_spawn_frac = 0.8
+        wf_dmg_mul = 1.0
+    } else if diff == 2 {
+        wf_spawn_frac = 1.0
+        wf_dmg_mul = 1.25
+    } else {
+        wf_spawn_frac = 1.0
+        wf_dmg_mul = 1.5
+    }
+    wf_sel_diff = diff
+    wf_fl = 0
+    wf_secret_floor = false
+    wf_score = 0
+    wf_next_life = 20000
+    wf_lives = 3
+    wf_ammo = 8
+    wf_owned = [true, true, false, false]
+    wf_weapon = WF_W_PISTOL
+    wf_load_floor()
+}
+
+// the player stands on the elevator: the floor is done, the intermission shows the numbers
+fn wf_exit_floor() {
+    wf_bonus = 0
+    if not wf_secret_floor {
+        let left = wf_par - wf_time
+        if left > 0.0 { wf_bonus = int(left) * 10 }
+        wf_add_score(wf_bonus)
+    }
+    wf_mode = WF_M_INTER
+}
+
+// the secret elevator: the secret floor, then the floor after this one
+fn wf_enter_secret() {
+    wf_secret_floor = true
+    wf_load_floor()
+    wf_say("Secret floor")
+}
+
+fn wf_next_floor() {
+    if wf_secret_floor {
+        wf_secret_floor = false
+        wf_fl += 1
+    } else if wf_fl >= WF_FLOORS - 1 {
+        if wf_ep >= WF_EPISODES - 1 {
+            wf_mode = WF_M_WIN
+            return
+        }
+        wf_ep += 1
+        wf_fl = 0
+    } else {
+        wf_fl += 1
+    }
+    wf_load_floor()
+}
+
+fn wf_die() {
+    wf_hp = 0
+    wf_lives -= 1
+    wf_timer = 3.0
+    wf_mode = WF_M_DEAD
+}
+
+fn wf_play_step() {
     let dt = 0.03
+    if wf_pressed("esc") or wf_pressed("p") {
+        wf_mode = WF_M_PAUSE
+        return
+    }
+    if wf_pressed("r") {
+        wf_load_floor()
+        return
+    }
+    if wf_pressed("1") { wf_pick_weapon(WF_W_KNIFE) }
+    if wf_pressed("2") { wf_pick_weapon(WF_W_PISTOL) }
+    if wf_pressed("3") { wf_pick_weapon(WF_W_MACHINE) }
+    if wf_pressed("4") { wf_pick_weapon(WF_W_CHAIN) }
+    if wf_pressed("e") { wf_use() }
+
     let (mdx, _) = ui_mouse_delta()
     wf_a += float(mdx) * 0.0025
     if ui_key_down("left") { wf_a -= 2.2 * dt }
@@ -208,17 +1008,81 @@ fn wf_step() {
     let sp = 3.2 * dt
     let mx = (cos(wf_a) * fwd - sin(wf_a) * side) * sp
     let my = (sin(wf_a) * fwd + cos(wf_a) * side) * sp
+    let ox = wf_px
+    let oy = wf_py
     if not wf_blocked(wf_px + mx, wf_py) { wf_px += mx }
     if not wf_blocked(wf_px, wf_py + my) { wf_py += my }
-    wf_fire_cool -= dt
+    let moved = abs(wf_px - ox) + abs(wf_py - oy)
+    if moved > 0.0 {
+        wf_bob_amt = 1.0
+        wf_bob += moved * 4.2
+    } else {
+        wf_bob_amt *= 0.9
+    }
+
+    if ui_mouse_held(0) or ui_key_down("space") { wf_fire() }
+    wf_cool -= dt
     wf_flash -= dt
     wf_pain -= dt
-    if ui_mouse_held(0) or ui_key_down("space") { wf_shoot() }
+    wf_msg_t -= dt
+    wf_power -= dt
+    wf_time += dt
+    wf_doors(dt)
+    wf_reveal()
     for e in wf_enemies {
         if e.hp > 0 { wf_enemy_step(e, dt) }
     }
-    if wf_hp <= 0 { wf_hp = 0; wf_over = true }
-    if wf_kills == wf_enemies.len() { wf_over = true; wf_won = true }
+    wf_collect()
+    if wf_secret_floor and wf_dots <= 0 {
+        wf_exit_floor()
+        return
+    }
+    if wf_hp <= 0 {
+        wf_die()
+    }
+}
+
+fn wf_title_step() {
+    if wf_pressed("esc") {
+        ui_quit()
+        return
+    }
+    if wf_pressed("up") { wf_row = (wf_row + 2) % 3 }
+    if wf_pressed("down") { wf_row = (wf_row + 1) % 3 }
+    var dir = 0
+    if wf_pressed("right") { dir = 1 }
+    if wf_pressed("left") { dir = -1 }
+    if dir != 0 and wf_row == 0 { wf_sel_ep = (wf_sel_ep + dir + WF_EPISODES) % WF_EPISODES }
+    if dir != 0 and wf_row == 1 { wf_sel_diff = (wf_sel_diff + dir + 4) % 4 }
+    if wf_pressed("enter") {
+        wf_new_game(wf_sel_ep, wf_sel_diff)
+        wf_say("Get ready")
+    }
+}
+
+fn wf_step() {
+    wf_poll()
+    if wf_mode == WF_M_TITLE {
+        wf_title_step()
+    } else if wf_mode == WF_M_PLAY {
+        wf_play_step()
+    } else if wf_mode == WF_M_PAUSE {
+        if wf_pressed("p") or wf_pressed("esc") { wf_mode = WF_M_PLAY }
+        if wf_pressed("q") { wf_mode = WF_M_TITLE }
+    } else if wf_mode == WF_M_DEAD {
+        wf_timer -= 0.03
+        if wf_timer <= 0.0 {
+            if wf_lives > 0 {
+                wf_load_floor()
+            } else {
+                wf_mode = WF_M_OVER
+            }
+        }
+    } else if wf_mode == WF_M_INTER {
+        if wf_pressed("enter") { wf_next_floor() }
+    } else {
+        if wf_pressed("enter") { wf_mode = WF_M_TITLE }
+    }
 }
 
 // ---------------------------------------------------------------- drawing
@@ -227,12 +1091,16 @@ fn wf_pack(r: int, g: int, b: int) -> int {
     return (clamp(r, 0, 255) << 16) | (clamp(g, 0, 255) << 8) | clamp(b, 0, 255)
 }
 
-// the colour of one point of a wall: type 1 is red brick, type 2 is blue stone
+fn wf_shade(col: int, k: float) -> int {
+    return wf_pack(int(float((col >> 16) & 255) * k), int(float((col >> 8) & 255) * k), int(float(col & 255) * k))
+}
+
+// the colour of one point of a wall (u and v run from 0 to 1 across the face), with a light level
 fn wf_wall_color(tile: int, u: float, v: float, light: float) -> int {
     var r = 0
     var g = 0
     var b = 0
-    if tile == 1 {
+    if tile == WF_T_BRICK or tile == WF_T_PUSH {
         let row = int(v * 8.0)
         let off = float(row % 2) * 0.5
         let bu = u * 4.0 + off
@@ -244,7 +1112,7 @@ fn wf_wall_color(tile: int, u: float, v: float, light: float) -> int {
             let n = ((int(bu) * 7 + row * 13) % 5) * 6
             r = 150 + n; g = 60 + n / 2; b = 48
         }
-    } else {
+    } else if tile == WF_T_STONE {
         let gx = int(u * 4.0)
         let gy = int(v * 4.0)
         let fu = u * 4.0 - floor(u * 4.0)
@@ -255,25 +1123,172 @@ fn wf_wall_color(tile: int, u: float, v: float, light: float) -> int {
             let n = ((gx * 5 + gy * 3) % 4) * 8
             r = 60 + n; g = 90 + n; b = 160 + n
         }
+    } else if tile == WF_T_GREY {
+        let gx = int(u * 3.0)
+        let gy = int(v * 6.0)
+        let fu = u * 3.0 - floor(u * 3.0)
+        let fv = v * 6.0 - floor(v * 6.0)
+        if fu < 0.08 or fv < 0.1 {
+            r = 60; g = 60; b = 62
+        } else {
+            let n = ((gx * 3 + gy * 7) % 4) * 5
+            r = 110 + n; g = 110 + n; b = 112 + n
+        }
+    } else {
+        // doors: planks with a dark seam at each edge, and a lock plate in the middle
+        if tile == WF_T_DOOR {
+            r = 122; g = 72; b = 38
+        } else if tile == WF_T_GOLD {
+            r = 206; g = 166; b = 52
+        } else {
+            r = 176; g = 182; b = 192
+        }
+        let fu = u * 4.0 - floor(u * 4.0)
+        if fu < 0.06 or fu > 0.94 { r = r / 2; g = g / 2; b = b / 2 }
+        if abs(u - 0.5) < 0.12 and abs(v - 0.5) < 0.06 { r = 250; g = 230; b = 120 }
     }
     return wf_pack(int(float(r) * light), int(float(g) * light), int(float(b) * light))
 }
 
-// a soldier, drawn from u, v in 0..1; -1 means "see through"
-fn wf_soldier(u: float, v: float, hurt: bool) -> int {
-    var col = -1
-    let hx = u - 0.5
-    let hy = v - 0.17
-    if hx * hx + hy * hy < 0.012 { col = wf_pack(230, 190, 150) }
-    if v > 0.06 and v < 0.14 and abs(hx) < 0.13 and hy < 0.0 { col = wf_pack(90, 100, 70) }
-    if v > 0.30 and v < 0.70 and u > 0.28 and u < 0.72 { col = wf_pack(70, 110, 60) }
-    if v > 0.70 and v < 0.97 and ((u > 0.30 and u < 0.48) or (u > 0.52 and u < 0.70)) { col = wf_pack(50, 50, 60) }
-    if v > 0.42 and v < 0.49 and u > 0.60 and u < 0.88 { col = wf_pack(20, 20, 20) }
-    if v > 0.30 and v < 0.62 and (u < 0.28 and u > 0.20) { col = wf_pack(70, 110, 60) }
-    if hurt and col >= 0 { col = wf_pack(255, 60, 60) }
-    return col
+// One box of a figure, in the figure's own frame: x forward, y to its left, z up, the feet at z = 0.
+// kind says what a box is (0 head, 1 body, 2 leg, 3 arm, 4 gun), so the colours follow the parts.
+struct WfPart { x: float, y: float, z: float, hx: float, hy: float, hz: float, kind: int }
+
+var wf_face = 0        // the side of the box that wf_box_t enters: 0 -x, 1 +x, 2 -y, 3 +y, 4 -z, 5 +z
+var wf_hit_t = 0.0     // what wf_soldier_hit found: the distance, the index of the part and its side
+var wf_hit_part = 0
+var wf_hit_face = 0
+
+// the distance at which the ray o + t * d enters the box p, or -1.0 when it misses (or starts inside it)
+fn wf_box_t(p: WfPart, ox: float, oy: float, oz: float, dx: float, dy: float, dz: float) -> float {
+    var t0 = -1.0e9
+    var t1 = 1.0e9
+    var face = 0
+    if abs(dx) < 1.0e-9 {
+        if ox < p.x - p.hx or ox > p.x + p.hx { return -1.0 }
+    } else {
+        let a = (p.x - p.hx - ox) / dx
+        let b = (p.x + p.hx - ox) / dx
+        if a < b {
+            if a > t0 { t0 = a; face = 0 }
+            if b < t1 { t1 = b }
+        } else {
+            if b > t0 { t0 = b; face = 1 }
+            if a < t1 { t1 = a }
+        }
+    }
+    if abs(dy) < 1.0e-9 {
+        if oy < p.y - p.hy or oy > p.y + p.hy { return -1.0 }
+    } else {
+        let a = (p.y - p.hy - oy) / dy
+        let b = (p.y + p.hy - oy) / dy
+        if a < b {
+            if a > t0 { t0 = a; face = 2 }
+            if b < t1 { t1 = b }
+        } else {
+            if b > t0 { t0 = b; face = 3 }
+            if a < t1 { t1 = a }
+        }
+    }
+    if abs(dz) < 1.0e-9 {
+        if oz < p.z - p.hz or oz > p.z + p.hz { return -1.0 }
+    } else {
+        let a = (p.z - p.hz - oz) / dz
+        let b = (p.z + p.hz - oz) / dz
+        if a < b {
+            if a > t0 { t0 = a; face = 4 }
+            if b < t1 { t1 = b }
+        } else {
+            if b > t0 { t0 = b; face = 5 }
+            if a < t1 { t1 = a }
+        }
+    }
+    if t0 > t1 or t0 < 0.0 { return -1.0 }
+    wf_face = face
+    return t0
 }
 
+// the nearest part of a figure that the ray o + t * d enters; sets wf_hit_t, wf_hit_part and wf_hit_face
+fn wf_soldier_hit(parts: [WfPart], ox: float, oy: float, oz: float, dx: float, dy: float, dz: float) -> bool {
+    var best = -1.0
+    for i in 0..parts.len() {
+        let t = wf_box_t(parts[i], ox, oy, oz, dx, dy, dz)
+        if t > 0.0 and (best < 0.0 or t < best) {
+            best = t
+            wf_hit_part = i
+            wf_hit_face = wf_face
+        }
+    }
+    wf_hit_t = best
+    return best > 0.0
+}
+
+// one box of a model, every size multiplied by s
+fn wf_part(s: float, x: float, y: float, z: float, hx: float, hy: float, hz: float, kind: int) -> WfPart {
+    return WfPart{ x: x * s, y: y * s, z: z * s, hx: hx * s, hy: hy * s, hz: hz * s, kind: kind }
+}
+
+// the boxes of an enemy: a man (legs and arms swing while he walks) or a dog
+fn wf_soldier_parts(e: Enemy) -> [WfPart] {
+    let s = e.scale
+    if e.kind == WF_E_DOG {
+        let sw = if e.moving { sin(e.walk) * 0.12 } else { 0.0 }
+        return [
+            wf_part(s, 0.0, 0.0, 0.34, 0.32, 0.14, 0.14, 1),
+            wf_part(s, 0.36, 0.0, 0.42, 0.13, 0.12, 0.12, 0),
+            wf_part(s, sw, 0.1, 0.12, 0.05, 0.05, 0.12, 2),
+            wf_part(s, -sw, 0.1, 0.12, 0.05, 0.05, 0.12, 2),
+            wf_part(s, sw, -0.1, 0.12, 0.05, 0.05, 0.12, 2),
+            wf_part(s, -sw, -0.1, 0.12, 0.05, 0.05, 0.12, 2),
+        ]
+    }
+    let sw = if e.moving { sin(e.walk) * 0.14 } else { 0.0 }
+    return [
+        wf_part(s, 0.0, 0.0, 0.84, 0.11, 0.11, 0.11, 0),
+        wf_part(s, 0.0, 0.0, 0.55, 0.13, 0.2, 0.2, 1),
+        wf_part(s, sw, 0.11, 0.175, 0.07, 0.08, 0.175, 2),
+        wf_part(s, -sw, -0.11, 0.175, 0.07, 0.08, 0.175, 2),
+        wf_part(s, -sw * 0.8, 0.27, 0.55, 0.06, 0.06, 0.2, 3),
+        wf_part(s, 0.12, -0.26, 0.55, 0.12, 0.05, 0.05, 3),
+        wf_part(s, 0.3, -0.2, 0.55, 0.2, 0.03, 0.03, 4),
+    ]
+}
+
+// the colour of a figure at lateral position ly and height lz, both in units of its own size (a man is 1 high)
+fn wf_soldier_col(kind: int, ly: float, lz: float, face: int, uni: int, skin: int) -> int {
+    if kind == 0 {
+        if lz > 0.9 { return wf_shade(uni, 0.7) }
+        if face == 1 and abs(ly) < 0.07 and lz > 0.8 and lz < 0.87 { return wf_pack(20, 20, 26) }
+        return skin
+    }
+    if kind == 1 {
+        if lz < 0.37 { return wf_pack(40, 34, 28) }
+        return uni
+    }
+    if kind == 2 {
+        if lz < 0.07 { return wf_pack(30, 22, 16) }
+        return wf_shade(uni, 0.8)
+    }
+    if kind == 3 { return uni }
+    return wf_pack(25, 25, 28)
+}
+
+// keep a frame near 20 ms: fewer pixels when it is slower, more when there is room
+fn wf_adapt(ms: float) {
+    wf_ms = if wf_ms == 0.0 { ms } else { wf_ms * 0.9 + ms * 0.1 }
+    if wf_ms > 26.0 and wf_q < 8 {
+        wf_ms = wf_ms * float(wf_q * wf_q) / float((wf_q + 1) * (wf_q + 1))
+        wf_q += 1
+    } else if wf_q > 1 {
+        let finer = wf_ms * float(wf_q * wf_q) / float((wf_q - 1) * (wf_q - 1))
+        if finer < 20.0 {
+            wf_ms = finer
+            wf_q -= 1
+        }
+    }
+}
+
+// the scene into wf_buf: the floor, the ceiling and the walls, then the enemies, each one ray cast box by box
 fn wf_render(pw: int, ph: int) {
     wf_rw = max(pw / wf_q, 16)
     wf_rh = max(ph / wf_q, 10)
@@ -285,7 +1300,8 @@ fn wf_render(pw: int, ph: int) {
     let dy = sin(wf_a)
     let plx = -dy * 0.66
     let ply = dx * 0.66
-    let half = wf_rh / 2
+    // the head bob moves the horizon up and down while the player walks
+    let half = wf_rh / 2 + int(sin(wf_bob) * wf_bob_amt * float(wf_rh) * 0.01)
     for x in 0..wf_rw {
         let cam = float(x) / float(wf_rw) * 2.0 - 1.0
         let d = wf_cast(wf_px, wf_py, dx + plx * cam, dy + ply * cam)
@@ -311,7 +1327,8 @@ fn wf_render(pw: int, ph: int) {
             wf_buf[y * wf_rw + x] = col
         }
     }
-    // sprites, far to near
+
+    // enemies, far to near
     var order: [Enemy] = []
     for e in wf_enemies {
         if e.hp > 0 { order.push(e) }
@@ -330,112 +1347,335 @@ fn wf_render(pw: int, ph: int) {
         let tx = inv * (dy * rx - dx * ry)
         let ty = inv * (-ply * rx + plx * ry)
         if ty < 0.25 { continue }
-        let size = int(float(wf_rh) / ty)
+        // the model reaches e.scale units up, so its box is that many times the height of a wall
+        let s = e.scale
+        let size = int(float(wf_rh) / ty * s)
         let sx = int(float(wf_rw) / 2.0 * (1.0 + tx / ty))
-        let left = sx - size / 2
-        let top = half - size / 2
-        let light = 1.0 / (1.0 + ty * ty * 0.03)
-        for cx in max(left, 0)..min(left + size, wf_rw) {
-            if ty >= wf_zbuf[cx] { continue }
-            let u = float(cx - left) / float(size)
+        let reach = size * 3 / 5
+        let top = half - int(float(wf_rh) / ty * (s - 0.5))
+        let parts = wf_soldier_parts(e)
+        // the figure's own frame: x is the way it faces (c, sn), y is to its left
+        let c = e.fx
+        let sn = e.fy
+        let ex = wf_px - e.x
+        let ey = wf_py - e.y
+        let lox = c * ex + sn * ey
+        let loy = -sn * ex + c * ey
+        var uni = e.uni
+        if e.kind == WF_E_GHOST and wf_power > 0.0 { uni = wf_pack(40, 60, 230) }
+        for cx in max(sx - reach, 0)..min(sx + reach, wf_rw) {
+            let cam = float(cx) / float(wf_rw) * 2.0 - 1.0
+            let vx = dx + plx * cam
+            let vy = dy + ply * cam
+            let ldx = c * vx + sn * vy
+            let ldy = -sn * vx + c * vy
             for cy in max(top, 0)..min(top + size, wf_rh) {
-                let v = float(cy - top) / float(size)
-                let col = wf_soldier(u, v, e.hurt > 0.0)
-                if col >= 0 {
-                    let r = int(float((col >> 16) & 255) * light)
-                    let g = int(float((col >> 8) & 255) * light)
-                    let b = int(float(col & 255) * light)
-                    wf_buf[cy * wf_rw + cx] = wf_pack(r, g, b)
-                }
+                // the ray through this pixel climbs vz per unit of depth: the eye is at height 0.5 and a wall is 1 high
+                let vz = float(half - cy) / float(wf_rh)
+                if not wf_soldier_hit(parts, lox, loy, 0.5, ldx, ldy, vz) { continue }
+                let t = wf_hit_t
+                if t >= wf_zbuf[cx] { continue }
+                var col = wf_soldier_col(parts[wf_hit_part].kind, (loy + ldy * t) / s, (0.5 + vz * t) / s, wf_hit_face, uni, e.skin)
+                if e.hurt > 0.0 { col = wf_pack(255, 60, 60) }
+                var shade = 0.8
+                if wf_hit_face == 0 { shade = 0.6 } else if wf_hit_face == 1 { shade = 1.0 } else if wf_hit_face == 4 { shade = 0.4 } else if wf_hit_face == 5 { shade = 1.0 }
+                let k = shade / (1.0 + t * t * 0.03)
+                wf_buf[cy * wf_rw + cx] = wf_shade(col, k)
             }
         }
     }
 }
 
-fn wf_draw(c: Canvas) {
-    let t0 = clock()
-    wf_render(c.pixel_w(), c.pixel_h())
-    let w = c.w
-    let h = c.h
-    c.pixels_smooth(0, 0, w, h, wf_buf, wf_rw, wf_rh)
-    wf_adapt((clock() - t0) * 1000.0)
-    if wf_pain > 0.0 { c.rect(0, 0, w, h, rgba(200, 0, 0, 0.35)) }
+// a round sprite at the floor point (x, y) on the canvas; size is its radius at one tile of distance, as a share of the height
+fn wf_sprite(c: Canvas, w: int, h: int, x: float, y: float, col: int, size: float) {
+    let dx = cos(wf_a)
+    let dy = sin(wf_a)
+    let plx = -dy * 0.66
+    let ply = dx * 0.66
+    let inv = 1.0 / (plx * dy - dx * ply)
+    let rx = x - wf_px
+    let ry = y - wf_py
+    let tx = inv * (dy * rx - dx * ry)
+    let ty = inv * (-ply * rx + plx * ry)
+    if ty < 0.2 { return }
+    let sx = int(float(w) / 2.0 * (1.0 + tx / ty))
+    if sx < 0 or sx >= w { return }
+    let zx = sx * wf_rw / w
+    if zx >= wf_rw or wf_zbuf[zx] < ty { return }
+    let r = clamp(int(size * float(h) / ty), 2, 60)
+    c.circle(sx, h / 2 + int(0.3 * float(h) / ty), r, col)
+}
 
-    // the gun
+fn wf_item_color(kind: int) -> int {
+    if kind == WF_I_FOOD { return rgb(120, 200, 90) }
+    if kind == WF_I_FIRST_AID { return rgb(240, 240, 240) }
+    if kind == WF_I_AMMO { return rgb(200, 160, 70) }
+    if kind == WF_I_MACHINE or kind == WF_I_CHAIN { return rgb(160, 160, 176) }
+    if kind == WF_I_GOLD { return rgb(250, 210, 60) }
+    if kind == WF_I_SILVER { return rgb(210, 215, 225) }
+    if kind == WF_I_TREASURE { return rgb(255, 215, 0) }
+    if kind == WF_I_LIFE { return rgb(255, 80, 200) }
+    if kind == WF_I_DOG_FOOD { return rgb(150, 100, 60) }
+    if kind == WF_I_DOT { return rgb(255, 230, 160) }
+    return rgb(255, 120, 255)
+}
+
+fn wf_item_size(kind: int) -> float {
+    if kind == WF_I_DOT { return 0.015 }
+    if kind == WF_I_POWER or kind == WF_I_TREASURE { return 0.06 }
+    return 0.045
+}
+
+// the items and the elevators, drawn as sprites after the scene
+fn wf_draw_items(c: Canvas, w: int, h: int) {
+    for item in wf_items {
+        if item.alive { wf_sprite(c, w, h, item.x, item.y, wf_item_color(item.kind), wf_item_size(item.kind)) }
+    }
+    if wf_exit_x >= 0 { wf_sprite(c, w, h, float(wf_exit_x) + 0.5, float(wf_exit_y) + 0.5, rgb(255, 230, 60), 0.09) }
+    if wf_sec_x >= 0 { wf_sprite(c, w, h, float(wf_sec_x) + 0.5, float(wf_sec_y) + 0.5, rgb(190, 90, 255), 0.09) }
+}
+
+// the gun in the hand: a knife, a pistol, or a longer barrel for the machine gun and the chaingun
+fn wf_draw_gun(c: Canvas, w: int, h: int) {
     let gx = w / 2
     var kick = 0
-    if wf_fire_cool > 0.1 { kick = 10 }
-    if wf_flash > 0.0 {
-        c.circle(gx, h - 170 + kick, 34, rgb(255, 220, 90))
-        c.circle(gx, h - 170 + kick, 18, rgb(255, 255, 220))
+    if wf_cool > 0.1 { kick = 10 }
+    if wf_weapon == WF_W_KNIFE {
+        c.rect(gx - 5, h - 190 + kick, 10, 110, rgb(200, 200, 210))
+        c.rect(gx - 12, h - 84 + kick, 24, 14, rgb(90, 60, 30))
+        c.rect(gx - 40, h - 70 + kick, 80, 70, rgb(214, 170, 130))
+        c.rect(gx - 50, h - 40 + kick, 100, 40, rgb(70, 110, 60))
+        return
     }
-    c.rect(gx - 14, h - 150 + kick, 28, 90, rgb(60, 62, 70))
-    c.rect(gx - 8, h - 160 + kick, 16, 20, rgb(40, 42, 48))
+    var long = 90
+    var col = rgb(60, 62, 70)
+    if wf_weapon == WF_W_MACHINE {
+        long = 130
+        col = rgb(70, 70, 78)
+    } else if wf_weapon == WF_W_CHAIN {
+        long = 160
+        col = rgb(48, 48, 56)
+    }
+    if wf_flash > 0.0 {
+        c.circle(gx, h - 170 + kick - (long - 90), 34, rgb(255, 220, 90))
+        c.circle(gx, h - 170 + kick - (long - 90), 18, rgb(255, 255, 220))
+    }
+    c.rect(gx - 14, h - 150 - (long - 90) + kick, 28, long, col)
+    c.rect(gx - 8, h - 160 - (long - 90) + kick, 16, 20, rgb(40, 42, 48))
     c.rect(gx - 40, h - 70 + kick, 80, 70, rgb(214, 170, 130))
     c.rect(gx - 50, h - 40 + kick, 100, 40, rgb(70, 110, 60))
-    // crosshair
-    c.rect(gx - 8, h / 2 - 1, 16, 2, WHITE)
-    c.rect(gx - 1, h / 2 - 8, 2, 16, WHITE)
+}
 
-    // status bar
-    c.rect(0, h - 36, w, 36, rgba(10, 10, 20, 0.75))
-    var hp_col = rgb(80, 220, 100)
-    if wf_hp < 35 { hp_col = rgb(240, 70, 60) }
-    c.text(16, h - 30, "HEALTH {wf_hp}", hp_col, 20, true)
-    c.text(w / 2 - 50, h - 30, "AMMO {wf_ammo}", rgb(250, 220, 90), 20, true)
-    c.text(w - 190, h - 30, "KILLS {wf_kills}/{wf_enemies.len()}", WHITE, 20, true)
+// the text centred on x
+fn wf_center(c: Canvas, x: int, y: int, s: str, col: int, size: int) {
+    let tw = c.text_width(s, size, true)
+    c.text(x - tw / 2, y, s, col, size, true)
+}
 
-    // mini map
-    let t = 7
-    c.rect(w - WF_N * t - 12, 8, WF_N * t + 4, WF_N * t + 4, rgba(0, 0, 0, 0.6))
+fn wf_floor_name() -> str {
+    if wf_secret_floor { return "SECRET FLOOR" }
+    return "EPISODE {wf_ep + 1} FLOOR {wf_fl + 1}"
+}
+
+// the mini map in the top right corner: only the tiles the player has seen
+fn wf_draw_map(c: Canvas, w: int) {
+    let t = 6
+    let x0 = w - WF_N * t - 12
+    let y0 = 8
+    c.rect(x0 - 2, y0 - 2, WF_N * t + 4, WF_N * t + 4, rgba(0, 0, 0, 0.6))
     for y in 0..WF_N {
         for x in 0..WF_N {
-            let tile = wf_grid[y * WF_N + x]
-            if tile > 0 {
-                var col = rgb(160, 70, 50)
-                if tile == 2 { col = rgb(80, 110, 190) }
-                c.rect(w - WF_N * t - 10 + x * t, 10 + y * t, t, t, col)
-            }
+            let i = wf_idx(x, y)
+            if not wf_seen[i] { continue }
+            let tile = wf_grid[i]
+            var col = rgb(40, 40, 46)
+            if tile == WF_T_BRICK or tile == WF_T_GREY or tile == WF_T_PUSH { col = rgb(160, 70, 50) }
+            if tile == WF_T_STONE { col = rgb(80, 110, 190) }
+            if tile == WF_T_DOOR or tile == WF_T_GOLD or tile == WF_T_SILVER { col = rgb(180, 140, 60) }
+            if tile == WF_T_EXIT { col = rgb(255, 230, 60) }
+            if tile == WF_T_SECRET { col = rgb(190, 90, 255) }
+            c.rect(x0 + x * t, y0 + y * t, t, t, col)
         }
     }
     for e in wf_enemies {
-        if e.hp > 0 { c.circle(w - WF_N * t - 10 + int(e.x * float(t)), 10 + int(e.y * float(t)), 2, rgb(255, 60, 60)) }
+        if e.hp > 0 and wf_seen[wf_idx(int(floor(e.x)), int(floor(e.y)))] {
+            c.circle(x0 + int(e.x * float(t)), y0 + int(e.y * float(t)), 2, rgb(255, 60, 60))
+        }
     }
-    let mx = w - WF_N * t - 10 + int(wf_px * float(t))
-    let my = 10 + int(wf_py * float(t))
+    let mx = x0 + int(wf_px * float(t))
+    let my = y0 + int(wf_py * float(t))
     c.circle(mx, my, 2, WHITE)
     c.line(mx, my, mx + int(cos(wf_a) * 8.0), my + int(sin(wf_a) * 8.0), 1, WHITE)
+}
 
-    if wf_over {
-        c.rect(0, 0, w, h, rgba(0, 0, 0, 0.6))
-        if wf_won {
-            c.text(w / 2 - 170, h / 2 - 40, "LEVEL CLEARED", rgb(250, 220, 90), 48, true)
+// the status bar, the gun, the crosshair, the mini map and the message line
+fn wf_draw_hud(c: Canvas, w: int, h: int) {
+    if wf_pain > 0.0 {
+        c.rect(0, 0, w, h, rgba(200, 0, 0, 0.25))
+        // the side the hit came from
+        let bar = w / 6
+        if wf_pain_side > 0.0 {
+            c.rect(w - bar, 0, bar, h, rgba(255, 0, 0, 0.35))
         } else {
-            c.text(w / 2 - 120, h / 2 - 40, "YOU DIED", rgb(240, 70, 60), 48, true)
+            c.rect(0, 0, bar, h, rgba(255, 0, 0, 0.35))
         }
-        c.text(w / 2 - 90, h / 2 + 24, "Press R to play again", WHITE, 18)
+    }
+    wf_draw_gun(c, w, h)
+    c.rect(w / 2 - 8, h / 2 - 1, 16, 2, WHITE)
+    c.rect(w / 2 - 1, h / 2 - 8, 2, 16, WHITE)
+
+    c.rect(0, h - 56, w, 56, rgba(10, 10, 20, 0.8))
+    var hp_col = rgb(80, 220, 100)
+    if wf_hp < 35 { hp_col = rgb(240, 70, 60) }
+    c.text(16, h - 50, "HEALTH {wf_hp}", hp_col, 20, true)
+    c.text(200, h - 50, "AMMO {wf_ammo}", rgb(250, 220, 90), 20, true)
+    c.text(360, h - 50, "LIVES {wf_lives}", WHITE, 20, true)
+    c.text(500, h - 50, "SCORE {wf_score}", WHITE, 20, true)
+    let dim = rgb(200, 200, 210)
+    c.text(16, h - 24, wf_floor_name(), dim, 16, false)
+    c.text(260, h - 24, "KILLS {wf_kills}/{wf_kill_total}", dim, 16, false)
+    c.text(420, h - 24, "TREASURE {wf_treas}/{wf_treas_total}", dim, 16, false)
+    c.text(620, h - 24, "SECRETS {wf_secrets}/{wf_secret_total}", dim, 16, false)
+    c.text(830, h - 24, "WEAPON {wf_weapon_name(wf_weapon)}", dim, 16, false)
+    if wf_gold { c.rect(w - 200, h - 46, 14, 14, rgb(230, 190, 50)) }
+    if wf_silver { c.rect(w - 176, h - 46, 14, 14, rgb(200, 205, 215)) }
+    if wf_msg_t > 0.0 { wf_center(c, w / 2, h - 110, wf_msg, WHITE, 22) }
+    wf_draw_map(c, w)
+}
+
+// ---------------------------------------------------------------- screens
+
+// our own names for the six episodes
+fn wf_episode_name(ep: int) -> str {
+    if ep == 0 { return "The Bunker" }
+    if ep == 1 { return "The Armoury" }
+    if ep == 2 { return "The Laboratory" }
+    if ep == 3 { return "The Catacombs" }
+    if ep == 4 { return "The Iron Fortress" }
+    return "The Last Stand"
+}
+
+fn wf_diff_name(d: int) -> str {
+    if d == 0 { return "Easy" }
+    if d == 1 { return "Normal" }
+    if d == 2 { return "Hard" }
+    return "Nightmare"
+}
+
+// one line of the title menu: yellow and marked when it is the row the arrows point at
+fn wf_menu_line(c: Canvas, w: int, y: int, row: int, s: str) {
+    let col = if wf_row == row { rgb(250, 210, 60) } else { rgb(150, 140, 130) }
+    let mark = if wf_row == row { "> " } else { "" }
+    wf_center(c, w / 2, y, "{mark}{s}", col, 24)
+}
+
+// the title screen: the episode, the difficulty, then start
+fn wf_draw_title(c: Canvas, w: int, h: int) {
+    c.rect(0, 0, w, h, rgb(14, 10, 10))
+    let tile = 48
+    for j in 0..2 {
+        for i in 0..w / tile + 1 {
+            let shade = if (i + j) % 2 == 0 { rgb(44, 36, 34) } else { rgb(32, 26, 24) }
+            c.rect(i * tile, h - tile * (2 - j), tile - 2, tile - 2, shade)
+        }
+    }
+    let big = clamp(w / 16, 28, 96)
+    let top = h / 6
+    wf_center(c, w / 2, top, "WOLFENSTEIN 3D", rgb(200, 30, 24), big)
+    wf_center(c, w / 2, top + big + 8, "ATF EDITION", rgb(230, 190, 90), clamp(big / 3, 14, 30))
+    let gap = clamp(h / 12, 34, 60)
+    let y1 = h / 2
+    wf_menu_line(c, w, y1, 0, "Episode {wf_sel_ep + 1}: {wf_episode_name(wf_sel_ep)}")
+    wf_menu_line(c, w, y1 + gap, 1, "Difficulty: {wf_diff_name(wf_sel_diff)}")
+    wf_menu_line(c, w, y1 + gap * 2, 2, "START")
+    wf_center(c, w / 2, h - tile * 2 - 40, "Up/Down: choose    Left/Right: change    Enter: start    Esc: quit", rgb(160, 150, 140), 16)
+}
+
+// the screen between two floors: the numbers of the floor just finished
+fn wf_draw_inter(c: Canvas, w: int, h: int) {
+    c.rect(0, 0, w, h, rgb(10, 10, 16))
+    wf_center(c, w / 2, h / 6, "FLOOR CLEAR", rgb(250, 210, 60), clamp(w / 22, 22, 56))
+    let lines = [
+        "Kills       {wf_kills} of {wf_kill_total}",
+        "Treasure    {wf_treas} of {wf_treas_total}",
+        "Secrets     {wf_secrets} of {wf_secret_total}",
+        "Time        {int(wf_time)} s    (par {int(wf_par)} s)",
+        "Par bonus   {wf_bonus}",
+        "Score       {wf_score}",
+    ]
+    let y = h / 3
+    let step = clamp(h / 18, 24, 40)
+    for i in 0..lines.len() {
+        wf_center(c, w / 2, y + step * i, lines[i], WHITE, 22)
+    }
+    wf_center(c, w / 2, y + step * (lines.len() + 1), "Press Enter for the next floor", rgb(200, 200, 210), 20)
+}
+
+fn wf_draw_pause(c: Canvas, w: int, h: int) {
+    c.rect(0, 0, w, h, rgba(0, 0, 0, 0.55))
+    let big = clamp(w / 20, 24, 60)
+    let top = h / 2 - big - 10
+    wf_center(c, w / 2, top, "PAUSED", WHITE, big)
+    wf_center(c, w / 2, top + big * 2, "P or Esc: resume    Q: title", rgb(200, 200, 210), 20)
+}
+
+fn wf_draw_dead(c: Canvas, w: int, h: int) {
+    c.rect(0, 0, w, h, rgba(160, 0, 0, 0.45))
+    let big = clamp(w / 20, 24, 60)
+    let top = h / 2 - big - 10
+    wf_center(c, w / 2, top, "YOU ARE DOWN", rgb(250, 230, 230), big)
+    wf_center(c, w / 2, top + big * 2, "Lives left: {wf_lives}", rgb(230, 200, 200), 22)
+}
+
+// the game over and the victory screens
+fn wf_draw_end(c: Canvas, w: int, h: int, title: str, col: int) {
+    c.rect(0, 0, w, h, rgba(0, 0, 0, 0.7))
+    let big = clamp(w / 16, 28, 90)
+    let top = h / 2 - big - 10
+    wf_center(c, w / 2, top, title, col, big)
+    wf_center(c, w / 2, top + big * 2, "Score {wf_score}", WHITE, 26)
+    wf_center(c, w / 2, top + big * 2 + 40, "Press Enter for the title screen", rgb(200, 200, 210), 20)
+}
+
+// the picture of the scene and the status bar; the render time is measured so the picture size can follow it
+fn wf_draw_scene(c: Canvas, w: int, h: int) {
+    let t0 = time_ms()
+    wf_render(c.pixel_w(), c.pixel_h())
+    wf_adapt(float(time_ms() - t0))
+    c.pixels_smooth(0, 0, w, h, wf_buf, wf_rw, wf_rh)
+    wf_draw_items(c, w, h)
+    wf_draw_hud(c, w, h)
+}
+
+// the whole window: the title screen, the intermission, or the scene with the overlay of its mode
+fn wf_draw(c: Canvas) {
+    let w = c.w
+    let h = c.h
+    if wf_mode == WF_M_TITLE {
+        wf_draw_title(c, w, h)
+    } else if wf_mode == WF_M_INTER {
+        wf_draw_inter(c, w, h)
+    } else {
+        wf_draw_scene(c, w, h)
+        if wf_mode == WF_M_PAUSE {
+            wf_draw_pause(c, w, h)
+        } else if wf_mode == WF_M_DEAD {
+            wf_draw_dead(c, w, h)
+        } else if wf_mode == WF_M_OVER {
+            wf_draw_end(c, w, h, "GAME OVER", rgb(230, 60, 50))
+        } else if wf_mode == WF_M_WIN {
+            wf_draw_end(c, w, h, "VICTORY", rgb(250, 210, 60))
+        }
     }
 }
 
-// keep a frame near 20 ms: fewer pixels when it is slower, more when there is room
-fn wf_adapt(ms: float) {
-    wf_ms = if wf_ms == 0.0 { ms } else { wf_ms * 0.9 + ms * 0.1 }
-    if wf_ms > 26.0 and wf_q < 8 {
-        wf_ms = wf_ms * float(wf_q * wf_q) / float((wf_q + 1) * (wf_q + 1))
-        wf_q += 1
-    } else if wf_q > 1 {
-        let finer = wf_ms * float(wf_q * wf_q) / float((wf_q - 1) * (wf_q - 1))
-        if finer < 20.0 {
-            wf_ms = finer
-            wf_q -= 1
-        }
-    }
-}
+// ---------------------------------------------------------------- main
 
 fn main() {
-    wf_reset()
-    ui_mouse_capture(true)
+    rand_seed(time_ms())
+    wf_mode = WF_M_TITLE
     ui_every(30, || { wf_step() })
-    ui_shortcut("esc", || { ui_quit() })
-    ui_run("ATF Wolfenstein", WF_WIN_W, WF_WIN_H, || canvas(|c| { wf_draw(c) }).grow())
+    ui_run("Wolfenstein 3D", WF_WIN_W, WF_WIN_H, || {
+        return canvas(|c| { wf_draw(c) }).grow()
+    })
 }

@@ -2941,7 +2941,7 @@ struct UiColorTween {
 - `fn ui_type(s: str)` - type text into the focused field
 - `fn ui_keypress(combo: str) -> bool` - press a key or combination: ui_keypress("enter"), ui_keypress("ctrl+a"), ui_keypress("shift+left"). Returns false when the key name is not known.
 - `fn ui_click_text(s: str) -> bool` - click the middle of the first element that shows exactly this text (a button's label, for example); false when none is on the screen. Open menus and dialogs are searched first.
-- `fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1) -> bool` - Draw view() into a picture file (.bmp) of width x height pixels without opening a window (for tests, documentation and thumbnails). hover_x, hover_y: optional mouse position to show hover styles.
+- `fn ui_screenshot(view: fn() -> Node, width: int, height: int, path: str, hover_x: int = -1, hover_y: int = -1, scale: float = 1.0) -> bool` - Draw view() into a picture file (.bmp) of width x height logical pixels without opening a window (for tests, documentation and thumbnails). scale is the screen scale: 2 draws the picture at twice the pixels, with the same layout, as on a 200% screen. hover_x, hover_y: optional mouse position in picture pixels, to show hover styles. ATF_UI_SCREENSHOT uses ATF_UI_SCALE for scale.
 
 **Methods of `Style`**
 

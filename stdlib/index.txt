@@ -1022,6 +1022,7 @@ ui_draw_mask ui
 ui_ease ui
 ui_edit ui
 ui_effective ui
+ui_env_scale ui
 ui_every ui
 ui_fake_clip ui
 ui_fake_mods ui
@@ -1132,6 +1133,7 @@ ui_prev_char ui
 ui_ptr_btn ui
 ui_put ui
 ui_put32 ui
+ui_px ui
 ui_quit ui
 ui_rebuild ui
 ui_redo ui
@@ -1149,6 +1151,7 @@ ui_sc ui
 ui_sc_fns ui
 ui_sc_keys ui
 ui_scale ui
+ui_scale_forced ui
 ui_scaled ui
 ui_screen_center ui
 ui_screenshot ui
@@ -1204,11 +1207,13 @@ ui_web_local ui
 ui_web_mods ui
 ui_web_on ui
 ui_web_page ui
+ui_web_param ui
 ui_web_pct ui
 ui_web_pump ui
 ui_web_quit ui
 ui_web_remote ui
 ui_web_reply ui
+ui_web_resize ui
 ui_web_run ui
 ui_web_same_origin ui
 ui_web_seq ui
