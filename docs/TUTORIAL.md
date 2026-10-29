@@ -76,7 +76,19 @@ atf new myapp                      # start a project folder (see "Tests" in sect
 atf version                        # which compiler is this?
 ```
 
-`atf shell` accepts the same commands shown above. Type `run hello.atf` or `atf run hello.atf`; `help` lists commands and `exit` leaves the prompt. In Windows Terminal, set the profile command line to the full path of `bin\atf.exe` followed by `shell`.
+`atf shell` accepts the same commands shown above. Type `run hello.atf` or `atf run hello.atf`; `help` lists commands and `exit` leaves the prompt. The prompt edits the line like Clink does for cmd.exe: arrow keys, Home/End, Ctrl+Left/Right, Ctrl+W/U/K, Up/Down for the history (saved in `%USERPROFILE%\.atf_history`) and Tab to complete commands and file names. In Windows Terminal, set the profile command line to the full path of `bin\atf.exe` followed by `shell`.
+
+The shell can do what cmd.exe and PowerShell do, and the same commands work inside a program with `std/shell`: what you can type in the shell you can call from a script, and the shell also runs ATF code (`let x = 1`, `x + 1`). `cd`, `pushd`, `alias`, `set`, `history`, a colored `ls`, Unix names such as `grep`, `cat`, `cp -r`, `rm -rf`, `head`, `tail`, `wc`, any program on PATH and PowerShell cmdlets (`Get-ChildItem`) all work; `commands` lists them. `atf shell -c "line"` and `atf shell -f script` run without a prompt and exit with the last exit code, and `~/.atfrc` runs when the shell starts.
+
+```atf
+import "std/shell"
+
+fn main() {
+    shell_exec("echo hello from the shell")
+    let r = shell_capture("echo captured")
+    println(r.0, r.1.trim())
+}
+```
 
 ATF is compiled by default: `atf run hello.atf` produces and runs native code. Choose `atf interpret hello.atf` to use the interpreter; programs that need native features fall back to the compiler.
 

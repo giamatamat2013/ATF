@@ -1,0 +1,10 @@
+ATF 1.2.0 (self-hosted) command line. Enter ATF code or a compiler command; type exit to quit.
+Commands include run, build, check, repl, interpret, fmt, test, new, doc, watch, and version.
+ATF c:\Users\furst\code\ATF> raw
+ATF c:\Users\furst\code\ATF> est
+ATF c:\Users\furst\code\ATF> ATF c:\Users\furst\code\ATF> 8
+ATF c:\Users\furst\code\ATF> 21
+3.75
+ATF c:\Users\furst\code\ATF> 42
+ATF c:\Users\furst\code\ATF> ATF 1.2.0 (self-hosted)
+ATF c:\Users\furst\code\ATF> 

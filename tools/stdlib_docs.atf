@@ -6,7 +6,7 @@
 // comment written directly above it (or at the end of a one-line function).
 
 let PRELUDE = "atf/stdlib/prelude.atf"
-let MODULES = ["ai", "algo", "app", "args", "base64", "bigint", "bits", "collections", "crypto", "csv", "datetime", "fs", "glob", "hash", "hex", "html", "http", "httpd", "ini", "image", "iter", "json", "log", "markdown", "math", "net", "path", "process", "random", "regex", "semver", "sound", "task", "term", "test", "text", "toml", "ui", "url", "websocket", "xml", "yaml", "zlib"]
+let MODULES = ["ai", "algo", "app", "args", "base64", "bigint", "bits", "collections", "crypto", "csv", "datetime", "fs", "glob", "hash", "hex", "html", "http", "httpd", "ini", "image", "iter", "json", "log", "markdown", "math", "net", "path", "process", "random", "regex", "semver", "shell", "sound", "task", "term", "test", "text", "toml", "ui", "url", "websocket", "xml", "yaml", "zlib"]
 let OUT = "docs/STDLIB.md"
 
 // top-level prelude functions that only the runtime and the compiler use

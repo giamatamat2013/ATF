@@ -53,6 +53,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/random](#stdrandom)
   - [std/regex](#stdregex)
   - [std/semver](#stdsemver)
+  - [std/shell](#stdshell)
   - [std/sound](#stdsound)
   - [std/task](#stdtask)
   - [std/term](#stdterm)
@@ -2405,6 +2406,69 @@ struct SemVer {
 - `.bump_major() -> SemVer` - the next major version: 1.4.2 -> 2.0.0
 - `.bump_minor() -> SemVer` - the next minor version: 1.4.2 -> 1.5.0
 - `.bump_patch() -> SemVer` - the next patch version: 1.4.2 -> 1.4.3
+
+## std/shell
+
+The commands of `atf shell`, usable from a program. What you can type in the shell you can
+call here, and the other way round: the shell also runs ATF code, so both can do the same things.
+
+```text
+import "std/shell"
+shell_exec("cd examples")                  // changes this program's folder, like the shell
+shell_exec("ls -l")                        // colored listing
+shell_exec("grep -i hello *.atf | sort")   // anything cmd.exe or PowerShell can run
+let code = shell_exec("git status")        // the exit code
+let r = shell_capture("echo hi")           // (exit code, text) instead of printing
+shell_script("setup.atfsh")                // one command per line, like  atf shell -f setup.atfsh
+```
+
+cd, pushd, popd, alias, set, history and the like are done by the module itself (they must change this
+process); cmd and powershell run those programs; Unix names (ls, grep, cp -r, ...) are mapped to what
+Windows has; any other command or program is run through cmd.exe. Type `commands` in the shell for the list.
+
+**Types**
+
+```text
+struct ShEntry { name: str, is_dir: bool, size: int, hidden: bool }
+```
+
+
+**Functions**
+
+- `fn sh_entries(pattern: str) -> [ShEntry]?` - the files matching a pattern such as folder\* (nil when nothing can be read)
+- `fn sh_size_text(n: int) -> str`
+- `fn sh_name_color(e: ShEntry) -> str` - the color of a file name by kind: folders bold blue, ATF sources bold green, programs red, archives yellow
+- `fn sh_paint(text: str, code: str) -> str`
+- `fn sh_ls(letters: str, arg_in: str)` - ls: names in colors, one per line with -l (kind, size, name), hidden files only with -a
+- `fn sh_cwd() -> str` - the current folder
+- `fn sh_prompt() -> str` - the prompt: where we are
+- `fn sh_atf_commands() -> [str]`
+- `fn sh_builtins() -> [str]` - commands that cmd.exe has built in (they are not programs, so a PATH search cannot find them)
+- `fn sh_unix_names() -> [str]` - names the shell itself understands: Unix habits and its own commands
+- `fn sh_ps_aliases() -> [str]` - PowerShell short names
+- `fn sh_keywords() -> [str]`
+- `fn sh_is_ident(b: byte) -> bool`
+- `fn sh_is_code(line: str) -> bool` - true when the line looks like ATF code rather than a command line
+- `fn sh_resolvable(word: str) -> bool` - true when the first word is a program found on PATH or an existing file / path (cached per word)
+- `fn sh_is_cmdlet(word: str) -> bool` - a PowerShell command name such as Get-ChildItem, or a PowerShell variable ($env:PATH)
+- `fn sh_known(word: str) -> bool` - true when the first word is something the shell can run (used to color it)
+- `fn sh_all_names() -> [str]` - every name the shell knows without searching PATH (for Tab completion)
+- `fn sh_cmd(line: str)`
+- `fn sh_powershell(script: str)`
+- `fn sh_quote_ps(s: str) -> str`
+- `fn sh_split_flags(rest: str) -> (str, str)` - splits leading option words (-la, -rf) from a Unix style command: (all the option letters, the rest)
+- `fn sh_skip_flags(rest: str) -> str`
+- `fn sh_count_arg(rest: str) -> (int, str)` - the first number among the letters and words, for head -n 5 and tail -5
+- `fn sh_cd(arg: str)`
+- `fn sh_set(arg: str)`
+- `fn sh_alias(rest: str)`
+- `fn sh_list_commands()`
+- `fn sh_unix_alias(lower: str, rest: str) -> bool` - Unix style names that people type out of habit, mapped to what Windows has
+- `fn sh_handle(line_in: str) -> bool` - Runs a line as cmd.exe / PowerShell / bash would. Returns false when the line is not for the system (the caller then treats it as ATF code).
+- `fn shell_exec(line: str) -> int` - Runs a command line the way `atf shell` does (cd, ls, grep, cp -r, a program, a PowerShell cmdlet ...) and returns its exit code; 127 when the command is not known.
+- `fn shell_capture(line: str) -> (int, str)` - Runs a command line and returns (exit code, its output) instead of printing the output. Only for programs and cmd / PowerShell commands, not for the commands that change this process (cd, set, alias).
+- `fn shell_script(path: str, keep_going: bool = false) -> int` - Runs the lines of a script file (a shell script: one command per line, empty lines and lines starting with # are skipped). Stops at the first failing line unless keep_going is true; returns the last exit code, or 1 when the file cannot be read.
+- `fn shell_cwd() -> str` - The current folder, the one the commands run in.
 
 ## std/sound
 

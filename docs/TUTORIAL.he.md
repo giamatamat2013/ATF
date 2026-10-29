@@ -65,7 +65,7 @@
 * **בנייה:** `bin/atf.exe build hello.atf` יוצר את הקובץ `hello.exe` ליד קובץ המקור, ו-`bin/atf.exe build hello.atf -o greet.exe` בוחר לו שם אחר.
 * **בדיקה:** `bin/atf.exe check hello.atf` רק בודק אם יש שגיאות, ומדפיס `ok` אם הכול תקין.
 * **סידור הקוד:** `bin/atf.exe fmt hello.atf` מסדר את ההזחה (הרווחים בתחילת השורות) בקובץ.
-* **שורת הפקודה של ATF:** `bin/atf.exe shell` פותח שורת פקודה אינטראקטיבית לפקודות ATF. אפשר לכתוב `run hello.atf` או `atf run hello.atf`; הפקודה `help` מציגה את הפקודות, `exit` יוצאת, ו-Ctrl+C עוצר את הפעולה הנוכחית ומחזיר לפרומפט.
+* **שורת הפקודה של ATF:** `bin/atf.exe shell` פותח שורת פקודה אינטראקטיבית לפקודות ATF. אפשר לכתוב `run hello.atf` או `atf run hello.atf`; הפקודה `help` מציגה את הפקודות, `exit` יוצאת. השורה נערכת כמו ב-Clink של cmd.exe: חיצים, Home/End, Ctrl+חץ, Ctrl+W/U/K, היסטוריה עם חץ למעלה ולמטה (נשמרת ב-`%USERPROFILE%\.atf_history`) והשלמה עם Tab של פקודות ושמות קבצים. Ctrl+C עוצר את הפעולה הנוכחית ומחזיר לפרומפט.
 * **מפרש:** `bin/atf.exe interpret hello.atf` מריץ קובץ דרך המפרש, עם מעבר להרצה מקומפלת כשנדרשות תכונות native.
 * **מצב אינטראקטיבי (REPL):** `bin/atf.exe repl` פותח "שיחה" עם השפה (הסבר בהמשך).
 * **מידע:** `bin/atf.exe version` מדפיס את גרסת המהדר, ו-`bin/atf.exe help` מציג את כל הפקודות.
@@ -78,6 +78,8 @@ bin/atf.exe build hello.atf -o greet.exe
 
 הפקודות למעלה כתובות בתחביר של Git Bash. בחלון `cmd` או ב-PowerShell, מתוך תיקיית הפרויקט, אפשר לכתוב בקיצור
 `atf run hello.atf` (ב-PowerShell: `.\atf run hello.atf`): הקובץ `atf.cmd` פשוט קורא ל-`bin\atf.exe`. כדי לפתוח פרופיל ATF ב-Windows Terminal, מזינים בשורת הפקודה את הנתיב המלא אל `bin\atf.exe` ואחריו `shell`.
+
+ה-shell יודע לעשות מה ש-cmd.exe ו-PowerShell עושים, ואותן פקודות עובדות בתוך תוכנית עם `std/shell`: מה שאפשר להקליד ב-shell אפשר לקרוא מסקריפט, וה-shell מריץ גם קוד ATF (`let x = 1`). עובדים `cd`, `pushd`, `alias`, `set`, `history`, `ls` צבעוני, שמות מ-Unix (`grep`, `cat`, `cp -r`, `rm -rf`, `head`, `tail`, `wc`), כל תוכנה שב-PATH וגם פקודות PowerShell. `commands` מציג את כולן. `atf shell -c "שורה"` ו-`atf shell -f סקריפט` רצים בלי פרומפט ויוצאים עם קוד היציאה האחרון, והקובץ `~/.atfrc` רץ כשה-shell נפתח.
 
 
 שורת הפקודה מריצה גם קוד ATF ושומרת משתנים בין שורות:

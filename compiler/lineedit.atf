@@ -1,0 +1,460 @@
+// Line editor for `atf shell`: cursor keys, history (kept between runs), Tab completion and the usual
+// Ctrl shortcuts, like Clink gives cmd.exe. Falls back to plain read_line when input is not a console.
+//
+//   Left/Right, Home/End      move          Ctrl+Left/Right  word by word
+//   Backspace, Delete         delete        Ctrl+W / Ctrl+U / Ctrl+K  delete word / to start / to end
+//   Up/Down                   history       Esc  clear the line     Ctrl+L  clear the screen
+//   Tab                       complete a command or a file name (twice lists the choices)
+//   Ctrl+C                    cancel the line                        Ctrl+D  quit on an empty line
+
+extern "kernel32" fn le_std_handle(which: int) -> int as "GetStdHandle"
+extern "kernel32" fn le_get_mode(h: int, mode: ptr<int>) -> i32 as "GetConsoleMode"
+extern "kernel32" fn le_set_mode(h: int, mode: int) -> i32 as "SetConsoleMode"
+extern "kernel32" fn le_read_input(h: int, buf: ptr<byte>, n: int, got: ptr<int>) -> i32 as "ReadConsoleInputW"
+extern "kernel32" fn le_find_first(pattern: ptr<byte>, data: ptr<int>) -> int as "FindFirstFileA"
+extern "kernel32" fn le_find_next(h: int, data: ptr<int>) -> i32 as "FindNextFileA"
+extern "kernel32" fn le_find_close(h: int) -> i32 as "FindClose"
+
+const LE_MAX_HISTORY = 500
+
+struct LineEditor {
+    history: [str],
+    history_path: str,
+    interactive: bool,
+    in_handle: int
+}
+
+fn le_commands() -> [str] {
+    return sh_all_names()
+}
+
+fn le_new() -> LineEditor {
+    let in_h = le_std_handle(-10)
+    let out_h = le_std_handle(-11)
+    let mode = __alloc(8) as ptr<int>
+    mode[0] = 0
+    let interactive = le_get_mode(in_h, mode) != 0
+    var history: [str] = []
+    var path = ""
+    if interactive {
+        // colors / cursor movement need virtual terminal processing on the output
+        mode[0] = 0
+        if le_get_mode(out_h, mode) != 0 { le_set_mode(out_h, (mode[0] & 0xFFFFFFFF) | 4) }
+        le_use_color = (getenv("NO_COLOR") ?? "") == ""
+        let home = getenv("USERPROFILE") ?? ""
+        if home != "" {
+            path = home + "\\.atf_history"
+            let text = read_file(path)
+            if text != nil {
+                for l in text!.split("\n") {
+                    let t = l.trim()
+                    if t != "" { history.push(t) }
+                }
+            }
+        }
+    }
+    sh_history = history        // the `history` command shows this same array
+    return LineEditor(history, path, interactive, in_h)
+}
+
+fn le_remember(ed: LineEditor, line: str) {
+    if line == "" { return }
+    if ed.history.len() > 0 and ed.history[ed.history.len() - 1] == line { return }
+    ed.history.push(line)
+    while ed.history.len() > LE_MAX_HISTORY { ed.history.remove(0) }
+    if ed.history_path != "" { write_file(ed.history_path, "\n".join(ed.history) + "\n") }
+}
+
+// the UTF-8 text of one code point
+fn le_utf8(cp: int) -> str {
+    var sb = str_builder()
+    if cp < 0x80 {
+        sb.add_byte(cp as byte)
+    } else if cp < 0x800 {
+        sb.add_byte((0xC0 | (cp >> 6)) as byte)
+        sb.add_byte((0x80 | (cp & 0x3F)) as byte)
+    } else if cp < 0x10000 {
+        sb.add_byte((0xE0 | (cp >> 12)) as byte)
+        sb.add_byte((0x80 | ((cp >> 6) & 0x3F)) as byte)
+        sb.add_byte((0x80 | (cp & 0x3F)) as byte)
+    } else {
+        sb.add_byte((0xF0 | (cp >> 18)) as byte)
+        sb.add_byte((0x80 | ((cp >> 12) & 0x3F)) as byte)
+        sb.add_byte((0x80 | ((cp >> 6) & 0x3F)) as byte)
+        sb.add_byte((0x80 | (cp & 0x3F)) as byte)
+    }
+    return sb.finish()
+}
+
+// the line is a list of letters (one UTF-8 character each) so the cursor moves by whole characters
+fn le_split(s: str) -> [str] {
+    var out: [str] = []
+    var i = 0
+    let n = s.len()
+    while i < n {
+        let c = s.byte_at(i) as int
+        var size = 1
+        if c >= 0xF0 { size = 4 } else if c >= 0xE0 { size = 3 } else if c >= 0xC0 { size = 2 }
+        if i + size > n { size = n - i }
+        out.push(s[i..i + size])
+        i += size
+    }
+    return out
+}
+
+var le_use_color = true
+
+fn le_paint(text: str, code: str) -> str {
+    if not le_use_color or text == "" { return text }
+    return "\x1b[" + code + "m" + text + "\x1b[0m"
+}
+
+// A word that ends at a space or at one of  | & ; < >  (shell operators)
+fn le_word_end(text: str, from: int, spaces_only: bool) -> int {
+    var j = from
+    while j < text.len() {
+        let b = text.byte_at(j)
+        if b == ' ' or b == '\t' { break }
+        if not spaces_only and (b == '|' or b == '&' or b == ';' or b == '<' or b == '>') { break }
+        j += 1
+    }
+    return j
+}
+
+fn le_is_number(w: str) -> bool {
+    if w == "" { return false }
+    for k in 0..w.len() {
+        let b = w.byte_at(k)
+        if not ((b >= '0' and b <= '9') or b == '.') { return false }
+    }
+    return true
+}
+
+// Syntax colors for the typed line, like a modern shell:
+//   command word: green when the shell can run it, red when it cannot      -flag: blue
+//   "text" 'text': yellow    | && ; > <: magenta    $var %var%: magenta    numbers: pink
+//   an argument that is an existing file or folder: cyan                   ATF keywords (let, fn, ...): bold blue
+fn le_color_line(text: str) -> str {
+    if not le_use_color { return text }
+    let code_mode = sh_is_code(text.trim_start())
+    var sb = str_builder()
+    let n = text.len()
+    var i = 0
+    var cmd_pos = true
+    while i < n {
+        let c = text.byte_at(i)
+        if c == ' ' or c == '\t' {
+            sb.add_byte(c)
+            i += 1
+            continue
+        }
+        if not code_mode and (c == '|' or c == '&' or c == ';' or c == '<' or c == '>') {
+            var j = i
+            while j < n and (text.byte_at(j) == '|' or text.byte_at(j) == '&' or text.byte_at(j) == ';' or text.byte_at(j) == '<' or text.byte_at(j) == '>') { j += 1 }
+            let op = text[i..j]
+            sb.add(le_paint(op, "35"))
+            if op.contains("|") or op.contains("&") or op.contains(";") { cmd_pos = true }
+            i = j
+            continue
+        }
+        if c == '"' or c == '\'' {
+            var j = i + 1
+            while j < n and text.byte_at(j) != c { j += 1 }
+            if j < n { j += 1 }
+            sb.add(le_paint(text[i..j], "33"))
+            cmd_pos = false
+            i = j
+            continue
+        }
+        let j = le_word_end(text, i, code_mode)
+        let word = text[i..j]
+        var code = ""
+        if code_mode {
+            for k in sh_keywords() { if k == word { code = "1;34" } }
+            if code == "" and le_is_number(word) { code = "95" }
+        } else if cmd_pos {
+            code = if sh_known(word) { "1;32" } else { "31" }
+        } else if word.starts_with("-") and word.len() > 1 {
+            code = "94"
+        } else if word.starts_with("$") or word.starts_with("%") {
+            code = "35"
+        } else if le_is_number(word) {
+            code = "95"
+        } else if file_exists(word) {
+            code = "36"
+        }
+        sb.add(if code == "" { word } else { le_paint(word, code) })
+        // after `atf` comes a sub-command, after sudo / time a command
+        cmd_pos = not code_mode and (word == "atf" or word == "sudo") and cmd_pos
+        i = j
+    }
+    return sb.finish()
+}
+
+// the dim "ghost" text Clink shows: the rest of the newest history line that starts with what is typed
+fn le_suggest(ed: LineEditor, chars: [str], pos: int) -> str {
+    if chars.len() == 0 or pos != chars.len() { return "" }
+    let typed = "".join(chars)
+    var i = ed.history.len() - 1
+    while i >= 0 {
+        let h = ed.history[i]
+        if h.len() > typed.len() and h.starts_with(typed) { return h[typed.len()..] }
+        i -= 1
+    }
+    return ""
+}
+
+fn le_redraw(ed: LineEditor, prompt: str, chars: [str], pos: int) {
+    let ghost = le_suggest(ed, chars, pos)
+    var out = "\r" + le_paint(prompt, "1;32") + le_color_line("".join(chars)) + le_paint(ghost, "90") + "\x1b[K"
+    var back = chars.len() - pos
+    if ghost != "" { back = le_split(ghost).len() }
+    if back > 0 { out = out + "\x1b[{back}D" }
+    print(out)
+    flush()
+}
+
+fn le_is_word(c: str) -> bool => c != " " and c != "\t" and c != "\\" and c != "/"
+
+// a file name in a folder: its name, and whether it is a folder
+struct LeEntry { name: str, is_dir: bool }
+
+fn le_list(folder: str) -> [LeEntry] {
+    var pat = folder
+    if pat == "" { pat = "." }
+    if pat[pat.len() - 1..] != "\\" and pat[pat.len() - 1..] != "/" { pat = pat + "\\" }
+    let data = __alloc(320) as ptr<int>
+    let h = le_find_first(str_data(pat + "*"), data)
+    var out: [LeEntry] = []
+    if h == -1 { return out }
+    loop {
+        let base = data as ptr<byte>
+        var n = 0
+        while base[44 + n] != 0 { n += 1 }
+        let name = str_from_ptr(base + 44, n)
+        let attrs = (data[0] & 0xFFFFFFFF)
+        if name != "." and name != ".." { out.push(LeEntry(name, (attrs & 0x10) != 0)) }
+        if le_find_next(h, data) == 0 { break }
+    }
+    le_find_close(h)
+    return out
+}
+
+fn le_common_prefix(items: [str]) -> str {
+    var best = items[0]
+    for it in items {
+        var k = 0
+        while k < best.len() and k < it.len() and best.byte_at(k) == it.byte_at(k) { k += 1 }
+        best = best[..k]
+    }
+    return best
+}
+
+// the possible completions of the word before the cursor: (start of the word, full replacements)
+fn le_candidates(before: str) -> (int, [str]) {
+    var start = before.len()
+    while start > 0 and before.byte_at(start - 1) != ' ' as byte { start -= 1 }
+    let word = before[start..]
+    let head = before[..start].trim()
+    var out: [str] = []
+    if head == "" or head == "atf" {
+        let lower = word.lower()
+        for c in le_commands() {
+            if c.starts_with(lower) and not (head == "atf" and c == "atf") { out.push(c) }
+        }
+        // a bare first word is a command, never a file; a path (with \ / : or .) is completed as a file
+        var is_path = false
+        for k in 0..word.len() {
+            let b = word.byte_at(k)
+            if b == '\\' as byte or b == '/' as byte or b == ':' as byte or b == '.' as byte { is_path = true }
+        }
+        if not is_path { return (start, out) }
+    }
+    // a file name: split into folder part and name part
+    var cut = word.len()
+    while cut > 0 and word.byte_at(cut - 1) != '\\' as byte and word.byte_at(cut - 1) != '/' as byte { cut -= 1 }
+    let folder = word[..cut]
+    let part = word[cut..].lower()
+    for e in le_list(folder) {
+        if e.name.lower().starts_with(part) {
+            var full = folder + e.name
+            if e.is_dir { full = full + "\\" }
+            out.push(full)
+        }
+    }
+    out.sort()
+    return (start, out)
+}
+
+// Tab: returns true when the choices were listed (the line must be drawn again below them)
+fn le_complete(chars: [str], pos: int, list_all: bool) -> (bool, [str], int) {
+    let before = "".join(chars[..pos])
+    let after = chars[pos..]
+    let (start, cands) = le_candidates(before)
+    if cands.len() == 0 { return (false, chars, pos) }
+    let prefix = le_common_prefix(cands)
+    let word = before[start..]
+    if prefix.len() > word.len() or (cands.len() == 1 and prefix != word) {
+        var text = prefix
+        if cands.len() == 1 and not text.ends_with("\\") { text = text + " " }
+        var head = le_split(before[..start] + text)
+        let new_pos = head.len()
+        for c in after { head.push(c) }
+        return (false, head, new_pos)
+    }
+    if list_all and cands.len() > 1 {
+        println("")
+        println("  ".join(cands))
+        print("\x1b[0m")
+        return (true, chars, pos)
+    }
+    return (false, chars, pos)
+}
+
+// reads one edited line; nil at end of input (Ctrl+D on an empty line, or the input closed)
+fn le_read(ed: LineEditor, prompt: str) -> str? {
+    if not ed.interactive {
+        print(prompt)
+        flush()
+        return read_line()
+    }
+    let mode = __alloc(8) as ptr<int>
+    mode[0] = 0
+    le_get_mode(ed.in_handle, mode)
+    let old_mode = mode[0] & 0xFFFFFFFF
+    // no line input, no echo, and Ctrl+C arrives as a key so it can cancel the line
+    le_set_mode(ed.in_handle, old_mode & (0xFFFFFFFF ^ 7))
+    let rec = __alloc(32)
+    let got = __alloc(8) as ptr<int>
+    var chars: [str] = []
+    var pos = 0
+    var hist = ed.history.len()
+    var draft = ""
+    var tab_twice = false
+    var high = 0
+    var result: str? = nil
+    var finished = false
+    le_redraw(ed, prompt, chars, pos)
+    while not finished {
+        got[0] = 0
+        if le_read_input(ed.in_handle, rec, 1, got) == 0 or got[0] == 0 {
+            finished = true
+            break
+        }
+        let kind = (rec[0] as int) | ((rec[1] as int) << 8)
+        if kind != 1 or (rec[4] as int) == 0 { continue }
+        let vk = (rec[10] as int) | ((rec[11] as int) << 8)
+        var ch = (rec[14] as int) | ((rec[15] as int) << 8)
+        let keys = (rec[16] as int) | ((rec[17] as int) << 8)
+        let ctrl = (keys & 0xC) != 0
+        var redraw = true
+        var was_tab = false
+        if vk == 13 {
+            print("\r" + le_paint(prompt, "1;32") + le_color_line("".join(chars)) + "\x1b[K")
+            println("")
+            result = "".join(chars)
+            finished = true
+            redraw = false
+        } else if vk == 9 {
+            was_tab = true
+            let r = le_complete(chars, pos, tab_twice)
+            chars = r.1
+            pos = r.2
+            if r.0 { redraw = true }
+        } else if vk == 8 {
+            if pos > 0 {
+                chars.remove(pos - 1)
+                pos -= 1
+            }
+        } else if vk == 46 {
+            if pos < chars.len() { chars.remove(pos) }
+        } else if vk == 37 {
+            if ctrl {
+                while pos > 0 and not le_is_word(chars[pos - 1]) { pos -= 1 }
+                while pos > 0 and le_is_word(chars[pos - 1]) { pos -= 1 }
+            } else if pos > 0 { pos -= 1 }
+        } else if vk == 39 {
+            let ghost = le_suggest(ed, chars, pos)
+            if ghost != "" {
+                // at the end of the line: take the suggestion (a word of it with Ctrl)
+                var take = le_split(ghost)
+                if ctrl {
+                    var k = 0
+                    while k < take.len() and not le_is_word(take[k]) { k += 1 }
+                    while k < take.len() and le_is_word(take[k]) { k += 1 }
+                    take = take[..k]
+                }
+                for t in take { chars.push(t) }
+                pos = chars.len()
+            } else if ctrl {
+                while pos < chars.len() and le_is_word(chars[pos]) { pos += 1 }
+                while pos < chars.len() and not le_is_word(chars[pos]) { pos += 1 }
+            } else if pos < chars.len() { pos += 1 }
+        } else if vk == 36 {
+            pos = 0
+        } else if vk == 35 {
+            let ghost = le_suggest(ed, chars, pos)
+            if ghost != "" { for t in le_split(ghost) { chars.push(t) } }
+            pos = chars.len()
+        } else if vk == 38 or vk == 40 {
+            if vk == 38 and hist > 0 {
+                if hist == ed.history.len() { draft = "".join(chars) }
+                hist -= 1
+                chars = le_split(ed.history[hist])
+                pos = chars.len()
+            } else if vk == 40 and hist < ed.history.len() {
+                hist += 1
+                if hist == ed.history.len() { chars = le_split(draft) } else { chars = le_split(ed.history[hist]) }
+                pos = chars.len()
+            }
+        } else if vk == 27 {
+            chars = []
+            pos = 0
+        } else if ctrl and ch == 3 {
+            println("^C")
+            result = ""
+            finished = true
+            redraw = false
+        } else if ctrl and ch == 4 {
+            if chars.len() == 0 {
+                println("")
+                finished = true
+                redraw = false
+            } else if pos < chars.len() { chars.remove(pos) }
+        } else if ctrl and ch == 1 {
+            pos = 0
+        } else if ctrl and ch == 5 {
+            pos = chars.len()
+        } else if ctrl and ch == 21 {
+            chars = chars[pos..]
+            pos = 0
+        } else if ctrl and ch == 11 {
+            chars = chars[..pos]
+        } else if ctrl and ch == 23 {
+            var from = pos
+            while from > 0 and not le_is_word(chars[from - 1]) { from -= 1 }
+            while from > 0 and le_is_word(chars[from - 1]) { from -= 1 }
+            chars = chars[..from] + chars[pos..]
+            pos = from
+        } else if ctrl and ch == 12 {
+            print("\x1b[2J\x1b[H")
+        } else if ch >= 0xD800 and ch < 0xDC00 {
+            high = ch
+            redraw = false
+        } else if ch >= 32 and ch != 127 {
+            if ch >= 0xDC00 and ch < 0xE000 and high != 0 {
+                ch = 0x10000 + ((high - 0xD800) << 10) + (ch - 0xDC00)
+            }
+            high = 0
+            chars.insert(pos, le_utf8(ch))
+            pos += 1
+        } else {
+            redraw = false
+        }
+        tab_twice = was_tab
+        if redraw and not finished { le_redraw(ed, prompt, chars, pos) }
+    }
+    le_set_mode(ed.in_handle, old_mode)
+    if result != nil { le_remember(ed, result!.trim()) }
+    return result
+}

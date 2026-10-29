@@ -67,7 +67,7 @@ total: 5.25
   XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers and UDP messages (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`), YAML files (`std/yaml`), whole numbers of any size (`std/bigint`), encryption, secure random bytes and keys from passwords (`std/crypto`), WebSocket clients and servers (`std/websocket`),
   file name patterns (`std/glob`), a test framework with property tests on random values (`std/test`),
   colors, progress bars and boxes in the console (`std/term`), Markdown to HTML (`std/markdown`),
-  version numbers and rules like `^1.2` (`std/semver`), questions to Claude, Anthropic's AI model (`std/ai`),
+  version numbers and rules like `^1.2` (`std/semver`), the commands of `atf shell` from a program (`std/shell`), questions to Claude, Anthropic's AI model (`std/ai`),
   and the Python-style tools for whole programs:
   command-line parsing (`std/args`, like argparse), leveled logging (`std/log`), text helpers (`std/text`:
   wrap, title, snake_case, templates, tables), number theory and statistics (`std/math`), and algorithms from
@@ -111,7 +111,8 @@ atf watch hello.atf            run again every time the file or a file it import
 atf version
 ```
 
-`atf shell` opens an interactive prompt for ATF commands. Type `run hello.atf` or `atf run hello.atf`, use `help` to list commands, and `exit` to leave. Press Ctrl+C to stop the current command and return to the prompt. For a Windows Terminal profile, use the full path to `bin\atf.exe` followed by `shell`.
+`atf shell` opens an interactive prompt for ATF commands. Type `run hello.atf` or `atf run hello.atf`, use `help` to list commands, and `exit` to leave. The prompt has a built-in line editor (like Clink for cmd.exe): arrow keys, Home/End, Ctrl+Left/Right, Ctrl+W/U/K, Up/Down history kept in `%USERPROFILE%\.atf_history`, and Tab completion of commands and file names (press Tab twice to list the choices). Ctrl+C cancels the line being typed, or stops the running command; Ctrl+D on an empty line quits. The prompt is `ATF <current folder>>`. Typing shows Clink-style syntax colors (a command the shell can run is green, an unknown one red, `-flags` blue, strings yellow, existing files cyan) and a dim suggestion from the history (Right or End accepts it). The shell replaces cmd.exe and PowerShell: `cd`, `pushd`, `alias`, `set`, `history`, a colored `ls`, Unix names (`grep`, `cat`, `cp -r`, `rm -rf`, `head`, `tail`, `wc`, ...), any program on PATH, PowerShell cmdlets and `$variables`, and ATF code (`let x = 1`). `commands` lists them all; `~/.atfrc` runs at start; `atf shell -c "cmd1
+cmd2"` and `atf shell -f script` run non-interactively and exit with the last exit code. The same commands work in a program with `std/shell` (`shell_exec("ls -l")`). For a Windows Terminal profile, use the full path to `bin\atf.exe` followed by `shell`.
 
 ATF remains a compiled language by default: `atf run` compiles to native code. `atf interpret file.atf` explicitly selects the interpreter; it uses native execution for features the interpreter cannot handle directly.
 

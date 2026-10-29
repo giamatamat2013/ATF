@@ -1,0 +1,34 @@
+import "std/shell"
+
+fn main() -> int {
+    // cd changes the folder of this program, like in `atf shell`
+    let start = shell_cwd()
+    shell_exec("cd tests")
+    println(shell_cwd().ends_with("tests"))
+    shell_exec("cd ..")
+    println(shell_cwd() == start)
+
+    // commands print and return their exit code
+    println(shell_exec("echo from the shell"))
+    println(shell_exec("false"))
+    println(shell_exec("true"))
+    println(shell_exec("definitely_not_a_command_xyz"))
+
+    // output can be captured instead of printed
+    let r = shell_capture("echo captured")
+    println(r.0)
+    println(r.1.trim())
+
+    // set, alias and the Unix names work in a program too
+    shell_exec("set ATF_SHELL_TEST=42")
+    println(getenv("ATF_SHELL_TEST") ?? "")
+    shell_exec("alias hello=echo hi there")
+    println(shell_capture("echo %ATF_SHELL_TEST%").1.trim())
+
+    // a script file: one command per line
+    write_file("shell_test_script.tmp", "# comment\n\necho one\necho two\n")
+    println(shell_script("shell_test_script.tmp"))
+    delete_file("shell_test_script.tmp")
+    println(shell_script("no_such_script.tmp"))
+    return 0
+}

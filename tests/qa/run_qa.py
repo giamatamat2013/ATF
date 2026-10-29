@@ -111,9 +111,9 @@ def run_shell_smoke():
         return False, str(e)
     output = norm(result.stdout)
     version = open(os.path.join(ROOT, "VERSION"), encoding="utf8").read().strip()
-    expected = "ATF> ATF " + version
-    return (result.returncode == 0 and "raw\nATF> " in output and "test" in output and "8" in output and "21" in output and "42" in output
-            and expected in output and output.endswith("ATF> ")), output
+    expected = "> ATF " + version
+    return (result.returncode == 0 and "raw\nATF " in output and "test" in output and "8" in output and "21" in output and "42" in output
+            and expected in output and output.endswith("> ")), output
 
 def main():
     try:

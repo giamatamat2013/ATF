@@ -1,0 +1,620 @@
+// std/shell - the commands of `atf shell`, usable from a program. What you can type in the shell you can
+// call here, and the other way round: the shell also runs ATF code, so both can do the same things.
+//
+//   import "std/shell"
+//   shell_exec("cd examples")                  // changes this program's folder, like the shell
+//   shell_exec("ls -l")                        // colored listing
+//   shell_exec("grep -i hello *.atf | sort")   // anything cmd.exe or PowerShell can run
+//   let code = shell_exec("git status")        // the exit code
+//   let r = shell_capture("echo hi")           // (exit code, text) instead of printing
+//   shell_script("setup.atfsh")                // one command per line, like  atf shell -f setup.atfsh
+//
+// cd, pushd, popd, alias, set, history and the like are done by the module itself (they must change this
+// process); cmd and powershell run those programs; Unix names (ls, grep, cp -r, ...) are mapped to what
+// Windows has; any other command or program is run through cmd.exe. Type `commands` in the shell for the list.
+
+extern "kernel32" fn sh_get_cwd(size: int, buf: ptr<byte>) -> i32 as "GetCurrentDirectoryA"
+extern "kernel32" fn sh_set_cwd(name: ptr<byte>) -> i32 as "SetCurrentDirectoryA"
+extern "kernel32" fn sh_set_env(name: ptr<byte>, value: ptr<byte>) -> i32 as "SetEnvironmentVariableA"
+extern "kernel32" fn sh_search_path(dir: ptr<byte>, file: ptr<byte>, ext: ptr<byte>, size: int, buf: ptr<byte>, part: int) -> i32 as "SearchPathA"
+
+// the exit code of the last command; `atf shell -c` exits with it
+var sh_last_code: int
+var sh_prev_dir = ""
+var sh_stack: [str] = []
+var sh_aliases: {str: str} = {}
+var sh_found: {str: bool} = {}
+var sh_history: [str] = []
+
+extern "kernel32" fn sh_find_first(pattern: ptr<byte>, data: ptr<int>) -> int as "FindFirstFileA"
+extern "kernel32" fn sh_find_next(h: int, data: ptr<int>) -> i32 as "FindNextFileA"
+extern "kernel32" fn sh_find_close(h: int) -> i32 as "FindClose"
+extern "kernel32" fn sh_attrs(name: ptr<byte>) -> i32 as "GetFileAttributesA"
+
+struct ShEntry { name: str, is_dir: bool, size: int, hidden: bool }
+
+// the files matching a pattern such as folder\* (nil when nothing can be read)
+fn sh_entries(pattern: str) -> [ShEntry]? {
+    let data = __alloc(320) as ptr<int>
+    let h = sh_find_first(str_data(pattern), data)
+    if h == -1 { return nil }
+    var out: [ShEntry] = []
+    loop {
+        let base = data as ptr<byte>
+        var n = 0
+        while base[44 + n] != 0 { n += 1 }
+        let name = str_from_ptr(base + 44, n)
+        let attrs = data[0] & 0xFFFFFFFF
+        let size = ((data[3] & 0xFFFFFFFF) << 0) | (((data[3] >> 32) & 0xFFFFFFFF) << 32)
+        if name != "." and name != ".." { out.push(ShEntry(name, (attrs & 0x10) != 0, size, (attrs & 0x2) != 0)) }
+        if sh_find_next(h, data) == 0 { break }
+    }
+    sh_find_close(h)
+    return out
+}
+
+fn sh_size_text(n: int) -> str {
+    if n < 1024 { return "{n} B" }
+    let kb = float(n) / 1024.0
+    if kb < 1024.0 { return "{kb:.1f} KB" }
+    let mb = kb / 1024.0
+    if mb < 1024.0 { return "{mb:.1f} MB" }
+    return "{mb / 1024.0:.1f} GB"
+}
+
+// the color of a file name by kind: folders bold blue, ATF sources bold green, programs red, archives yellow
+fn sh_name_color(e: ShEntry) -> str {
+    if e.is_dir { return "1;34" }
+    let n = e.name.lower()
+    if n.ends_with(".atf") { return "1;32" }
+    if n.ends_with(".exe") or n.ends_with(".bat") or n.ends_with(".cmd") or n.ends_with(".ps1") { return "1;31" }
+    if n.ends_with(".zip") or n.ends_with(".7z") or n.ends_with(".rar") or n.ends_with(".gz") or n.ends_with(".tar") { return "33" }
+    if n.ends_with(".md") or n.ends_with(".txt") or n.ends_with(".json") or n.ends_with(".toml") { return "36" }
+    if n.starts_with(".") { return "90" }
+    return ""
+}
+
+fn sh_paint(text: str, code: str) -> str {
+    if code == "" or (getenv("NO_COLOR") ?? "") != "" { return text }
+    return "\x1b[" + code + "m" + text + "\x1b[0m"
+}
+
+// ls: names in colors, one per line with -l (kind, size, name), hidden files only with -a
+fn sh_ls(letters: str, arg_in: str) {
+    var arg = arg_in.trim()
+    if arg.len() >= 2 and arg.starts_with("\"") and arg.ends_with("\"") { arg = arg[1..arg.len() - 1] }
+    var pattern = "*"
+    if arg != "" {
+        let a = sh_attrs(str_data(arg)) & 0xFFFFFFFF
+        if a != 0xFFFFFFFF and (a & 0x10) != 0 {
+            pattern = arg + (if arg.ends_with("\\") or arg.ends_with("/") { "*" } else { "\\*" })
+        } else {
+            pattern = arg
+        }
+    }
+    let found = sh_entries(pattern)
+    if found == nil {
+        eprintln(sh_paint("ls: cannot access '{arg}': no such file or folder", "31"))
+        sh_last_code = 2
+        return
+    }
+    var list: [ShEntry] = []
+    for e in found! { if letters.contains("a") or not e.hidden { list.push(e) } }
+    list.sort_by(|a, b| {
+        if a.is_dir != b.is_dir { return if a.is_dir { -1 } else { 1 } }
+        let x = a.name.lower()
+        let y = b.name.lower()
+        if x < y { return -1 }
+        if x > y { return 1 }
+        return 0
+    })
+    if letters.contains("l") {
+        for e in list {
+            let kind = if e.is_dir { "d" } else { "-" }
+            let size = if e.is_dir { "" } else { sh_size_text(e.size) }
+            println("{kind}  {size:>10}  " + sh_paint(e.name + (if e.is_dir { "\\" } else { "" }), sh_name_color(e)))
+        }
+    } else if letters.contains("1") {
+        for e in list { println(sh_paint(e.name + (if e.is_dir { "\\" } else { "" }), sh_name_color(e))) }
+    } else {
+        var width = 0
+        for e in list { width = max(width, e.name.len() + 1) }
+        width += 2
+        let per_line = max(1, 100 / width)
+        var col = 0
+        var sb = str_builder()
+        for e in list {
+            let shown = e.name + (if e.is_dir { "\\" } else { "" })
+            sb.add(sh_paint(shown, sh_name_color(e)))
+            col += 1
+            if col == per_line {
+                sb.add("\n")
+                col = 0
+            } else {
+                sb.add(" " * (width - shown.len()))
+            }
+        }
+        let text = sb.finish()
+        if text != "" { println(text.trim_end()) }
+    }
+    sh_last_code = 0
+}
+
+// the current folder
+fn sh_cwd() -> str {
+    let buf = __alloc(1024)
+    let n = sh_get_cwd(1024, buf)
+    return str_from_ptr(buf, n)
+}
+
+// the prompt: where we are
+fn sh_prompt() -> str => "ATF " + sh_cwd() + "> "
+
+fn sh_atf_commands() -> [str] {
+    return ["run", "build", "check", "repl", "interpret", "fmt", "test", "new", "doc", "watch", "version", "help",
+            "exit", "quit", "atf", "shell", "source"]
+}
+
+// commands that cmd.exe has built in (they are not programs, so a PATH search cannot find them)
+fn sh_builtins() -> [str] {
+    return ["dir", "copy", "del", "erase", "md", "mkdir", "rd", "rmdir", "ren", "rename", "move", "type", "echo",
+            "path", "prompt", "title", "ver", "vol", "date", "time", "mklink", "start", "assoc", "ftype", "color",
+            "cd", "chdir", "cls", "set", "cmd", "powershell", "pwsh", "pause"]
+}
+
+// names the shell itself understands: Unix habits and its own commands
+fn sh_unix_names() -> [str] {
+    return ["pwd", "ls", "ll", "la", "cat", "cp", "mv", "rm", "touch", "grep", "which", "env", "export", "unset",
+            "printenv", "head", "tail", "wc", "sleep", "true", "false", "kill", "ps", "top", "open", "diff", "clear",
+            "history", "alias", "unalias", "pushd", "popd", "dirs", "sudo", "uname", "df", "du", "uptime", "seq",
+            "basename", "dirname", "stat", "chmod", "md5sum", "sha256sum", "less", "more", "nano", "vi", "vim",
+            "ifconfig", "man", "tree", "commands", "realpath", "mkcd", "ln", "tac", "sort", "uniq", "tee", "xargs",
+            "nproc", "free", "reboot", "shutdown"]
+}
+
+// PowerShell short names
+fn sh_ps_aliases() -> [str] {
+    return ["gci", "gc", "sls", "iwr", "irm", "gps", "gsv", "ni", "ri", "cpi", "mi", "gm", "iex", "gcm", "gl", "sl"]
+}
+
+fn sh_keywords() -> [str] {
+    return ["let", "var", "fn", "struct", "enum", "impl", "import", "const", "if", "while", "for", "loop", "match",
+            "return", "defer", "interface", "extern", "break", "continue", "true", "false", "nil"]
+}
+
+fn sh_is_ident(b: byte) -> bool {
+    return (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_'
+}
+
+// true when the line looks like ATF code rather than a command line
+fn sh_is_code(line: str) -> bool {
+    let n = line.len()
+    if n == 0 { return false }
+    let first = line.byte_at(0)
+    var i = 0
+    while i < n and sh_is_ident(line.byte_at(i)) { i += 1 }
+    if i == 0 {
+        for c in ["(", "[", "{", "!", "-", "+", "\"", "'"] { if line.starts_with(c) { return true } }
+        return false
+    }
+    if first >= '0' and first <= '9' { return true }
+    let word = line[..i]
+    for k in sh_keywords() { if k == word and word != "true" and word != "false" { return true } }
+    if i < n and (line.byte_at(i) == '(' or line.byte_at(i) == '[') { return true }
+    var j = i
+    while j < n and line.byte_at(j) == ' ' as byte { j += 1 }
+    if j < n and j > i - 1 {
+        let c = line.byte_at(j)
+        if c == '=' or c == '+' or c == '*' or c == '/' or c == '%' or c == '&' or c == '|' or c == '^' { return true }
+    }
+    return false
+}
+
+// true when the first word is a program found on PATH or an existing file / path (cached per word)
+fn sh_resolvable(word: str) -> bool {
+    if word == "" { return false }
+    if word.contains("\\") or word.contains("/") or word.contains(":") { return true }
+    let key = word.lower()
+    if key in sh_found { return sh_found[key] }
+    var found = file_exists(word)
+    if not found {
+        let buf = __alloc(1024)
+        for ext in ["", ".exe", ".cmd", ".bat", ".com"] {
+            if sh_search_path(0 as ptr<byte>, str_data(word + ext), 0 as ptr<byte>, 1024, buf, 0) > 0 { found = true }
+        }
+    }
+    sh_found[key] = found
+    return found
+}
+
+// a PowerShell command name such as Get-ChildItem, or a PowerShell variable ($env:PATH)
+fn sh_is_cmdlet(word: str) -> bool {
+    if word.starts_with("$") { return true }
+    let dash = word.find("-")
+    if dash <= 0 or dash >= word.len() - 1 { return false }
+    for k in 0..word.len() {
+        let b = word.byte_at(k)
+        if not (sh_is_ident(b) or b == '-') { return false }
+    }
+    return true
+}
+
+// true when the first word is something the shell can run (used to color it)
+fn sh_known(word: str) -> bool {
+    let w = word.lower()
+    if w == "" { return false }
+    for list in [sh_atf_commands(), sh_builtins(), sh_unix_names(), sh_ps_aliases()] {
+        for k in list { if k == w { return true } }
+    }
+    if w in sh_aliases { return true }
+    if sh_is_cmdlet(word) { return true }
+    return sh_resolvable(word)
+}
+
+// every name the shell knows without searching PATH (for Tab completion)
+fn sh_all_names() -> [str] {
+    var out: [str] = []
+    for list in [sh_atf_commands(), sh_builtins(), sh_unix_names(), sh_ps_aliases()] {
+        for k in list { if not (k in out) { out.push(k) } }
+    }
+    for k, v in sh_aliases { out.push(k) }
+    out.sort()
+    return out
+}
+
+fn sh_cmd(line: str) { sh_last_code = run_command("cmd.exe /d /s /c \"" + line + "\"") }
+
+fn sh_powershell(script: str) { sh_last_code = run_command("powershell.exe -NoLogo -NoProfile -Command " + script) }
+
+fn sh_quote_ps(s: str) -> str => "'" + s.replace("'", "''") + "'"
+
+// splits leading option words (-la, -rf) from a Unix style command: (all the option letters, the rest)
+fn sh_split_flags(rest: str) -> (str, str) {
+    var r = rest.trim_start()
+    var letters = ""
+    while r.starts_with("-") and r.len() > 1 and r != "--" {
+        var sp = r.find(" ")
+        if sp < 0 { sp = r.len() }
+        let tok = r[1..sp]
+        if tok.starts_with("-") { letters = letters + tok[1..] } else { letters = letters + tok }
+        r = r[sp..].trim_start()
+    }
+    return (letters, r)
+}
+
+fn sh_skip_flags(rest: str) -> str => sh_split_flags(rest).1
+
+// the first number among the letters and words, for head -n 5 and tail -5
+fn sh_count_arg(rest: str) -> (int, str) {
+    var n = 10
+    var file = ""
+    let toks = rest.split_whitespace()
+    var i = 0
+    while i < toks.len() {
+        let t = toks[i]
+        if t == "-n" and i + 1 < toks.len() {
+            n = toks[i + 1].parse_int() ?? 10
+            i += 1
+        } else if t.starts_with("-") and t.len() > 1 and t[1..].isdigit() {
+            n = t[1..].to_int()
+        } else {
+            file = t
+        }
+        i += 1
+    }
+    return (n, file)
+}
+
+fn sh_cd(arg: str) {
+    var target = arg.trim()
+    if target.starts_with("/d ") or target.starts_with("/D ") { target = target[3..].trim() }
+    if target.len() >= 2 and target.starts_with("\"") and target.ends_with("\"") { target = target[1..target.len() - 1] }
+    if target == "" {
+        println(sh_cwd())
+        return
+    }
+    if target == "-" {
+        if sh_prev_dir == "" { return }
+        target = sh_prev_dir
+        println(target)
+    }
+    if target == "~" or target.starts_with("~\\") or target.starts_with("~/") {
+        target = (getenv("USERPROFILE") ?? "") + target[1..]
+    }
+    let here = sh_cwd()
+    if sh_set_cwd(str_data(target)) == 0 {
+        eprintln("The system cannot find the path specified.")
+        sh_last_code = 1
+    } else {
+        sh_prev_dir = here
+        sh_found = {}
+        sh_last_code = 0
+    }
+}
+
+fn sh_set(arg: str) {
+    let eq = arg.find("=")
+    if arg == "" or eq < 0 {
+        sh_cmd("set " + arg)
+        return
+    }
+    let name = arg[..eq].trim()
+    let value = arg[eq + 1..]
+    if value == "" { sh_set_env(str_data(name), 0 as ptr<byte>) } else { sh_set_env(str_data(name), str_data(value)) }
+    sh_last_code = 0
+}
+
+fn sh_alias(rest: str) {
+    if rest == "" {
+        for k, v in sh_aliases { println("alias {k}={v}") }
+        return
+    }
+    let eq = rest.find("=")
+    if eq < 0 {
+        if rest in sh_aliases { println("alias {rest}={sh_aliases[rest]}") } else { eprintln("alias: {rest}: not found") }
+        return
+    }
+    var value = rest[eq + 1..].trim()
+    if value.len() >= 2 and (value.starts_with("\"") or value.starts_with("'")) and value.ends_with(value[..1]) {
+        value = value[1..value.len() - 1]
+    }
+    sh_aliases[rest[..eq].trim()] = value
+}
+
+fn sh_list_commands() {
+    println("ATF commands:  " + " ".join(sh_atf_commands()))
+    println("cmd built-ins: " + " ".join(sh_builtins()))
+    println("Unix names:    " + " ".join(sh_unix_names()))
+    println("PowerShell:    Verb-Noun cmdlets, $variables and " + " ".join(sh_ps_aliases()))
+    println("also: any program on PATH, aliases (alias name=value), ATF code (let x = 1, f(2)), source file")
+}
+
+// Unix style names that people type out of habit, mapped to what Windows has
+fn sh_unix_alias(lower: str, rest: str) -> bool {
+    if lower == "pwd" or lower == "realpath" { println(sh_cwd()); return true }
+    if lower == "ls" or lower == "ll" or lower == "la" {
+        let f = sh_split_flags(rest)
+        var letters = f.0
+        if lower == "la" { letters = letters + "a" }
+        if lower == "ll" { letters = letters + "l" }
+        sh_ls(letters, f.1)
+        return true
+    }
+    if lower == "cat" or lower == "less" or lower == "more" { sh_cmd("type " + sh_skip_flags(rest)); return true }
+    if lower == "tac" { sh_powershell("(Get-Content -LiteralPath " + sh_quote_ps(sh_skip_flags(rest)) + ")[-1..-100000]"); return true }
+    if lower == "cp" {
+        let f = sh_split_flags(rest)
+        if f.0.contains("r") or f.0.contains("R") { sh_cmd("xcopy /e /i /y " + f.1) } else { sh_cmd("copy " + f.1) }
+        return true
+    }
+    if lower == "mv" { sh_cmd("move " + sh_skip_flags(rest)); return true }
+    if lower == "ln" {
+        let f = sh_split_flags(rest)
+        let parts = f.1.split_whitespace()
+        if parts.len() == 2 {
+            sh_cmd("mklink " + (if f.0.contains("s") { "" } else { "/h " }) + parts[1] + " " + parts[0])
+        } else {
+            eprintln("usage: ln [-s] target link")
+        }
+        return true
+    }
+    if lower == "rm" {
+        let f = sh_split_flags(rest)
+        if f.0.contains("r") or f.0.contains("R") {
+            sh_cmd("rmdir /s /q " + f.1)
+        } else if f.0.contains("f") {
+            sh_cmd("del /f /q " + f.1)
+        } else {
+            sh_cmd("del " + f.1)
+        }
+        return true
+    }
+    if lower == "touch" { sh_cmd("type nul >> " + rest); return true }
+    if lower == "mkcd" { sh_cmd("mkdir " + rest); sh_cd(rest); return true }
+    if lower == "grep" {
+        let f = sh_split_flags(rest)
+        var sw = ""
+        if f.0.contains("i") { sw = sw + " /i" }
+        if f.0.contains("n") { sw = sw + " /n" }
+        if f.0.contains("v") { sw = sw + " /v" }
+        if f.0.contains("r") or f.0.contains("R") { sw = sw + " /s" }
+        if f.0.contains("l") { sw = sw + " /m" }
+        sh_cmd("findstr" + sw + " " + f.1)
+        return true
+    }
+    if lower == "which" { sh_cmd("where " + rest); return true }
+    if lower == "head" || lower == "tail" {
+        let a = sh_count_arg(rest)
+        sh_powershell("Get-Content -LiteralPath " + sh_quote_ps(a.1) + (if lower == "head" { " -TotalCount " } else { " -Tail " }) + str(a.0))
+        return true
+    }
+    if lower == "wc" {
+        let f = sh_split_flags(rest)
+        let file = sh_quote_ps(f.1)
+        if f.0.contains("l") {
+            sh_powershell("(Get-Content -LiteralPath " + file + " | Measure-Object -Line).Lines")
+        } else if f.0.contains("w") {
+            sh_powershell("(Get-Content -LiteralPath " + file + " | Measure-Object -Word).Words")
+        } else if f.0.contains("c") {
+            sh_powershell("(Get-Item -LiteralPath " + file + ").Length")
+        } else {
+            sh_powershell("Get-Content -LiteralPath " + file + " | Measure-Object -Line -Word -Character")
+        }
+        return true
+    }
+    if lower == "sort" and rest == "" { return false }
+    if lower == "uniq" { sh_powershell("Get-Content -LiteralPath " + sh_quote_ps(sh_skip_flags(rest)) + " | Get-Unique"); return true }
+    if lower == "sleep" { sh_cmd("timeout /t " + rest + " /nobreak >nul"); return true }
+    if lower == "seq" {
+        let parts = rest.split_whitespace()
+        if parts.len() == 1 { sh_powershell("1.." + parts[0]) } else if parts.len() >= 2 { sh_powershell(parts[0] + ".." + parts[parts.len() - 1]) }
+        return true
+    }
+    if lower == "true" { sh_last_code = 0; return true }
+    if lower == "false" { sh_last_code = 1; return true }
+    if lower == "kill" { sh_cmd("taskkill /f /pid " + sh_skip_flags(rest)); return true }
+    if lower == "ps" or lower == "top" { sh_cmd("tasklist"); return true }
+    if lower == "open" { sh_cmd("start \"\" " + rest); return true }
+    if lower == "nano" or lower == "vi" or lower == "vim" { sh_cmd("notepad " + rest); return true }
+    if lower == "diff" { sh_cmd("fc " + rest); return true }
+    if lower == "unset" { sh_set_env(str_data(rest.trim()), 0 as ptr<byte>); return true }
+    if lower == "printenv" { sh_cmd(if rest == "" { "set" } else { "echo %" + rest.trim() + "%" }); return true }
+    if lower == "env" { sh_cmd("set"); return true }
+    if lower == "export" { sh_set(rest); return true }
+    if lower == "uname" { sh_cmd("ver"); return true }
+    if lower == "df" { sh_powershell("Get-PSDrive -PSProvider FileSystem"); return true }
+    if lower == "du" {
+        let f = sh_split_flags(rest)
+        let target = if f.1 == "" { "." } else { f.1 }
+        sh_powershell("'\{0:N1} MB' -f ((Get-ChildItem -LiteralPath " + sh_quote_ps(target) + " -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB)")
+        return true
+    }
+    if lower == "uptime" { sh_powershell("(Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime"); return true }
+    if lower == "free" { sh_powershell("Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory"); return true }
+    if lower == "nproc" { println(getenv("NUMBER_OF_PROCESSORS") ?? "1"); return true }
+    if lower == "basename" { sh_powershell("Split-Path -Leaf " + sh_quote_ps(sh_skip_flags(rest))); return true }
+    if lower == "dirname" { sh_powershell("Split-Path -Parent " + sh_quote_ps(sh_skip_flags(rest))); return true }
+    if lower == "stat" { sh_powershell("Get-Item -LiteralPath " + sh_quote_ps(sh_skip_flags(rest)) + " | Format-List *"); return true }
+    if lower == "chmod" { sh_cmd("icacls " + sh_skip_flags(rest)); return true }
+    if lower == "md5sum" { sh_cmd("certutil -hashfile " + rest + " MD5"); return true }
+    if lower == "sha256sum" { sh_cmd("certutil -hashfile " + rest + " SHA256"); return true }
+    if lower == "ifconfig" { sh_cmd("ipconfig " + rest); return true }
+    if lower == "man" { sh_cmd("help " + rest); return true }
+    if lower == "tree" and false { return false }
+    if lower == "tee" { sh_powershell("$input | Tee-Object -FilePath " + sh_quote_ps(sh_skip_flags(rest))); return true }
+    if lower == "xargs" { eprintln("xargs is not available; use a for loop: for %f in (*.txt) do ..."); return true }
+    if lower == "reboot" { sh_cmd("shutdown /r /t 0"); return true }
+    if lower == "shutdown" and not rest.contains("/") { sh_cmd("shutdown /s /t 0"); return true }
+    if lower == "sudo" {
+        sh_powershell("Start-Process -Verb RunAs -FilePath cmd.exe -ArgumentList " + sh_quote_ps("/k " + rest))
+        return true
+    }
+    if lower == "date" and rest == "" { sh_powershell("Get-Date -Format 'yyyy-MM-dd'"); return true }
+    if lower == "time" and rest == "" { sh_powershell("Get-Date -Format 'HH:mm:ss'"); return true }
+    if lower == "history" {
+        for i, h in sh_history { println("{i + 1:5}  {h}") }
+        return true
+    }
+    if lower == "commands" { sh_list_commands(); return true }
+    return false
+}
+
+// Runs a line as cmd.exe / PowerShell / bash would. Returns false when the line is not for the system
+// (the caller then treats it as ATF code).
+fn sh_handle(line_in: str) -> bool {
+    var line = line_in
+    var sp = line.find(" ")
+    if sp < 0 { sp = line.len() }
+    var word = line[..sp]
+    var lower = word.lower()
+    if lower in sh_aliases {
+        line = sh_aliases[lower] + (if line.len() > sp { line[sp..] } else { "" })
+        sp = line.find(" ")
+        if sp < 0 { sp = line.len() }
+        word = line[..sp]
+        lower = word.lower()
+    }
+    let rest = if line.len() > sp { line[sp..].trim_start() } else { "" }
+    if lower == "cd" or lower == "chdir" { sh_cd(rest); return true }
+    if lower == "cd.." { sh_cd(".." + (if rest == "" { "" } else { " " + rest })); return true }
+    if lower == "cd\\" { sh_cd("\\"); return true }
+    if lower == "cls" or lower == "clear" { print("\x1b[2J\x1b[3J\x1b[H"); flush(); return true }
+    if lower == "set" { sh_set(rest); return true }
+    if lower == "alias" { sh_alias(rest); return true }
+    if lower == "unalias" { sh_aliases.remove(rest.trim()); return true }
+    if lower == "pushd" {
+        sh_stack.push(sh_cwd())
+        if rest != "" { sh_cd(rest) }
+        return true
+    }
+    if lower == "popd" {
+        if sh_stack.len() == 0 { eprintln("popd: directory stack empty") } else { sh_cd(sh_stack.pop()) }
+        return true
+    }
+    if lower == "dirs" {
+        println(sh_cwd())
+        var i = sh_stack.len() - 1
+        while i >= 0 { println(sh_stack[i]); i -= 1 }
+        return true
+    }
+    if line.len() == 2 and line.byte_at(1) == ':' as byte and sh_is_ident(line.byte_at(0)) {
+        if sh_set_cwd(str_data(line + "\\")) == 0 { eprintln("The system cannot find the drive specified.") }
+        return true
+    }
+    if lower == "cmd" or lower == "cmd.exe" {
+        sh_last_code = run_command(if rest == "" { "cmd.exe" } else { "cmd.exe " + rest })
+        return true
+    }
+    if lower == "powershell" or lower == "pwsh" {
+        var exe = "powershell.exe"
+        if lower == "pwsh" { exe = "pwsh.exe" }
+        if rest == "" {
+            sh_last_code = run_command(exe + " -NoLogo")
+        } else if rest.starts_with("-") {
+            sh_last_code = run_command(exe + " " + rest)
+        } else {
+            sh_last_code = run_command(exe + " -NoLogo -NoProfile -Command " + rest)
+        }
+        return true
+    }
+    if sh_is_code(line) and not word.starts_with("$") { return false }
+    if sh_unix_alias(lower, rest) { return true }
+    for a in sh_ps_aliases() {
+        if a == lower {
+            sh_powershell(line)
+            return true
+        }
+    }
+    if sh_is_cmdlet(word) and not sh_resolvable(word) {
+        sh_powershell(line)
+        return true
+    }
+    for b in sh_builtins() { if b == lower { sh_cmd(line); return true } }
+    if not sh_resolvable(word) { return false }
+    sh_cmd(line)
+    return true
+}
+
+// Runs a command line the way `atf shell` does (cd, ls, grep, cp -r, a program, a PowerShell cmdlet ...) and
+// returns its exit code; 127 when the command is not known.
+fn shell_exec(line: str) -> int {
+    let text = line.trim()
+    if text == "" { return 0 }
+    sh_last_code = 0
+    if not sh_handle(text) {
+        var sp = text.find(" ")
+        if sp < 0 { sp = text.len() }
+        eprintln("shell: command not found: " + text[..sp])
+        return 127
+    }
+    return sh_last_code
+}
+
+// Runs a command line and returns (exit code, its output) instead of printing the output.
+// Only for programs and cmd / PowerShell commands, not for the commands that change this process (cd, set, alias).
+fn shell_capture(line: str) -> (int, str) {
+    let tmp = temp_dir() + "atf-shell-{clock()}.txt"
+    let code = run_command("cmd.exe /d /s /c \"" + line.trim() + " > \"" + tmp + "\" 2>&1\"")
+    let text = read_file(tmp) ?? ""
+    delete_file(tmp)
+    return (code, text)
+}
+
+// Runs the lines of a script file (a shell script: one command per line, empty lines and lines starting with # are
+// skipped). Stops at the first failing line unless keep_going is true; returns the last exit code, or 1 when the
+// file cannot be read.
+fn shell_script(path: str, keep_going: bool = false) -> int {
+    let data = read_file(path)
+    if data == nil { return 1 }
+    var code = 0
+    for l in data!.replace("\r\n", "\n").split("\n") {
+        let t = l.trim()
+        if t == "" or t.starts_with("#") { continue }
+        code = shell_exec(t)
+        if code != 0 and not keep_going { return code }
+    }
+    return code
+}
+
+// The current folder, the one the commands run in.
+fn shell_cwd() -> str => sh_cwd()

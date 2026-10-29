@@ -212,11 +212,11 @@ usage:
 """ % VERSION
 
 
-def shell():
+def shell(extra=()):
     native = os.path.join(os.path.dirname(HERE), "bin", "atf.exe")
     if os.path.isfile(native):
         try:
-            return subprocess.call(program_argv(native) + ["shell"])
+            return subprocess.call(program_argv(native) + ["shell"] + list(extra))
         except (OSError, RuntimeError):
             pass
     print("ATF %s command line. Enter an ATF command; type exit to quit." % VERSION)
@@ -248,7 +248,7 @@ def main(argv):
         return 0
     cmd = argv[1]
     if cmd == "shell":
-        return shell() or 0
+        return shell(argv[2:]) or 0
     if cmd == "interpret":
         native = os.path.join(os.path.dirname(HERE), "bin", "atf.exe")
         if os.path.isfile(native):

@@ -20,6 +20,8 @@ import "repl"
 import "fmt"
 import "cli"
 import "autoimport"
+import "lineedit"
+import "../stdlib/shell"
 
 const VERSION = "1.2.0 (self-hosted)"
 const PRELUDE_SRC = include_str("../atf/stdlib/prelude.atf")
@@ -204,44 +206,95 @@ fn shell_is_cli_command(command: str) -> bool {
     return false
 }
 
-fn run_shell() -> int {
-    println("ATF {VERSION} command line. Enter ATF code or a compiler command; type exit to quit.")
-    println("Commands include run, build, check, repl, interpret, fmt, test, new, doc, watch, and version.")
+var shell_exit_given = false
+
+// runs one line of the shell; returns true when the shell must end
+fn shell_line(repl: Repl, line: str) -> bool {
+    var command = line.trim()
+    if command == "" { return false }
+    if command == "exit" or command == "quit" { return true }
+    if command.starts_with("exit ") {
+        sh_last_code = command[5..].trim().parse_int() ?? 0
+        shell_exit_given = true
+        return true
+    }
+    if command == "help" or command == "--help" or command == "-h" {
+        print(USAGE)
+        return false
+    }
+    var explicit_cli = false
+    if command.starts_with("atf ") {
+        command = command[4..].trim_start()
+        explicit_cli = true
+    }
+    if command == "" { print(USAGE); return false }
+    if command == "shell" {
+        eprintln("already in the ATF command line; type exit to quit")
+        return false
+    }
+    if command.starts_with("source ") or command.starts_with(". ") {
+        // run the lines of a script file, like bash
+        let script = command[command.find(" ") + 1..].trim()
+        let data = read_file(script)
+        if data == nil {
+            eprintln("source: cannot read {script}")
+            sh_last_code = 1
+            return false
+        }
+        for l in data!.replace("\r\n", "\n").split("\n") {
+            if shell_line(repl, l) { return true }
+        }
+        return false
+    }
+    if explicit_cli or shell_is_cli_command(command) {
+        sh_last_code = run_command(quote_arg(exe_path()) + " " + command)
+    } else if sh_handle(command) {
+        // a cmd / PowerShell style command, already done
+    } else if repl_input(repl, command) {
+        return true
+    }
+    return false
+}
+
+// atf shell                 interactive
+// atf shell -c "line"       run the lines (separated by newlines) and exit with the last exit code
+// atf shell -f script       run the lines of a script file
+fn run_shell(args: [str]) -> int {
     let repl = repl_new()
     shell_ctrl_c_pending = false
     shell_set_ctrl_handler(true)
+    if args.len() >= 2 and (args[0] == "-c" or args[0] == "-f") {
+        var text = " ".join(args[1..])
+        if args[0] == "-f" {
+            let data = read_file(args[1])
+            if data == nil {
+                eprintln("error: cannot read {args[1]}")
+                return 1
+            }
+            text = data!
+        }
+        for l in text.replace("\r\n", "\n").split("\n") {
+            if shell_line(repl, l) { break }
+        }
+        repl_cleanup(repl)
+        shell_set_ctrl_handler(false)
+        return sh_last_code
+    }
+    println("ATF {VERSION} command line. Enter ATF code or a compiler command; type exit to quit.")
+    println("Commands include run, build, check, repl, interpret, fmt, test, new, doc, watch, and version.")
+    let editor = le_new()
+    // ~/.atfrc runs at start, like .bashrc: aliases, set, cd, ...
+    let rc = (getenv("USERPROFILE") ?? "") + "\\.atfrc"
+    if editor.interactive and file_exists(rc) { shell_line(repl, "source " + rc) }
     loop {
-        print("ATF> ")
-        flush()
-        let line = read_line()
+        let line = le_read(editor, sh_prompt())
         if shell_ctrl_c_pending {
             shell_ctrl_c_pending = false
             println("[Ctrl+C] stopped; ATF shell is ready")
             continue
         }
         if line == nil { break }
-        var command = line!.trim()
-        if command == "" { continue }
-        if command == "exit" or command == "quit" { break }
-        if command == "help" or command == "--help" or command == "-h" {
-            print(USAGE)
-            continue
-        }
-        var explicit_cli = false
-        if command.starts_with("atf ") {
-            command = command[4..].trim_start()
-            explicit_cli = true
-        }
-        if command == "" { print(USAGE); continue }
-        if command == "shell" {
-            eprintln("already in the ATF command line; type exit to quit")
-            continue
-        }
-        if explicit_cli or shell_is_cli_command(command) {
-            run_command(quote_arg(exe_path()) + " " + command)
-        } else if repl_input(repl, command) {
-            break
-        }
+        if shell_line(repl, line!) { break }
         if shell_ctrl_c_pending {
             shell_ctrl_c_pending = false
             println("[Ctrl+C] stopped; ATF shell is ready")
@@ -249,7 +302,8 @@ fn run_shell() -> int {
     }
     repl_cleanup(repl)
     shell_set_ctrl_handler(false)
-    return 0
+    // an interactive session ends with 0 unless  exit N  was typed
+    return if shell_exit_given { sh_last_code } else { 0 }
 }
 
 fn main(args: [str]) -> int {
@@ -259,7 +313,7 @@ fn main(args: [str]) -> int {
         return 0
     }
     let cmd = args[0]
-    if cmd == "shell" { return run_shell() }
+    if cmd == "shell" { return run_shell(args[1..]) }
     if cmd == "repl" { return run_repl() }
     if cmd == "fmt" { return run_fmt(args[1..]) }
     if cmd == "test" { return run_test_cmd(args[1..]) }
