@@ -1,0 +1,178 @@
+// weather.atf - the current weather where you are, or in a city you name.
+// Shows: std/http and std/json together (free web services, no key), a chain of Result values with ?,
+//        optional values for "not loaded yet", a timer that refreshes the data, a gradient card.
+// Run:   atf run examples/ui/weather.atf                  (your place, found from your IP address: a city, not an exact spot)
+//        atf run examples/ui/weather.atf "Tel Aviv"        (any city, looked up with Open-Meteo)
+// Data:  ipapi.co (IP location), geocoding-api.open-meteo.com (city search), api.open-meteo.com (weather).
+
+import "std/ui"
+import "std/http"
+import "std/json"
+
+struct Place {
+    name: str
+    lat: float
+    lon: float
+}
+
+struct Weather {
+    place: Place
+    temp: float
+    feels: float
+    humidity: int
+    wind: float
+    code: int
+    time: str
+}
+
+struct App {
+    weather: Weather? = nil
+    error: str = ""
+}
+
+// GET a URL and parse the JSON answer; a bad status is an Err too
+fn get_json(url: str) -> Result<JsonValue, str> {
+    let r = http_get(url)?
+    if not r.ok() { return Result.Err("the weather service answered {r.status}") }
+    return json_parse(r.body)
+}
+
+// where this computer is, from its IP address (a city-level answer)
+fn ip_place() -> Result<Place, str> {
+    let v = get_json("https://ipapi.co/json/")?
+    if not v.has("latitude") { return Result.Err(v.get_str("reason", "could not find your location")) }
+    let city = v.get_str("city", "?")
+    let country = v.get_str("country_name", "")
+    return Result.Ok(Place{ name: "{city}, {country}", lat: v.get_float("latitude", 0.0), lon: v.get_float("longitude", 0.0) })
+}
+
+// a place found by name, or an Err when nothing matches
+fn city_place(name: str) -> Result<Place, str> {
+    let v = get_json("https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&name=" + http_url_encode(name))?
+    if let list = v.get("results") {
+        if let p = list.at(0) {
+            let full = p.get_str("name", name) + ", " + p.get_str("country", "")
+            return Result.Ok(Place{ name: full, lat: p.get_float("latitude", 0.0), lon: p.get_float("longitude", 0.0) })
+        }
+    }
+    return Result.Err("no place called \"{name}\"")
+}
+
+// the current weather at a place
+fn forecast(p: Place) -> Result<Weather, str> {
+    let url = "https://api.open-meteo.com/v1/forecast?latitude={p.lat:.4f}&longitude={p.lon:.4f}" +
+        "&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code" +
+        "&wind_speed_unit=kmh&timezone=auto"
+    let v = get_json(url)?
+    if let c = v.get("current") {
+        return Result.Ok(Weather{
+            place: p,
+            temp: c.get_float("temperature_2m", 0.0),
+            feels: c.get_float("apparent_temperature", 0.0),
+            humidity: c.get_int("relative_humidity_2m", 0),
+            wind: c.get_float("wind_speed_10m", 0.0),
+            code: c.get_int("weather_code", 0),
+            time: c.get_str("time", ""),
+        })
+    }
+    return Result.Err("no current weather in the answer")
+}
+
+// the words and the picture for a WMO weather code (the codes Open-Meteo uses)
+fn describe(code: int) -> str {
+    return match code {
+        0 => "Clear sky"
+        1 => "Mainly clear"
+        2 => "Partly cloudy"
+        3 => "Overcast"
+        45 | 48 => "Fog"
+        51..=57 => "Drizzle"
+        61..=67 => "Rain"
+        71..=77 => "Snow"
+        80..=82 => "Rain showers"
+        85 | 86 => "Snow showers"
+        95..=99 => "Thunderstorm"
+        _ => "Unknown"
+    }
+}
+
+fn icon(code: int) -> str {
+    return match code {
+        0 | 1 => "☀"
+        2 => "⛅"
+        3 => "☁"
+        45 | 48 => "🌫"
+        51..=67 => "🌧"
+        80..=82 => "🌧"
+        71..=77 => "❄"
+        85 | 86 => "❄"
+        95..=99 => "⛈"
+        _ => "?"
+    }
+}
+
+// fetch the weather for a city name, or for this computer's place when the name is ""
+fn load(app: App, city: str) {
+    let place = if city == "" { ip_place() } else { city_place(city) }
+    match place {
+        Result.Err(e) => {
+            app.error = e
+            app.weather = nil
+        }
+        Result.Ok(p) => {
+            match forecast(p) {
+                Result.Ok(w) => {
+                    app.weather = w
+                    app.error = ""
+                }
+                Result.Err(e) => app.error = e
+            }
+        }
+    }
+}
+
+fn stat(label: str, value: str) -> Node {
+    return column([
+        text(label).font_size(12).color(rgba(255, 255, 255, 0.8)),
+        text(value).font_size(18).bold(),
+    ]).gap(2).padding(10, 12).radius(12).bg(rgba(255, 255, 255, 0.15)).grow()
+}
+
+fn weather_card(w: Weather) -> Node {
+    return column([
+        text(w.place.name).font_size(18).weight(600),
+        row([
+            text(icon(w.code)).font_size(56).family("Segoe UI Emoji"),
+            column([
+                text("{w.temp:.0f}°").font_size(56).bold(),
+                text(describe(w.code)).font_size(16),
+            ]).gap(0),
+        ]).gap(16),
+        row([
+            stat("Feels like", "{w.feels:.0f}°"),
+            stat("Humidity", "{w.humidity}%"),
+            stat("Wind", "{w.wind:.0f} km/h"),
+        ]).gap(10),
+        text("Updated {w.time}").font_size(12).color(rgba(255, 255, 255, 0.7)),
+    ]).gap(14).padding(22).radius(20).gradient(hex("#1d4ed8"), hex("#0ea5e9"), 150.0).color(WHITE)
+}
+
+fn view(app: App, city: str) -> Node {
+    let head = row([
+        text("Weather").font_size(20).bold(),
+        spacer(),
+        button("Refresh", || load(app, city)),
+    ]).gap(8)
+    if let w = app.weather {
+        return column([head, weather_card(w)]).gap(16).padding(20).bg(hex("#0f172a")).color(WHITE)
+    }
+    return column([head, text(app.error).color(hex("#fca5a5"))]).gap(16).padding(20).bg(hex("#0f172a")).color(WHITE)
+}
+
+fn main(args: [str]) {
+    let city = " ".join(args)
+    let app = App()
+    load(app, city)
+    ui_every(600000, || load(app, city))      // refresh every 10 minutes
+    ui_run("Weather", 360, 420, || view(app, city))
+}
