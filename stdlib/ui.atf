@@ -950,6 +950,23 @@ struct Canvas {
 impl Canvas {
     // fill the whole canvas with a color
     fn clear(self, c: int) { ui_fill_rect(self.ox, self.oy, ui_sc(self.w), ui_sc(self.h), c) }
+    // mouse position inside the canvas (same pixels as rect/line); -1 when the pointer is outside it.
+    // Calling it makes the window redraw on every mouse move, so a hover effect needs no click.
+    fn mouse_x(self) -> int {
+        ui_mouse_tracked = true
+        if not self.hovered() { return -1 }
+        return ui_unsc(ui_mx - self.ox)
+    }
+    fn mouse_y(self) -> int {
+        ui_mouse_tracked = true
+        if not self.hovered() { return -1 }
+        return ui_unsc(ui_my - self.oy)
+    }
+    // true while the pointer is over the canvas
+    fn hovered(self) -> bool {
+        ui_mouse_tracked = true
+        return ui_mx >= self.ox and ui_my >= self.oy and ui_mx < self.ox + ui_sc(self.w) and ui_my < self.oy + ui_sc(self.h)
+    }
     fn rect(self, x: int, y: int, w: int, h: int, c: int) {
         ui_fill_rect(self.ox + ui_sc(x), self.oy + ui_sc(y), ui_sc(w), ui_sc(h), c)
     }
@@ -2250,9 +2267,6 @@ fn anim_time() -> float {
     return float(ui_now() - ui_clock_origin) / 1000.0
 }
 
-// The position between a and b: lerp(10.0, 20.0, 0.5) == 15.0
-fn lerp(a: float, b: float, t: float) -> float { return a + (b - a) * t }
-
 // Easing functions turn the progress t (0.0 .. 1.0) into a position (0.0 .. 1.0), the way CSS timing functions do.
 fn ease_linear(t: float) -> float { return clamp(t, 0.0, 1.0) }
 
@@ -2853,6 +2867,8 @@ var ui_views: [fn() -> Node] = []
 var ui_root: Node? = nil
 var ui_winw = 0
 var ui_winh = 0
+// set once a canvas or ui_mouse_pos() asks where the pointer is: then every mouse move redraws
+var ui_mouse_tracked = false
 var ui_mx = -1
 var ui_my = -1
 var ui_tracking = false
@@ -3003,6 +3019,14 @@ fn ui_mouse_capture(on: bool) {
 
 // how many pixels the mouse moved since the last call (right and down are positive).
 // Only works after ui_mouse_capture(true) and while the window is active.
+// where the pointer is in window pixels (at 100% scale), (-1, -1) when it is outside the window.
+// Works without a click; the window redraws on every mouse move once you call it.
+fn ui_mouse_pos() -> (int, int) {
+    ui_mouse_tracked = true
+    if ui_mx < 0 { return (-1, -1) }
+    return (ui_unsc(ui_mx), ui_unsc(ui_my))
+}
+
 fn ui_mouse_delta() -> (int, int) {
     if ui_web_on {
         let dx = ui_web_dx
@@ -3298,7 +3322,7 @@ fn ui_mouse_move(x: int, y: int) {
             }
         }
     }
-    if ui_update_hover() { ui_invalidate() }
+    if ui_update_hover() or ui_mouse_tracked { ui_invalidate() }
 }
 
 fn ui_wheel(delta: int) {

@@ -1,7 +1,7 @@
 ## Features
 
 - Browser mode for window programs: `ATF_UI_WEB=8080 bin/atf.exe run examples/ui/counter.atf` shows the program in a browser at `http://127.0.0.1:8080/`. The program does not change. Mouse clicks (left button only), keys and the wheel go back to the program.
-- A program may start with `// ATF 1.2.0` to name the version it was written for. An older compiler prints a warning on stderr and still compiles the file.
+- A program may start with `atf "1.2.0"` to name the version it was written for. An older compiler prints a warning on stderr and still compiles the file.
 - Animations in `std/ui`: `animate`, `animate_color`, `animate_with`, `animate_from`, `anim_loop`, `anim_wave` and the easing functions. Example: `examples/ui/animations.atf`.
 - `std/html`: web pages with CSS animations (`h`, `html_page`, `css_keyframes`). Example: `examples/web_animations.atf`.
 - New standard library modules:

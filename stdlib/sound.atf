@@ -1,0 +1,159 @@
+// std/sound - play sounds on Windows (winmm.dll): synthesized tones and noise, or a .wav file.
+//
+//   import "std/sound"
+//   sound_play(sound_tone(440.0, 200))            // a 440 Hz beep for 200 ms, returns at once
+//   sound_play(sound_noise(120, 0.4))             // a short burst of noise (a "hit" or "step")
+//   sound_play_file("music.wav")
+//   sound_stop()
+//
+// Sounds are WAV files in memory (a str of bytes): 16 bit, mono, 22050 samples per second. Build one
+// once, keep it in a variable and play it again whenever you like. Playback is asynchronous and
+// there is one voice: a new sound replaces the one that is still playing.
+// sound_save(path, wav) writes the WAV file, sound_samples(wav) counts its samples (handy in tests).
+
+extern "winmm" fn sound_play_raw(data: ptr<byte>, module: int, flags: int) -> i32 as "PlaySoundW"
+
+extern "kernel32" fn sound_to_wide(cp: int, flags: int, src: ptr<byte>, n: int, dst: ptr<byte>, cap: int) -> i32 as "MultiByteToWideChar"
+
+const SOUND_RATE = 22050
+const SOUND_FLAGS_MEMORY = 0x5          // SND_MEMORY | SND_ASYNC
+const SOUND_FLAGS_FILE = 0x20001        // SND_FILENAME | SND_ASYNC
+
+// the sound that is playing right now must stay alive until the next one starts
+var sound_current = ""
+var sound_muted = false
+var sound_noise_state = 12345
+
+// UTF-16 copy of a path for the Windows API
+fn sound_wide(s: str) -> ptr<byte> {
+    let n = str_len(s)
+    let buf = __alloc_atomic(n * 2 + 2)
+    var k = 0
+    if n > 0 { k = sound_to_wide(65001, 0, str_data(s), n, buf, n) }
+    buf[k * 2] = byte(0)
+    buf[k * 2 + 1] = byte(0)
+    return buf
+}
+
+fn sound_put16(d: ptr<byte>, at: int, v: int) {
+    d[at] = byte(v & 255)
+    d[at + 1] = byte((v >> 8) & 255)
+}
+
+fn sound_put32(d: ptr<byte>, at: int, v: int) {
+    d[at] = byte(v & 255)
+    d[at + 1] = byte((v >> 8) & 255)
+    d[at + 2] = byte((v >> 16) & 255)
+    d[at + 3] = byte((v >> 24) & 255)
+}
+
+fn sound_put_tag(d: ptr<byte>, at: int, tag: str) {
+    let t = str_data(tag)
+    for i in 0..4 { d[at + i] = t[i] }
+}
+
+// a WAV file from samples (each -32768 .. 32767) played at SOUND_RATE samples per second
+fn sound_from_samples(samples: [int]) -> str {
+    let n = samples.len()
+    let wav = str_new(44 + n * 2)
+    let d = str_data(wav)
+    sound_put_tag(d, 0, "RIFF")
+    sound_put32(d, 4, 36 + n * 2)
+    sound_put_tag(d, 8, "WAVE")
+    sound_put_tag(d, 12, "fmt ")
+    sound_put32(d, 16, 16)
+    sound_put16(d, 20, 1)
+    sound_put16(d, 22, 1)
+    sound_put32(d, 24, SOUND_RATE)
+    sound_put32(d, 28, SOUND_RATE * 2)
+    sound_put16(d, 32, 2)
+    sound_put16(d, 34, 16)
+    sound_put_tag(d, 36, "data")
+    sound_put32(d, 40, n * 2)
+    for i in 0..n {
+        var v = samples[i]
+        if v > 32767 { v = 32767 }
+        if v < -32768 { v = -32768 }
+        sound_put16(d, 44 + i * 2, v)
+    }
+    return wav
+}
+
+fn sound_sample_count(ms: int) -> int { return SOUND_RATE * ms / 1000 }
+
+// a sine tone: freq in Hz, ms long, volume 0.0 .. 1.0. With fade the sound dies away smoothly
+// (no click at the end); that is what you want for most effects.
+fn sound_tone(freq: float, ms: int, volume: float = 0.5, fade: bool = true) -> str {
+    let n = sound_sample_count(ms)
+    var samples = array_make::<int>(n)
+    for i in 0..n {
+        let t = float(i) / float(SOUND_RATE)
+        var env = 1.0
+        if fade { env = 1.0 - float(i) / float(n) }
+        samples[i] = int(sin(2.0 * PI * freq * t) * volume * env * 32000.0)
+    }
+    return sound_from_samples(samples)
+}
+
+// white noise, ms long: footsteps, hits, explosions. It fades out like sound_tone.
+fn sound_noise(ms: int, volume: float = 0.5, fade: bool = true) -> str {
+    let n = sound_sample_count(ms)
+    var samples = array_make::<int>(n)
+    for i in 0..n {
+        sound_noise_state = (sound_noise_state * 1103515245 + 12345) & 0x7fffffff
+        let r = float((sound_noise_state >> 8) & 0xffff) / 32768.0 - 1.0
+        var env = 1.0
+        if fade { env = 1.0 - float(i) / float(n) }
+        samples[i] = int(r * volume * env * 32000.0)
+    }
+    return sound_from_samples(samples)
+}
+
+// a tone whose pitch slides from freq_a to freq_b (jumps, laser shots, "pop")
+fn sound_sweep(freq_a: float, freq_b: float, ms: int, volume: float = 0.5) -> str {
+    let n = sound_sample_count(ms)
+    var samples = array_make::<int>(n)
+    var phase = 0.0
+    for i in 0..n {
+        let k = float(i) / float(n)
+        phase += 2.0 * PI * (freq_a + (freq_b - freq_a) * k) / float(SOUND_RATE)
+        samples[i] = int(sin(phase) * volume * (1.0 - k) * 32000.0)
+    }
+    return sound_from_samples(samples)
+}
+
+// number of samples in a WAV made by this module (0 when it is not one)
+fn sound_samples(wav: str) -> int {
+    if str_len(wav) < 44 { return 0 }
+    return (str_len(wav) - 44) / 2
+}
+
+// length of a WAV made by this module in milliseconds
+fn sound_millis(wav: str) -> int { return sound_samples(wav) * 1000 / SOUND_RATE }
+
+// play a WAV from memory without waiting for it to end. Returns false when playback failed.
+fn sound_play(wav: str) -> bool {
+    if sound_muted { return true }
+    sound_current = wav
+    return sound_play_raw(str_data(sound_current), 0, SOUND_FLAGS_MEMORY) != 0
+}
+
+// play a .wav file without waiting for it to end. Returns false when it could not be played.
+fn sound_play_file(path: str) -> bool {
+    if sound_muted { return true }
+    return sound_play_raw(sound_wide(path), 0, SOUND_FLAGS_FILE) != 0
+}
+
+// stop whatever is playing
+fn sound_stop() {
+    sound_play_raw(str_data(""), 0, 0x40)    // SND_PURGE
+}
+
+// silence (true) or enable (false) every sound_play / sound_play_file call, e.g. for a mute key
+fn sound_mute(on: bool) {
+    sound_muted = on
+    if on { sound_stop() }
+}
+
+// write a WAV (from sound_tone and friends) to a file
+fn sound_save(path: str, wav: str) -> bool { return write_file(path, wav) }

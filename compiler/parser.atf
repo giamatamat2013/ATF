@@ -29,7 +29,7 @@ fn binary_right_assoc(op: str) -> bool {
 
 fn is_assign_op(v: str) -> bool {
     return v == "=" or v == "+=" or v == "-=" or v == "*=" or v == "/=" or v == "%=" or v == "&=" or v == "|=" or
-        v == "^=" or v == "<<=" or v == ">>=" or v == "**="
+        v == "^=" or v == "<<=" or v == ">>=" or v == ">>>=" or v == "**="
 }
 
 // decimal text of a token integer (tokens hold values up to 2^64-1 wrapped into an int)
@@ -39,6 +39,9 @@ fn int_tok_text(v: int) -> str {
     let r = v - q * 10
     return str(q) + str(r)
 }
+
+// the version named by  atf "1.2.0"  at the top of each parsed file, by file name
+var declared_version: {str: str} = {}
 
 struct Parser {
     toks: [Token],
@@ -102,6 +105,15 @@ impl Parser {
 
     fn eat_op(self, v: str) -> bool {
         if self.at_op(v) {
+            self.i += 1
+            return true
+        }
+        return false
+    }
+
+    // `step` is only special right after a range, so it can still name a variable or a field
+    fn eat_step(self) -> bool {
+        if self.tok().kind == TokKind.Ident and self.tok().val == "step" {
             self.i += 1
             return true
         }
@@ -184,6 +196,14 @@ impl Parser {
     fn parse_program(self) -> [Item] {
         var items: [Item] = []
         self.skip_nl()
+        // the version declaration  atf "1.2.0"  may open a file; it is not an item
+        if self.tok().kind == TokKind.Ident and self.tok().val == "atf" and self.toks[self.i + 1].kind == TokKind.Str {
+            self.i += 1
+            declared_version[self.file] = lit_parts_text(self.tok().parts)
+            self.i += 1
+            self.end_stmt()
+            self.skip_nl()
+        }
         while self.tok().kind != TokKind.Eof {
             items.push(self.parse_item())
             self.skip_nl()
@@ -1215,7 +1235,7 @@ impl Parser {
             var hi: Expr? = nil
             if self.starts_expr() { hi = self.parse_expr(2) }
             var stp: Expr? = nil
-            if self.eat_kw("step") { stp = self.parse_expr(2) }
+            if self.eat_step() { stp = self.parse_expr(2) }
             return mk_expr(ExprK.Range(left, hi, inclusive, stp), pos)
         }
         return left
@@ -1244,7 +1264,7 @@ impl Parser {
             var hi: Expr? = nil
             if self.starts_expr() { hi = self.parse_expr(2) }
             var stp: Expr? = nil
-            if self.eat_kw("step") { stp = self.parse_expr(2) }
+            if self.eat_step() { stp = self.parse_expr(2) }
             return mk_expr(ExprK.Range(nil, hi, inclusive, stp), pos)
         }
         return self.parse_unary(min_prec)

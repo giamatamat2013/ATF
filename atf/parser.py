@@ -17,7 +17,11 @@ BINARY_PREC = {
     "**": (15, "R"),
 }
 PREC_UNARY = 14
-ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "**="}
+ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", ">>>=", "**="}
+
+
+# the version named by  atf "1.2.0"  at the top of each parsed file, by file name
+DECLARED_VERSION = {}
 
 
 class Parser:
@@ -62,6 +66,13 @@ class Parser:
 
     def eat_op(self, v):
         if self.at_op(v):
+            self.i += 1
+            return True
+        return False
+
+    def eat_step(self):
+        # `step` is only special right after a range, so it can still name a variable or a field
+        if self.tok.kind == "IDENT" and self.tok.val == "step":
             self.i += 1
             return True
         return False
@@ -121,6 +132,14 @@ class Parser:
     def parse_program(self):
         items = []
         self.skip_nl()
+        # the version declaration  atf "1.2.0"  may open a file; it is not an item
+        if self.tok.kind == "IDENT" and self.tok.val == "atf" and self.peek().kind == "STR":
+            self.i += 1
+            parts = self.tok.val
+            DECLARED_VERSION[self.file] = b"".join(p for p in parts if isinstance(p, bytes)).decode("utf-8")
+            self.i += 1
+            self.end_stmt()
+            self.skip_nl()
         while self.tok.kind != "EOF":
             items.append(self.parse_item())
             self.skip_nl()
@@ -796,7 +815,7 @@ class Parser:
             if self.starts_expr():
                 hi = self.parse_expr(2)
             step = None
-            if self.eat_kw("step"):
+            if self.eat_step():
                 step = self.parse_expr(2)
             return S.Range(left, hi, inclusive, step, pos=pos)
         return left
@@ -822,7 +841,7 @@ class Parser:
             if self.starts_expr():
                 hi = self.parse_expr(2)
             step = None
-            if self.eat_kw("step"):
+            if self.eat_step():
                 step = self.parse_expr(2)
             return S.Range(None, hi, inclusive, step, pos=pos)
         return self.parse_unary(min_prec)

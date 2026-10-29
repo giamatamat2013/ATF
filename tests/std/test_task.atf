@@ -1,0 +1,28 @@
+import "std/task"
+
+fn main() {
+    var count = 0
+    task_spawn(|| {
+        count += 1
+        return count >= 5
+    })
+    var order = ""
+    var a = 0
+    var b = 0
+    task_spawn(|| { a += 1; order = order + "a"; return a >= 2 })
+    task_spawn(|| { b += 1; order = order + "b"; return b >= 3 })
+    println("pending {task_pending()}")
+    task_finish()
+    println("count {count} order {order}")
+    println("pending {task_pending()} completed {task_completed()}")
+
+    var sum = 0
+    task_each(10, |k| { sum += k })
+    var rounds = 0
+    while task_run(0) > 0 { rounds += 1 }
+    println("sum {sum} rounds {rounds}")
+
+    task_spawn(|| { return false })
+    task_clear()
+    println("cleared {task_pending()}")
+}

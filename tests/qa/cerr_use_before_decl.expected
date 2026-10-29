@@ -1,5 +1,5 @@
 COMPILE ERROR
-error: unknown name 'later'
+error: unknown name 'pending'
   --> cerr_use_before_decl.atf:2:13
- 2 |     println(later)
+ 2 |     println(pending)
    |             ^

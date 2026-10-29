@@ -5,11 +5,11 @@ from .errors import CompileError, Pos
 KEYWORDS = {
     "fn", "let", "var", "const", "if", "else", "while", "for", "in", "loop", "break", "continue", "return",
     "struct", "enum", "impl", "match", "import", "extern", "true", "false", "and", "or", "not", "as",
-    "defer", "type", "nil", "step", "unsafe", "pub",
+    "defer", "type", "nil", "unsafe", "pub",
 }
 
 OPS = [
-    "..=", "<<=", ">>>", ">>=", "**=", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+    ">>>=", "..=", "<<=", ">>>", ">>=", "**=", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
     "<<", ">>", "->", "=>", "..", "::", "??", "**", "|>",
     "+", "-", "*", "/", "%", "=", "<", ">", "!", "&", "|", "^", "~", "(", ")", "[", "]", "{", "}", ",", ":", ";",
     ".", "?", "@", "#",
@@ -18,7 +18,7 @@ OPS = [
 # a newline right after one of these tokens continues the statement
 CONTINUERS = {
     "+", "-", "*", "/", "%", "=", "&", "|", "^", ",", "(", "[", ".", "==", "!=", "<=", ">=", "&&", "||",
-    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "->", "=>", "..", "::", "??", "**", "..=", "<<=", ">>=",
+    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "->", "=>", "..", "::", "??", "**", "..=", "<<=", ">>=", ">>>=",
     "**=", "and", "or", "not", "in", "as", ":", "|>",
 }
 
@@ -140,6 +140,9 @@ def tokenize(src, file):
                         sig = False
                 if src.startswith("&&", i) or src.startswith("||", i) or src.startswith("??", i):
                     sig = False
+                for word in ("and", "or"):
+                    if src.startswith(word, i) and (i + len(word) >= n or not (src[i + len(word)].isalnum() or src[i + len(word)] == "_")):
+                        sig = False
                 if src[i] == "." and not src.startswith("..", i):
                     sig = False
             if sig and (last_sig is not None and last_sig.kind != "NEWLINE"):

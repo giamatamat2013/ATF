@@ -1,4 +1,5 @@
-// ATF 1.2.0
+atf "1.2.0"
+
 fn main() {
     println("the first line names the version this file was written for")
 }

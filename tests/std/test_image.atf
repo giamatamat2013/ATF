@@ -1,0 +1,27 @@
+import "std/image"
+
+fn main() {
+    var img = image_new(4, 3, 0x102030)
+    img.set(1, 2, 0xff8000)
+    img.set(9, 9, 0x123456)
+    println("size {img.w}x{img.h} pixel {img.get(1, 2):x} wrap {img.get(5, 5):x} corner {img.get(0, 0):x}")
+
+    let path = "atf_test_image.tmp.bmp"
+    println("saved {image_save(img, path)}")
+    if let back = image_load(path) {
+        println("loaded {back.w}x{back.h} same {back.pix == img.pix}")
+    }
+    delete_file(path)
+    println("missing {image_load("no_such_picture.bmp") == nil}")
+    println("bad {image_parse_bmp("hello").is_err()}")
+
+    let big = image_scale(img, 8, 6)
+    println("scaled {big.w}x{big.h} {big.get(2, 4):x} {big.get(3, 5):x} {big.get(0, 0):x}")
+    let part = image_crop(img, 1, 1, 2, 2)
+    println("crop {part.w}x{part.h} {part.get(0, 1):x} {part.get(1, 0):x}")
+    println("flip {image_flip_x(img).get(2, 2):x} {image_flip_y(img).get(1, 0):x}")
+    let canvas = image_new(6, 6, 0)
+    image_blit(canvas, img, 1, 1, 0x102030)
+    println("blit {canvas.get(2, 3):x} {canvas.get(1, 1):x}")
+    println("shade {image_shade(img, 0.5).get(0, 0):x} {image_shade(img, 100.0).get(0, 0):x}")
+}

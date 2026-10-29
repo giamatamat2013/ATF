@@ -118,16 +118,17 @@ four five
 
 * One statement per line is the normal style; **semicolons are optional**.
 * A statement continues on the next line if the line ends with an operator or a comma, if you are inside
-  `( )` or `[ ]` brackets, or if the next line starts with `.` (a method chain), `&&`, `||` or `??`.
+  `( )` or `[ ]` brackets, or if the next line starts with `.` (a method chain), `&&`, `||`, `??`, `and` or `or`.
 
-The first line of a file can name the ATF version the file was written for. It is a comment, so it is optional, and
-the compiler does not need it. When the compiler is older than the version on that line, `atf run`, `atf build` and
+A file can open with a declaration that names the ATF version the file was written for: `atf "1.2.0"`. It is not a
+comment but a part of the language. It is optional, and the compiler does not need it. When the compiler is older than the version on that line, `atf run`, `atf build` and
 `atf check` print a warning on stderr and still compile the file. This is useful when a program moves to a computer
 with an older ATF.
 
 <!-- id: version-line -->
 ```atf
-// ATF 1.2.0
+atf "1.2.0"
+
 fn main() {
     println("written for ATF 1.2.0")
 }
@@ -353,7 +354,7 @@ error: type mismatch: expected int but found float
 | `& \| ^ ~ << >> >>>`         | bit operations (`>>` keeps the sign, `>>>` fills with zeros) |
 | `in`, `not in`               | membership: arrays, text, maps, sets, ranges `x in (1..10)` |
 | `x as T`                     | conversion (`7 as float`)                   |
-| `= += -= *= /= %= **= &= \|= ^= <<= >>=` | assignment                      |
+| `= += -= *= /= %= **= &= \|= ^= <<= >>= >>>=` | assignment                    |
 | `x ?? d`, `x!`, `x?`         | optional handling (section 18)              |
 
 <!-- id: operators -->
@@ -651,7 +652,7 @@ fn main() {
 
 ### `for` and ranges
 
-`a..b` counts from `a` up to `b - 1`; `a..=b` includes `b`; `step` changes the stride (a negative step counts down).
+`a..b` counts from `a` up to `b - 1`; `a..=b` includes `b`; `step` changes the stride (a negative step counts down). `step` is special only right after a range, so it is also a fine name for a variable or a field.
 
 <!-- id: for -->
 ```atf
@@ -2612,6 +2613,73 @@ fn main() {
 [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
 120
 a, b
+```
+
+### Sound, pictures, background jobs and the mouse: `std/sound`, `std/image`, `std/task`
+
+Four small additions for games and tools:
+
+* `std/sound` plays sounds with the Windows audio driver. `sound_tone(freq, ms)`, `sound_noise(ms)` and
+  `sound_sweep(from, to, ms)` make a WAV in memory; `sound_play(wav)` plays it without waiting (one voice, a new
+  sound replaces the old one), `sound_play_file(path)` plays a `.wav` file, `sound_stop()` and `sound_mute(true)`
+  silence everything.
+* `std/image` holds a picture as an `Image` (`w`, `h` and `pix`, the colors as `0xRRGGBB` ints, the format that
+  `Canvas.pixels` draws). `image_load(path)` reads an uncompressed 24 or 32 bit BMP, `image_save(img, path)` writes
+  one, and `image_scale`, `image_crop`, `image_flip_x`, `image_flip_y`, `image_blit` and `image_shade` make new pictures.
+* `std/task` runs long work a little at a time. `task_spawn(|| ...)` adds a job (a function that returns `true` when it
+  is finished), `task_each(n, |k| ...)` makes a job from a loop, and `task_run(budget_ms)` called once per frame
+  runs the jobs for at most that many milliseconds, so a window never freezes.
+* In `std/ui`, `ui_mouse_pos()` and the canvas methods `c.mouse_x()`, `c.mouse_y()` and `c.hovered()` tell where the
+  pointer is without a click; the window redraws on every mouse move once you ask. Use it for a hover highlight or an item that follows the cursor.
+
+<!-- id: sound-image-task -->
+```atf
+import "std/task"
+import "std/image"
+import "std/sound"
+
+fn main() {
+    // std/task: a long job in small steps, so a window stays responsive
+    var done = 0
+    task_each(100, |k| { done += k })
+    var frames = 0
+    while task_run(0) > 0 { frames += 1 }
+    println("sum {done}, {frames} frames")
+
+    // std/image: pixels as 0xRRGGBB ints
+    var tile = image_new(4, 4, 0x336699)
+    tile.set(0, 0, 0xffffff)
+    let big = image_scale(tile, 8, 8)
+    println("{big.w}x{big.h} corner {big.get(1, 1):x} edge {big.get(7, 7):x}")
+    image_save(tile, "tile.bmp")
+    println("loaded {image_load("tile.bmp")!.get(0, 0):x}")
+    delete_file("tile.bmp")
+
+    // std/sound: a WAV made in memory (sound_play(beep) would play it)
+    let beep = sound_tone(440.0, 200)
+    println("{sound_millis(beep)} ms, {sound_samples(beep)} samples")
+}
+```
+```output
+sum 4950, 99 frames
+8x8 corner ffffff edge 336699
+loaded ffffff
+200 ms, 4410 samples
+```
+
+Hover without a click (a window, so it is not run by the doc check):
+
+```atf nocheck
+import "std/ui"
+
+fn main() {
+    ui_run("Hover", 320, 200, || {
+        return canvas(|c| {
+            c.clear(0x202830)
+            if c.hovered() { c.circle(c.mouse_x(), c.mouse_y(), 10, 0xffcc00) }
+        }).grow()
+    })
+}
 ```
 
 ### More modules: text, files, programs, config, XML, web and tests

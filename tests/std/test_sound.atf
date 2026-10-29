@@ -1,0 +1,20 @@
+import "std/sound"
+
+fn main() {
+    let t = sound_tone(440.0, 100)
+    println("samples {sound_samples(t)} ms {sound_millis(t)} bytes {t.len()}")
+    println("riff {t[0..4]} wave {t[8..12]} fmt {t[12..16]} data {t[36..40]}")
+    let n = sound_noise(50, 0.3)
+    println("noise samples {sound_samples(n)}")
+    let s = sound_sweep(800.0, 200.0, 80)
+    println("sweep ms {sound_millis(s)}")
+    // the first sample of a sine is silent, the last of a faded tone too
+    println("first {int(t.byte_at(44)) + int(t.byte_at(45))}")
+    sound_mute(true)
+    println("muted play {sound_play(t)}")
+    println("missing file {sound_play_file("no_such_file.wav") == true}")
+    let path = "atf_test_sound.tmp.wav"
+    println("saved {sound_save(path, t)}")
+    println("same size {read_file(path)!.len() == t.len()}")
+    delete_file(path)
+}

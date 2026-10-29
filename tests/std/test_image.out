@@ -1,0 +1,10 @@
+size 4x3 pixel ff8000 wrap ff8000 corner 102030
+saved true
+loaded 4x3 same true
+missing true
+bad true
+scaled 8x6 ff8000 ff8000 102030
+crop 2x2 ff8000 102030
+flip ff8000 ff8000
+blit ff8000 0
+shade 81018 ffffff

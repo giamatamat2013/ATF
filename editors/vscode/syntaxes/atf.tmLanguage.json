@@ -676,6 +676,10 @@
     "keywords": {
       "patterns": [
         {
+          "name": "keyword.control.version.atf",
+          "match": "\\A\\s*\\batf(?=\\s+\")"
+        },
+        {
           "name": "keyword.control.import.atf",
           "match": "\\bimport\\b"
         },

@@ -24,10 +24,10 @@ A program starts at `fn main()`. It may also be `fn main(args: [str])`, and eith
 becomes the exit code. Declarations outside functions (functions, structs, enums, constants, global variables) may
 appear in any order. All files of a program share **one global namespace**: a name defined twice is a compile error.
 
-A file may start with a line that names the ATF version it was written for, `// ATF 1.2.0`. The line is optional and
-is only a comment, except for one thing: when the compiler is older than the version on that line, `atf run`,
-`atf build` and `atf check` print a warning on stderr and go on. The version is read from the first line of the main
-file only.
+A file may start with the declaration `atf "1.2.0"`, which names the ATF version it was written for. It is optional and
+must come before every other declaration. When the compiler is older than that version, `atf run`, `atf build` and
+`atf check` print a warning on stderr and go on. Only the declaration in the main file is checked. `atf` is not a
+keyword: it is only special as the first word of a file, followed by a string.
 
 ## Lexical rules
 

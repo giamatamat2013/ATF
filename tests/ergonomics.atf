@@ -1,0 +1,20 @@
+// step as a name, >>>=, a line that starts with and / or, and the small math helpers
+struct R { step: int }
+fn main() {
+    let step = 3
+    let r = R(step: 4)
+    var x = 256
+    x >>>= 2
+    var tot = 0
+    for i in 0..10 step 3 { tot += i }
+    let a = 1
+    let b = 2
+    if a == 1
+        and b == 2
+        or a == 9 {
+        println("cont ok")
+    }
+    var order = 5
+    order += 1
+    println("{step} {r.step} {x} {tot} {order} {lerp(0.0, 10.0, 0.5)} {fract(2.75)} {array_repeat(7, 3)} {ln(1.0)}")
+}

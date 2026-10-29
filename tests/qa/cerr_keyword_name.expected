@@ -1,6 +1,6 @@
 COMPILE ERROR
-error: expected a variable name but found keyword 'step'
+error: expected a variable name but found keyword 'loop'
   --> cerr_keyword_name.atf:2:9
- 2 |     let step = 2
+ 2 |     let loop = 2
    |         ^
-  hint: 'step' is a reserved word
+  hint: 'loop' is a reserved word

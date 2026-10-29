@@ -8,7 +8,7 @@ import tempfile
 from . import errors
 from .errors import CompileError
 from .launch import program_argv
-from .parser import parse_source
+from .parser import parse_source, DECLARED_VERSION
 from . import syntax as S
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,17 +38,9 @@ def version_value(v):
     return n
 
 
-def built_for(text):
-    """the version named in the first line, '// ATF 1.2.0'; '' when there is no such line"""
-    first = text.split("\n", 1)[0]
-    if not first.startswith("// ATF "):
-        return ""
-    return first[7:].strip().split(" ")[0]
-
-
-def warn_if_newer(text):
+def warn_if_newer(path):
     """a program written for a newer ATF may not compile here: say so, but compile it anyway"""
-    want = built_for(text)
+    want = DECLARED_VERSION.get(os.path.abspath(path), "")
     if want and version_value(want) > version_value(VERSION):
         print("warning: this file was written for ATF %s, but this compiler is ATF %s; it may not compile"
               % (want, VERSION), file=sys.stderr)
@@ -102,7 +94,7 @@ def compile_file(path, check_only=False):
     from .checker import Checker, MultiError
     from .codegen import CodeGen
     modules = load_program(path)
-    warn_if_newer(errors.SOURCES[os.path.abspath(path)])
+    warn_if_newer(path)
     chk = Checker()
     for items, prelude in modules:
         chk.declare_module(items, prelude)

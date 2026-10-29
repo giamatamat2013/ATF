@@ -41,6 +41,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/http](#stdhttp)
   - [std/httpd](#stdhttpd)
   - [std/ini](#stdini)
+  - [std/image](#stdimage)
   - [std/iter](#stditer)
   - [std/json](#stdjson)
   - [std/log](#stdlog)
@@ -52,6 +53,8 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/random](#stdrandom)
   - [std/regex](#stdregex)
   - [std/semver](#stdsemver)
+  - [std/sound](#stdsound)
+  - [std/task](#stdtask)
   - [std/term](#stdterm)
   - [std/test](#stdtest)
   - [std/text](#stdtext)
@@ -154,6 +157,10 @@ These are part of the language itself (they accept values of any printable type 
 - `fn round(x: float) -> float` - the nearest whole number, halves away from zero (not to even): round(2.5) == 3.0, round(-2.5) == -3.0
 - `fn fabs(x: float) -> float` - absolute value of a float
 - `fn log2(x: float) -> float` - base-2 logarithm: log2(8.0) == 3.0
+- `fn ln(x: float) -> float` - natural logarithm (the same as log)
+- `fn lerp(a: float, b: float, t: float) -> float` - The position between a and b: lerp(10.0, 20.0, 0.5) == 15.0 (t = 0.0 gives a, t = 1.0 gives b)
+- `fn fract(x: float) -> float` - the part after the decimal point: fract(2.75) == 0.75, fract(-0.25) == 0.75
+- `fn array_repeat<T>(value: T, n: int) -> [T]` - an array of n copies of value: array_repeat(0, 4) == [0, 0, 0, 0]
 - `fn is_nan(x: float) -> bool` - true when x is nan (not a number), for example INF - INF
 - `fn is_inf(x: float) -> bool` - true when x is INF or -INF
 - `fn radians(deg: float) -> float` - degrees to radians: radians(180.0) == PI
@@ -1718,6 +1725,58 @@ struct IniDoc {
 - `.section_names() -> [str]` - the section names, in file order, without the unnamed first section
 - `.keys(section: str) -> [str]` - the keys of a section in file order (empty when the section does not exist)
 
+## std/image
+
+Pictures as arrays of pixels: make them, load and save BMP files, scale, crop, flip.
+
+```text
+import "std/image"
+var img = image_new(16, 16, 0x336699)
+img.set(3, 4, 0xffffff)
+image_save(img, "tile.bmp")
+if let tex = image_load("texture.bmp") { println("{tex.w} x {tex.h}, first pixel {tex.get(0, 0):x}") }
+```
+
+An Image has w, h and pix: w * h colors as 0xRRGGBB ints, row by row from the top left corner. That is
+exactly what Canvas.pixels(x, y, w, h, img.pix, img.w, img.h) in std/ui draws. Colors are
+0xRRGGBB (no alpha). image_load reads uncompressed BMP files with 24 or 32 bits per pixel; save a
+picture from any program as BMP (Paint can) to use it as a texture.
+
+**Types**
+
+```text
+struct Image {
+    w: int
+    h: int
+    pix: [int]
+}
+```
+
+
+**Functions**
+
+- `fn image_new(w: int, h: int, color: int = 0) -> Image` - a picture of one color
+- `fn image_u16(s: str, at: int) -> int`
+- `fn image_u32(s: str, at: int) -> int`
+- `fn image_i32(s: str, at: int) -> int`
+- `fn image_parse_bmp(data: str) -> Result<Image, str>` - read an uncompressed 24 or 32 bit BMP from the bytes of a file; Err says what is wrong
+- `fn image_load(path: str) -> Image?` - load a BMP file; nil when the file is missing or not a supported BMP
+- `fn image_to_bmp(img: Image) -> str` - the bytes of a 24 bit BMP file for the picture
+- `fn image_save(img: Image, path: str) -> bool` - write the picture as a 24 bit BMP file
+- `fn image_crop(img: Image, x: int, y: int, w: int, h: int) -> Image` - a copy of the rectangle (x, y, w, h); parts outside the picture are black
+- `fn image_scale(img: Image, w: int, h: int) -> Image` - the picture stretched to w x h with the nearest pixel (keeps hard edges: pixel art)
+- `fn image_flip_x(img: Image) -> Image` - mirror left to right
+- `fn image_flip_y(img: Image) -> Image` - mirror top to bottom
+- `fn image_blit(img: Image, src: Image, x: int, y: int, skip: int = -1)` - copy src onto img with its top left corner at (x, y); the color skip (default none) is not copied
+- `fn image_shade(img: Image, f: float) -> Image` - multiply every color by f (below 1.0 darkens, above 1.0 brightens)
+
+**Methods of `Image`**
+
+- `.get(x: int, y: int) -> int` - color at (x, y); coordinates outside the picture wrap around (handy for tiled textures)
+- `.set(x: int, y: int, color: int)` - set the color at (x, y); outside the picture nothing happens
+- `.fill(color: int)` - fill the whole picture
+- `.copy() -> Image`
+
 ## std/iter
 
 Lazy iterators: values are made one at a time, only when they are needed.
@@ -2344,6 +2403,82 @@ struct SemVer {
 - `.bump_minor() -> SemVer` - the next minor version: 1.4.2 -> 1.5.0
 - `.bump_patch() -> SemVer` - the next patch version: 1.4.2 -> 1.4.3
 
+## std/sound
+
+Play sounds on Windows (winmm.dll): synthesized tones and noise, or a .wav file.
+
+```text
+import "std/sound"
+sound_play(sound_tone(440.0, 200))            // a 440 Hz beep for 200 ms, returns at once
+sound_play(sound_noise(120, 0.4))             // a short burst of noise (a "hit" or "step")
+sound_play_file("music.wav")
+sound_stop()
+```
+
+Sounds are WAV files in memory (a str of bytes): 16 bit, mono, 22050 samples per second. Build one
+once, keep it in a variable and play it again whenever you like. Playback is asynchronous and
+there is one voice: a new sound replaces the one that is still playing.
+sound_save(path, wav) writes the WAV file, sound_samples(wav) counts its samples (handy in tests).
+
+**Constants**
+
+- `SOUND_RATE = 22050`
+- `SOUND_FLAGS_MEMORY = 0x5          // SND_MEMORY | SND_ASYNC`
+- `SOUND_FLAGS_FILE = 0x20001        // SND_FILENAME | SND_ASYNC`
+
+**Functions**
+
+- `fn sound_from_samples(samples: [int]) -> str` - a WAV file from samples (each -32768 .. 32767) played at SOUND_RATE samples per second
+- `fn sound_sample_count(ms: int) -> int`
+- `fn sound_tone(freq: float, ms: int, volume: float = 0.5, fade: bool = true) -> str` - a sine tone: freq in Hz, ms long, volume 0.0 .. 1.0. With fade the sound dies away smoothly (no click at the end); that is what you want for most effects.
+- `fn sound_noise(ms: int, volume: float = 0.5, fade: bool = true) -> str` - white noise, ms long: footsteps, hits, explosions. It fades out like sound_tone.
+- `fn sound_sweep(freq_a: float, freq_b: float, ms: int, volume: float = 0.5) -> str` - a tone whose pitch slides from freq_a to freq_b (jumps, laser shots, "pop")
+- `fn sound_samples(wav: str) -> int` - number of samples in a WAV made by this module (0 when it is not one)
+- `fn sound_millis(wav: str) -> int` - length of a WAV made by this module in milliseconds
+- `fn sound_play(wav: str) -> bool` - play a WAV from memory without waiting for it to end. Returns false when playback failed.
+- `fn sound_play_file(path: str) -> bool` - play a .wav file without waiting for it to end. Returns false when it could not be played.
+- `fn sound_stop()` - stop whatever is playing
+- `fn sound_mute(on: bool)` - silence (true) or enable (false) every sound_play / sound_play_file call, e.g. for a mute key
+- `fn sound_save(path: str, wav: str) -> bool` - write a WAV (from sound_tone and friends) to a file
+
+## std/task
+
+Cooperative jobs that run a little on every frame, so long work never freezes a window.
+
+```text
+import "std/task"
+var i = 0
+task_spawn(|| { i += 1; return i >= 1000 })   // the job returns true when it is finished
+task_run(4)                                   // call once per frame: runs jobs for at most 4 ms
+```
+
+A job is a function `fn() -> bool`. Each call should do a small piece of work (one chunk, one row)
+and return true when everything is done. Jobs run in the order they were spawned, one step each
+per round, until the time budget of task_run is used up.
+
+```text
+task_each(1000, |k| { build_chunk(k) })       // a job for "for k in 0..1000", done a few at a time
+```
+
+**Types**
+
+```text
+struct TaskJob {
+    run: fn() -> bool
+}
+```
+
+
+**Functions**
+
+- `fn task_spawn(work: fn() -> bool)` - add a job; work is called again and again until it returns true
+- `fn task_each(n: int, body: fn(int))` - a job that calls body(0), body(1) ... body(n - 1), one per step
+- `fn task_run(budget_ms: int = 4) -> int` - run the queued jobs for at most budget_ms milliseconds (at least one step runs when jobs exist). Returns the number of jobs still waiting.
+- `fn task_finish()` - run every job to the end now (for tests or shutdown)
+- `fn task_pending() -> int` - number of jobs still waiting
+- `fn task_completed() -> int` - number of jobs that have finished so far
+- `fn task_clear()` - drop all waiting jobs without running them
+
 ## std/term
 
 Colors, bold text, progress bars and boxes for programs that run in a terminal.
@@ -2665,7 +2800,6 @@ struct UiColorTween {
 - `fn canvas(draw: fn(Canvas)) -> Node` - an element that you draw with draw(canvas) each time the screen is drawn. Give it a size: .size(300, 200) or .grow()
 - `fn anim_set_time(ms: int)` - Freeze the animation clock at ms milliseconds since the start (for tests and screenshots: the animation stops where it is). anim_set_time(-1) gives the real clock back.
 - `fn anim_time() -> float` - Seconds since the program started. Using it in the view keeps the window animating.
-- `fn lerp(a: float, b: float, t: float) -> float` - The position between a and b: lerp(10.0, 20.0, 0.5) == 15.0
 - `fn ease_linear(t: float) -> float` - Easing functions turn the progress t (0.0 .. 1.0) into a position (0.0 .. 1.0), the way CSS timing functions do.
 - `fn ease_in(t: float) -> float` - slow start
 - `fn ease_out(t: float) -> float` - slow end (the default of animate)
@@ -2767,6 +2901,9 @@ struct UiColorTween {
 **Methods of `Canvas`**
 
 - `.clear(c: int)` - fill the whole canvas with a color
+- `.mouse_x() -> int` - mouse position inside the canvas (same pixels as rect/line); -1 when the pointer is outside it. Calling it makes the window redraw on every mouse move, so a hover effect needs no click.
+- `.mouse_y() -> int`
+- `.hovered() -> bool` - true while the pointer is over the canvas
 - `.rect(x: int, y: int, w: int, h: int, c: int)`
 - `.rrect(x: int, y: int, w: int, h: int, r: int, c: int)` - rectangle with rounded corners
 - `.outline(x: int, y: int, w: int, h: int, r: int, bw: int, c: int)` - only the border of a rectangle (bw pixels wide)

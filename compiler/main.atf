@@ -97,13 +97,6 @@ fn load_module(path: str, prelude: bool, src_text: str?, from_pos: Pos) {
     modules.push(Module(items, prelude))
 }
 
-// the version named in the first line of a program, "// ATF 1.2.0"; "" when there is no such line
-fn built_for(text: str) -> str {
-    let first = text.split("\n")[0]
-    if not first.starts_with("// ATF ") { return "" }
-    return first[7..].trim().split(" ")[0]
-}
-
 // "1.2.3" -> 1002003, so that versions compare as numbers; 0 when v is not three numbers
 fn version_value(v: str) -> int {
     let parts = v.split(" ")[0].split(".")
@@ -117,8 +110,8 @@ fn version_value(v: str) -> int {
 }
 
 // a program written for a newer ATF may not compile here: say so, but compile it anyway
-fn warn_if_newer(text: str) {
-    let want = built_for(text)
+fn warn_if_newer(path: str) {
+    let want = declared_version.get(path, "")
     let here = VERSION.split(" ")[0]
     if want != "" and version_value(want) > version_value(here) {
         eprintln("warning: this file was written for ATF {want}, but this compiler is ATF {here}; it may not compile")
@@ -131,7 +124,7 @@ fn compile_file(path: str, check_only: bool) -> Bytes? {
     let ok = guarded(|| {
         load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
         load_module(path, false, nil, NOPOS)
-        warn_if_newer(sources[path])
+        warn_if_newer(path)
         var ms: [([Item], bool)] = []
         for m in modules { ms.push((m.items, m.prelude)) }
         let prog = check_program(ms)

@@ -60,7 +60,7 @@ total: 5.25
   `try`/`catch`, labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
-  collections (deque, priority queue, sorted map and set, counter, linked list), lazy iterators (`std/iter`, and
+  collections (deque, priority queue, sorted map and set, counter, linked list), sounds (`std/sound`), BMP pictures (`std/image`), time-sliced background jobs (`std/task`), lazy iterators (`std/iter`, and
   `for` loops over any type with `next()`), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
   XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers and UDP messages (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`), YAML files (`std/yaml`), whole numbers of any size (`std/bigint`), encryption, secure random bytes and keys from passwords (`std/crypto`), WebSocket clients and servers (`std/websocket`),
@@ -120,8 +120,8 @@ runs a program with the native compiler, and `python3 run_atf.py run hello.atf` 
 `python3 run_atf.py check` and `build` need only Python 3. The test scripts run the same way. The first run creates
 the Wine folder `~/.wine` and takes a little longer. If `wine` is not on the PATH, set `ATF_WINE` to the Wine program.
 
-A program may start with the line `// ATF 1.2.0` to say which version it was written for. The line is optional; an
-older compiler only prints a warning when it is older than that version (see the tutorial, section 2).
+A program may start with the declaration `atf "1.2.0"` to say which version it was written for. It is optional; a
+compiler older than that version only prints a warning (see the tutorial, section 2).
 
 A first program, `hello.atf`:
 

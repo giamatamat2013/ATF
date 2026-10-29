@@ -1,4 +1,6 @@
-// ATF 1.2.0 — BLOCKWORLD DELUXE SURVIVAL
+atf "1.2.0"
+
+// BLOCKWORLD DELUXE SURVIVAL
 // Infinite seeded voxel terrain with biomes, structures, detailed procedural textures,
 // expanded blocks/resources, durable pickaxes, chests, furnace smelting, crafting and survival.
 // Controls: WASD, mouse, Space, Shift, Ctrl, LMB mine, RMB place/open chest, E inventory,
@@ -8,6 +10,7 @@
 // resolution drops by itself when frames get slow.
 
 import "std/ui"
+import "std/sound"
 
 const WORLD_W = 128
 const WORLD_H = 30
@@ -54,6 +57,15 @@ var mob_zs: [float] = []
 var mob_hps: [int] = []
 var mob_cooldowns: [float] = []
 var mob_spawn_timer = 0.0
+// Per-frame ray setup of each zombie model (camera in the zombie's space, its axes, leg swing).
+var mob_lox: [float] = []
+var mob_loy: [float] = []
+var mob_loz: [float] = []
+var mob_rx: [float] = []
+var mob_rz: [float] = []
+var mob_fx: [float] = []
+var mob_fz: [float] = []
+var mob_swing: [float] = []
 var previous_attack = false
 // Inventory slots are item IDs. 15=coal, 16=gold, 17=apple, 19=diamond.
 var inventory: [int] = array_make::<int>(55)
@@ -139,6 +151,16 @@ var previous_l = false
 var previous_y = false
 var previous_u = false
 
+// Command console (press T, type a command, Enter; Escape closes it). Type "help" for the list.
+var console_open = false
+var console_text = ""
+var console_log: [str] = []
+var console_focus_ticks = 0
+var game_mode = 0          // 0 survival, 1 creative, 2 adventure, 3 spectator
+var peaceful = false
+var freeze_time = false
+var mob_keep: [bool] = []  // summoned mobs do not despawn in daylight
+
 // Dropped item entities: items can be thrown out and picked up again.
 var dropped_item_ids: [int] = []
 var dropped_item_xs: [float] = []
@@ -215,6 +237,12 @@ fn get_block(x: int, y: int, z: int) -> int {
     if y >= WORLD_H { return 0 }
     return world[block_index(x, y, z)]
 }
+
+// Sound effects, built once in memory (std/sound).
+let snd_break = sound_noise(70, 0.5)
+let snd_place = sound_tone(180.0, 60, 0.6)
+let snd_hit = sound_sweep(420.0, 90.0, 110, 0.6)
+let snd_craft = sound_sweep(500.0, 900.0, 120, 0.5)
 
 fn set_block(x: int, y: int, z: int, block: int) {
     if x < 0 or x >= WORLD_W or z < 0 or z >= WORLD_D { return }
@@ -804,18 +832,17 @@ fn face_from_hit(bx: int, by: int, bz: int, px: int, py: int, pz: int, dx: float
     return 5
 }
 
-fn fract_atf(value: float) -> float => value - floor(value)
 
 fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: float, distance: float, hit_x: float, hit_y: float, hit_z: float) -> int {
     // Face-local UV coordinates make each cube face have its own repeatable texture.
-    var u = fract_atf(hit_x)
-    var v = fract_atf(hit_z)
+    var u = fract(hit_x)
+    var v = fract(hit_z)
     if face == 1 or face == 2 {
-        u = fract_atf(hit_z)
-        v = fract_atf(hit_y)
+        u = fract(hit_z)
+        v = fract(hit_y)
     } else if face == 4 or face == 5 {
-        u = fract_atf(hit_x)
-        v = fract_atf(hit_y)
+        u = fract(hit_x)
+        v = fract(hit_y)
     }
     let cell_u = int(floor(u * 16.0))
     let cell_v = int(floor(v * 16.0))
@@ -912,7 +939,7 @@ fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: f
         red = 174 + grain * 2
         green = 123 + grain * 2
         blue = 71 + grain
-        let board_edge = fract_atf(v * 4.0)
+        let board_edge = fract(v * 4.0)
         if (face != 0 and face != 3 and (board_edge < 0.07 or board_edge > 0.93)) or (face == 0 and cell_u == 0) {
             red -= 42; green -= 30; blue -= 17
         }
@@ -923,8 +950,8 @@ fn color_for_block(block: int, face: int, bx: int, by: int, bz: int, sample_y: f
         green = 75 + grain
         blue = 57 + grain
         let brick_row = int(floor(v * 4.0))
-        let brick_u = fract_atf(u * 4.0 + (if brick_row % 2 == 0 { 0.0 } else { 0.5 }))
-        if fract_atf(v * 4.0) < 0.07 or brick_u < 0.055 { red = 190; green = 177; blue = 155 }
+        let brick_u = fract(u * 4.0 + (if brick_row % 2 == 0 { 0.0 } else { 0.5 }))
+        if fract(v * 4.0) < 0.07 or brick_u < 0.055 { red = 190; green = 177; blue = 155 }
     } else if block == 13 {
         // Glass uses bright edge highlights and a cool tinted pane effect.
         red = 140 + grain
@@ -1402,6 +1429,7 @@ fn craft_from_grid() {
             }
         }
     }
+    sound_play(snd_craft)
     status_message = "Crafted {n} {block_name(item)}"
     status_timer = 1.4
 }
@@ -1971,6 +1999,7 @@ fn handle_block_action(left_now: bool, right_now: bool) {
         let (block, bx, by, bz, _, _, _, _) = trace_ray(forward_x, forward_y, forward_z, 6.0)
         if block != 0 and block != 7 and block != 8 and bx >= 0 {
             set_player_block(bx, by, bz, 0)
+            sound_play(snd_break)
             blocks_mined += 1
             let level = pickaxe_level()
             if block == 9 {
@@ -2053,6 +2082,7 @@ fn handle_block_action(left_now: bool, right_now: bool) {
             if block != 0 and bx >= 0 and target_in_bounds and is_placeable_item(selected_block) and get_block(ax, ay, az) == 0 and not overlaps_player(ax, ay, az) {
                 if inventory[selected_block] > 0 {
                     set_player_block(ax, ay, az, selected_block)
+                    sound_play(snd_place)
                     inventory[selected_block] -= 1
                     blocks_placed += 1
                     status_message = "Placed {block_name(selected_block)}"
@@ -2153,6 +2183,7 @@ fn remove_mob(i: int) {
     mob_zs.remove(i)
     mob_hps.remove(i)
     mob_cooldowns.remove(i)
+    mob_keep.remove(i)
 }
 
 fn spawn_mob() {
@@ -2170,11 +2201,16 @@ fn spawn_mob() {
         mob_zs.push(float(iz) + 0.5)
         mob_hps.push(8)
         mob_cooldowns.push(0.6)
+        mob_keep.push(false)
     }
 }
 
 fn update_mobs() {
     mob_spawn_timer += 0.03
+    if peaceful {
+        while mob_xs.len() > 0 { remove_mob(mob_xs.len() - 1) }
+        return
+    }
     if day_light < 0.55 and mob_xs.len() < 4 and mob_spawn_timer > 4.0 {
         mob_spawn_timer = 0.0
         spawn_mob()
@@ -2184,7 +2220,7 @@ fn update_mobs() {
         let dx = player_x - mob_xs[i]
         let dz = player_z - mob_zs[i]
         let dist = sqrt(dx * dx + dz * dz)
-        if (day_light > 0.72 and dist > 3.0) or dist > 45.0 {
+        if (day_light > 0.72 and dist > 3.0 and not mob_keep[i]) or dist > 45.0 {
             remove_mob(i)
         } else {
             if dist > 0.9 {
@@ -2223,11 +2259,12 @@ fn update_mobs() {
 fn attack_mobs() {
     for i in 0..mob_xs.len() {
         let tx = mob_xs[i] - camera_x
-        let ty = (mob_ys[i] + 0.9) - camera_y
+        let ty = (mob_ys[i] + 1.0) - camera_y
         let tz = mob_zs[i] - camera_z
         let d = sqrt(tx * tx + ty * ty + tz * tz)
         if d < 3.6 and d > 0.01 and (tx * forward_x + ty * forward_y + tz * forward_z) / d > 0.9 {
             mob_hps[i] -= 4
+            sound_play(snd_hit)
             let kx = mob_xs[i] + tx / d * 0.6
             let kz = mob_zs[i] + tz / d * 0.6
             if not collides_body(kx, mob_ys[i], kz) {
@@ -2246,10 +2283,285 @@ fn attack_mobs() {
     }
 }
 
+// ---- command console ----
+
+const DAY_LENGTH = 180.0
+
+fn console_say(msg: str) {
+    console_log.push(msg)
+    while console_log.len() > 7 { console_log.remove(0) }
+    status_message = msg
+    status_timer = 3.0
+}
+
+fn open_console() {
+    console_open = true
+    console_text = ""
+    console_focus_ticks = 4
+    mouse_captured = false
+    ui_mouse_capture(false)
+    if console_log.len() == 0 { console_say("Type help for the list of commands") }
+}
+
+fn close_console() {
+    console_open = false
+    console_focus_ticks = 0
+    mouse_captured = true
+    ui_mouse_capture(true)
+}
+
+// Item by name ("diamond_ore", "Iron Pickaxe") or by number. -1 when unknown.
+fn item_by_name(name: str) -> int {
+    let n = name.lower().replace("minecraft:", "").replace(" ", "_")
+    if let v = n.parse_int() {
+        if v >= 1 and v < inventory.len() and v != 7 and v != 8 { return v }
+        return -1
+    }
+    for i in 1..inventory.len() {
+        if i != 7 and i != 8 and block_name(i).lower().replace(" ", "_") == n { return i }
+    }
+    return -1
+}
+
+// A coordinate: a number, or ~ / ~5 relative to the player.
+fn parse_coord(tok: str, base: float) -> float? {
+    if tok.starts_with("~") {
+        let rest = tok[1..]
+        if rest == "" { return base }
+        if let v = rest.parse_float() { return base + v }
+        return nil
+    }
+    if let v = tok.parse_float() { return v }
+    return nil
+}
+
+fn mode_name(m: int) -> str {
+    if m == 1 { return "Creative" }
+    if m == 2 { return "Adventure" }
+    if m == 3 { return "Spectator" }
+    return "Survival"
+}
+
+// 0 = sunrise, 6000 = noon, 12000 = sunset, 18000 = midnight (24000 ticks per day)
+fn set_day_ticks(t: int) {
+    let wrapped = ((t - 6000) % 24000 + 24000) % 24000
+    game_time = float(wrapped) / 24000.0 * DAY_LENGTH
+}
+
+fn day_ticks() -> int {
+    let phase = (game_time - DAY_LENGTH * floor(game_time / DAY_LENGTH)) / DAY_LENGTH
+    return (int(phase * 24000.0) + 6000) % 24000
+}
+
+fn summon_zombie(x: float, y: float, z: float) {
+    mob_xs.push(x)
+    mob_ys.push(y)
+    mob_zs.push(z)
+    mob_hps.push(8)
+    mob_cooldowns.push(0.6)
+    mob_keep.push(true)
+}
+
+fn cmd_gamemode(args: [str]) {
+    if args.len() < 1 { console_say("Usage: gamemode <survival|creative|adventure|spectator>"); return }
+    let a = args[0].lower()
+    var m = -1
+    if a == "survival" or a == "s" or a == "0" { m = 0 }
+    else if a == "creative" or a == "c" or a == "1" { m = 1 }
+    else if a == "adventure" or a == "a" or a == "2" { m = 2 }
+    else if a == "spectator" or a == "sp" or a == "3" { m = 3 }
+    if m < 0 { console_say("Unknown game mode: {args[0]}"); return }
+    game_mode = m
+    if m == 0 or m == 2 { velocity_y = 0.0 }
+    console_say("Game mode set to {mode_name(m)}")
+}
+
+fn cmd_give(args: [str]) {
+    if args.len() < 1 { console_say("Usage: give <item> [count]   (e.g. give diamond 5)"); return }
+    let item = item_by_name(args[0])
+    if item < 0 { console_say("Unknown item: {args[0]}  (see: items)"); return }
+    var count = 1
+    if args.len() >= 2 {
+        if let n = args[1].parse_int() { count = n } else { console_say("Count must be a number"); return }
+    }
+    if count < 1 or count > 999 { console_say("Count must be 1 to 999"); return }
+    inventory[item] += count
+    sync_slots()
+    console_say("Gave {count} x {block_name(item)}")
+}
+
+fn cmd_summon(args: [str]) {
+    if args.len() < 1 { console_say("Usage: summon zombie [x y z]"); return }
+    let kind = args[0].lower().replace("minecraft:", "")
+    if kind != "zombie" { console_say("Unknown entity: {args[0]}  (available: zombie)"); return }
+    var x = player_x + sin_atf(yaw) * 3.0
+    var y = player_y
+    var z = player_z + cos_atf(yaw) * 3.0
+    if args.len() >= 4 {
+        let px = parse_coord(args[1], float(world_origin_x) + player_x)
+        let py = parse_coord(args[2], player_y)
+        let pz = parse_coord(args[3], float(world_origin_z) + player_z)
+        if px == nil or py == nil or pz == nil { console_say("Bad coordinates"); return }
+        x = px! - float(world_origin_x)
+        y = py!
+        z = pz! - float(world_origin_z)
+    }
+    if x < 2.0 or z < 2.0 or x >= float(WORLD_W - 2) or z >= float(WORLD_D - 2) {
+        console_say("That place is not loaded")
+        return
+    }
+    summon_zombie(x, y, z)
+    peaceful = false
+    console_say("Summoned Zombie")
+}
+
+fn cmd_time(args: [str]) {
+    if args.len() < 1 { console_say("Usage: time <set|add|query> ..."); return }
+    let sub = args[0].lower()
+    if sub == "query" {
+        console_say("Time of day: {day_ticks()}  (0 sunrise, 6000 noon, 12000 sunset, 18000 midnight)")
+        return
+    }
+    if args.len() < 2 { console_say("Usage: time {sub} <value>"); return }
+    let v = args[1].lower()
+    var t = -1
+    if v == "day" { t = 1000 }
+    else if v == "noon" { t = 6000 }
+    else if v == "sunset" { t = 12000 }
+    else if v == "night" { t = 14000 }
+    else if v == "midnight" { t = 18000 }
+    else if v == "sunrise" { t = 0 }
+    else if let n = v.parse_int() { t = n }
+    if t < 0 { console_say("Bad time: {args[1]}  (day, noon, sunset, night, midnight, or ticks)"); return }
+    if sub == "set" {
+        set_day_ticks(t)
+        console_say("Time set to {t % 24000}")
+    } else if sub == "add" {
+        set_day_ticks(day_ticks() + t)
+        console_say("Added {t} ticks")
+    } else {
+        console_say("Usage: time <set|add|query> ...")
+    }
+}
+
+fn cmd_tp(args: [str]) {
+    if args.len() < 3 { console_say("Usage: tp <x> <y> <z>   (~ means relative; try tp ~ 40 ~)"); return }
+    let px = parse_coord(args[0], float(world_origin_x) + player_x)
+    let py = parse_coord(args[1], player_y)
+    let pz = parse_coord(args[2], float(world_origin_z) + player_z)
+    if px == nil or py == nil or pz == nil { console_say("Bad coordinates"); return }
+    let lx = px! - float(world_origin_x)
+    let lz = pz! - float(world_origin_z)
+    if lx < 3.0 or lz < 3.0 or lx >= float(WORLD_W - 3) or lz >= float(WORLD_D - 3) {
+        console_say("Out of the loaded area: x {world_origin_x + 3} to {world_origin_x + WORLD_W - 4}, z {world_origin_z + 3} to {world_origin_z + WORLD_D - 4}")
+        return
+    }
+    player_x = lx
+    player_y = clamp(py!, 1.0, float(WORLD_H - 3))
+    player_z = lz
+    velocity_y = 0.0
+    console_say("Teleported to {int(floor(px!))}, {int(floor(player_y))}, {int(floor(pz!))}")
+}
+
+fn cmd_setblock(args: [str]) {
+    if args.len() < 4 { console_say("Usage: setblock <x> <y> <z> <block|air>"); return }
+    let px = parse_coord(args[0], float(world_origin_x) + player_x)
+    let py = parse_coord(args[1], player_y)
+    let pz = parse_coord(args[2], float(world_origin_z) + player_z)
+    if px == nil or py == nil or pz == nil { console_say("Bad coordinates"); return }
+    let bx = int(floor(px!)) - world_origin_x
+    let by = int(floor(py!))
+    let bz = int(floor(pz!)) - world_origin_z
+    if bx < 0 or bx >= WORLD_W or by < 1 or by >= WORLD_H or bz < 0 or bz >= WORLD_D {
+        console_say("That place is not loaded")
+        return
+    }
+    var block = 0
+    if args[3].lower() != "air" {
+        block = item_by_name(args[3])
+        if block < 0 { console_say("Unknown block: {args[3]}"); return }
+    }
+    set_player_block(bx, by, bz, block)
+    console_say("Changed the block to {if block == 0 { "Air" } else { block_name(block) }}")
+}
+
+fn cmd_help() {
+    console_say("gamemode <mode>  give <item> [n]  summon zombie [x y z]  time set|add|query")
+    console_say("tp <x y z>  setblock <x y z block>  heal  kill [@e]  clear  items  where")
+    console_say("difficulty <peaceful|normal>  gamerule daylight <true|false>  save  load")
+}
+
+fn cmd_items() {
+    var names: [str] = []
+    for i in 1..inventory.len() {
+        if i != 7 and i != 8 { names.push(block_name(i).lower().replace(" ", "_")) }
+    }
+    console_say("Items: " + ", ".join(names))
+}
+
+fn run_console_command(raw: str) {
+    var line = raw.trim()
+    if line.starts_with("/") { line = line[1..] }
+    if line == "" { return }
+    let parts = line.split_whitespace()
+    let cmd = parts[0].lower()
+    let args = parts.skip(1)
+    console_say("> /{line}")
+    if cmd == "gamemode" or cmd == "gm" { cmd_gamemode(args) }
+    else if cmd == "give" { cmd_give(args) }
+    else if cmd == "summon" { cmd_summon(args) }
+    else if cmd == "time" { cmd_time(args) }
+    else if cmd == "tp" or cmd == "teleport" { cmd_tp(args) }
+    else if cmd == "setblock" { cmd_setblock(args) }
+    else if cmd == "help" or cmd == "?" { cmd_help() }
+    else if cmd == "items" { cmd_items() }
+    else if cmd == "heal" {
+        health = 20.0
+        hunger = 20.0
+        console_say("Healed")
+    } else if cmd == "kill" {
+        if args.len() > 0 and args[0] == "@e" {
+            let n = mob_xs.len()
+            while mob_xs.len() > 0 { remove_mob(mob_xs.len() - 1) }
+            console_say("Killed {n} entities")
+        } else {
+            health = 0.0
+            console_say("Ouch. That looked like it hurt.")
+        }
+    } else if cmd == "clear" {
+        for i in 1..inventory.len() { inventory[i] = 0 }
+        sync_slots()
+        console_say("Cleared the inventory")
+    } else if cmd == "where" or cmd == "pos" {
+        console_say("XYZ {world_origin_x + int(floor(player_x))}, {int(floor(player_y))}, {world_origin_z + int(floor(player_z))}")
+    } else if cmd == "difficulty" {
+        if args.len() > 0 and args[0].lower() == "peaceful" {
+            peaceful = true
+            console_say("Difficulty set to Peaceful")
+        } else if args.len() > 0 and (args[0].lower() == "normal" or args[0].lower() == "easy" or args[0].lower() == "hard") {
+            peaceful = false
+            console_say("Difficulty set to Normal")
+        } else { console_say("Usage: difficulty <peaceful|normal>") }
+    } else if cmd == "gamerule" {
+        if args.len() > 1 and (args[0].lower() == "daylight" or args[0].lower() == "dodaylightcycle") {
+            freeze_time = args[1].lower() == "false"
+            console_say("Day cycle is now {if freeze_time { "frozen" } else { "running" }}")
+        } else { console_say("Usage: gamerule daylight <true|false>") }
+    } else if cmd == "save" {
+        save_world()
+    } else if cmd == "load" {
+        load_world()
+    } else {
+        console_say("Unknown command: {cmd}. Type help")
+    }
+}
+
 fn game_tick() {
     let escape_now = ui_key_down("escape")
     if escape_now and not previous_escape {
-        if show_crafting {
+        if console_open {
+            close_console()
+        } else if show_crafting {
             close_inventory()
             show_crafting = false
             show_pause = false
@@ -2287,6 +2599,20 @@ fn game_tick() {
         previous_right = ui_mouse_held(1)
         return
     }
+
+    if console_open {
+        if console_focus_ticks > 0 {
+            console_focus_ticks -= 1
+            focus_field("cmdline")
+        }
+        previous_t = ui_key_down("t")
+        previous_left = ui_mouse_held(0)
+        previous_right = ui_mouse_held(1)
+        return
+    }
+    let console_now = ui_key_down("t")
+    if console_now and not previous_t and not show_crafting { open_console() }
+    previous_t = console_now
 
     let inventory_now = ui_key_down("e")
     if inventory_now and not previous_e {
@@ -2393,7 +2719,7 @@ fn game_tick() {
         if delta > 0.001 { fps_value = fps_value * 0.82 + (1.0 / delta) * 0.18 }
     }
     last_tick_time = now
-    game_time += 0.03
+    if not freeze_time { game_time += 0.03 }
     day_light = 0.60 + 0.40 * sin_atf(game_time * 0.0349 + PI_VALUE / 2.0)
     if status_timer > 0.0 { status_timer -= 0.03 }
 
@@ -2487,10 +2813,26 @@ fn game_tick() {
         if ui_key_down("ctrl") and not ui_key_down("shift") { hunger_timer += 0.012 }
         move_x = move_x / move_length * speed * 0.03
         move_z = move_z / move_length * speed * 0.03
-        move_horizontal(move_x, move_z)
+        if game_mode == 3 {
+            player_x += move_x
+            player_z += move_z
+        } else {
+            move_horizontal(move_x, move_z)
+        }
     }
 
-    if not grounded {
+    // Creative and spectator players fly: Space goes up, Shift goes down.
+    let flying = game_mode == 1 or game_mode == 3
+    if flying {
+        velocity_y = 0.0
+        grounded = false
+        var lift = 0.0
+        if space_now { lift = 0.16 }
+        if ui_key_down("shift") { lift = -0.16 }
+        if show_crafting { lift = 0.0 }
+        let fly_y = player_y + lift
+        if game_mode == 3 or not collides_body(player_x, fly_y, player_z) { player_y = fly_y }
+    } else if not grounded {
         if in_water {
             velocity_y -= 5.0 * 0.03
             velocity_y = max(-3.0, velocity_y)
@@ -2530,6 +2872,12 @@ fn game_tick() {
             status_timer = 1.0
         }
     } else { cactus_timer = 0.0 }
+    let god = game_mode == 1 or game_mode == 3
+    if god {
+        health = 20.0
+        hunger = 20.0
+        if player_y < -3.0 { player_y = float(WORLD_H - 2) }
+    }
     if player_y < -3.0 { health = 0.0 }
     if health <= 0.0 { respawn_player() }
 
@@ -2548,8 +2896,17 @@ fn game_tick() {
     if item_name_timer > 0.0 { item_name_timer -= 0.03 }
     let attack_now = left_now and not previous_attack
     previous_attack = left_now
-    if attack_now and mouse_captured and not show_crafting { attack_mobs() }
-    handle_block_action(left_now, right_now)
+    if attack_now and mouse_captured and not show_crafting and game_mode != 3 { attack_mobs() }
+    if game_mode == 0 or game_mode == 1 {
+        // Creative has unlimited blocks.
+        if game_mode == 1 and is_placeable_item(selected_block) and inventory[selected_block] < 64 {
+            inventory[selected_block] = 64
+        }
+        handle_block_action(left_now, right_now)
+    } else {
+        previous_left = left_now
+        previous_right = right_now
+    }
     update_dropped_items()
     update_mobs()
 
@@ -2849,6 +3206,26 @@ fn draw_inventory_overlay(c: Canvas) {
     mc_slot(c, px + rx * s, py + ry * s, s)
     draw_stack(c, px + rx * s, py + ry * s, s, result_item, result_count)
 
+    // the held item follows the pointer; a name tag shows for the slot under it
+    let mx = c.mouse_x()
+    let my = c.mouse_y()
+    if mx >= 0 {
+        if inv_held >= 0 and slot_items[inv_held] > 0 {
+            draw_stack(c, mx - 8 * s, my - 8 * s, s, slot_items[inv_held], slot_count(inv_held))
+        } else {
+            for t in 0..36 {
+                let (ux, uy) = inv_target_pos(t, big)
+                let sx = px + ux * s
+                let sy = py + uy * s
+                if slot_items[t] > 0 and mx >= sx and mx < sx + 16 * s and my >= sy and my < sy + 16 * s {
+                    let name = block_name(slot_items[t])
+                    c.rect(mx + 10, my - 22, name.len() * 8 + 12, 22, rgba(16, 0, 16, 0.92))
+                    c.text(mx + 16, my - 20, name, rgb(255, 255, 255), 14, false)
+                }
+            }
+        }
+    }
+
     var caption = "Click an item, then click where it should go"
     if inv_held >= 0 and slot_items[inv_held] > 0 {
         caption = block_name(slot_items[inv_held])
@@ -3017,39 +3394,6 @@ fn draw_dropped_items(c: Canvas) {
     }
 }
 
-fn draw_mobs(c: Canvas) {
-    for i in 0..mob_xs.len() {
-        let dx = mob_xs[i] - camera_x
-        let dy = (mob_ys[i] + 0.9) - camera_y
-        let dz = mob_zs[i] - camera_z
-        let depth = dx * forward_x + dy * forward_y + dz * forward_z
-        let distance = sqrt(dx * dx + dy * dy + dz * dz)
-        if depth > 0.3 and depth < VIEW_DISTANCE and distance > 0.01 {
-            let (block, _, _, _, _, _, _, hit_distance) = trace_ray(dx, dy, dz, distance)
-            if block == 0 or hit_distance >= distance - 0.6 {
-                let side = dx * right_x + dy * right_y + dz * right_z
-                let up = dy * up_y + dx * up_x + dz * up_z
-                let cx = (side / depth / 1.09 + 1.0) * 0.5 * float(c.w)
-                let cy = (1.0 - (up / depth / 0.68 + 1.0) * 0.5) * float(c.h)
-                // Unit height in pixels at this depth.
-                let unit = 0.5 * float(c.h) / depth / 0.68
-                let h = int(unit * 1.8)
-                let w = int(unit * 0.6)
-                let x0 = int(cx) - w / 2
-                let y0 = int(cy) - h / 2
-                let shade = clamp(1.0 - distance * 0.015, 0.5, 1.0) * (0.45 + day_light * 0.55)
-                let head = h / 4
-                c.rect(x0, y0, w, head, rgb(int(96.0 * shade), int(160.0 * shade), int(84.0 * shade)))
-                c.rect(x0, y0 + head, w, h * 3 / 8, rgb(int(46.0 * shade), int(120.0 * shade), int(150.0 * shade)))
-                c.rect(x0, y0 + head + h * 3 / 8, w, h - head - h * 3 / 8, rgb(int(60.0 * shade), int(55.0 * shade), int(140.0 * shade)))
-                let eye = max(1, w / 6)
-                c.rect(x0 + w / 5, y0 + head / 3, eye, eye, rgb(20, 20, 20))
-                c.rect(x0 + w - w / 5 - eye, y0 + head / 3, eye, eye, rgb(20, 20, 20))
-            }
-        }
-    }
-}
-
 fn cloud_amount(ndx: float, ndy: float, ndz: float) -> float {
     // Flat cloud layer above the world; slides with game time. 0.0 means clear sky.
     if ndy < 0.03 { return 0.0 }
@@ -3062,9 +3406,155 @@ fn cloud_amount(ndx: float, ndy: float, ndz: float) -> float {
     return clamp(1.0 - t / 260.0, 0.0, 1.0) * 0.8
 }
 
+// Ray against an axis-aligned box. Returns the entry distance (-1.0 on a miss) and the face that was
+// entered: 0 top, 3 bottom, 1/2 the +x/-x sides, 4/5 the +z/-z sides.
+fn box_hit(ox: float, oy: float, oz: float, dx: float, dy: float, dz: float, x0: float, y0: float, z0: float, x1: float, y1: float, z1: float) -> (float, int) {
+    var tmin = -1e30
+    var tmax = 1e30
+    var face = 0
+    if abs(dx) < 0.000001 {
+        if ox < x0 or ox > x1 { return (-1.0, 0) }
+    } else {
+        var near = (x0 - ox) / dx
+        var far = (x1 - ox) / dx
+        var entered = 2
+        if near > far {
+            let swap = near
+            near = far
+            far = swap
+            entered = 1
+        }
+        if near > tmin { tmin = near; face = entered }
+        if far < tmax { tmax = far }
+    }
+    if abs(dy) < 0.000001 {
+        if oy < y0 or oy > y1 { return (-1.0, 0) }
+    } else {
+        var near = (y0 - oy) / dy
+        var far = (y1 - oy) / dy
+        var entered = 3
+        if near > far {
+            let swap = near
+            near = far
+            far = swap
+            entered = 0
+        }
+        if near > tmin { tmin = near; face = entered }
+        if far < tmax { tmax = far }
+    }
+    if abs(dz) < 0.000001 {
+        if oz < z0 or oz > z1 { return (-1.0, 0) }
+    } else {
+        var near = (z0 - oz) / dz
+        var far = (z1 - oz) / dz
+        var entered = 5
+        if near > far {
+            let swap = near
+            near = far
+            far = swap
+            entered = 4
+        }
+        if near > tmin { tmin = near; face = entered }
+        if far < tmax { tmax = far }
+    }
+    if tmin > tmax or tmin < 0.0 { return (-1.0, 0) }
+    return (tmin, face)
+}
+
+// The zombie model in its own space (x right, y up, z forward, feet at the origin): a head, a body,
+// two arms held out in front and two legs that swing. Returns the nearest hit: distance, part and face.
+// Parts: 0 head, 1 body, 2 left arm, 3 right arm, 4 left leg, 5 right leg.
+fn mob_trace(ox: float, oy: float, oz: float, dx: float, dy: float, dz: float, swing: float) -> (float, int, int) {
+    let (bound, _) = box_hit(ox, oy, oz, dx, dy, dz, -0.52, 0.0, -0.4, 0.52, 1.92, 0.78)
+    if bound < 0.0 { return (-1.0, -1, 0) }
+    var best = 1e30
+    var part = -1
+    var face = 0
+    let (t0, f0) = box_hit(ox, oy, oz, dx, dy, dz, -0.25, 1.4, -0.25, 0.25, 1.9, 0.25)
+    if t0 >= 0.0 and t0 < best { best = t0; part = 0; face = f0 }
+    let (t1, f1) = box_hit(ox, oy, oz, dx, dy, dz, -0.25, 0.7, -0.14, 0.25, 1.4, 0.14)
+    if t1 >= 0.0 and t1 < best { best = t1; part = 1; face = f1 }
+    let (t2, f2) = box_hit(ox, oy, oz, dx, dy, dz, 0.25, 1.1, -0.12, 0.5, 1.4, 0.72)
+    if t2 >= 0.0 and t2 < best { best = t2; part = 2; face = f2 }
+    let (t3, f3) = box_hit(ox, oy, oz, dx, dy, dz, -0.5, 1.1, -0.12, -0.25, 1.4, 0.72)
+    if t3 >= 0.0 and t3 < best { best = t3; part = 3; face = f3 }
+    let (t4, f4) = box_hit(ox, oy, oz, dx, dy, dz, 0.0, 0.0, -0.13 + swing, 0.25, 0.7, 0.13 + swing)
+    if t4 >= 0.0 and t4 < best { best = t4; part = 4; face = f4 }
+    let (t5, f5) = box_hit(ox, oy, oz, dx, dy, dz, -0.25, 0.0, -0.13 - swing, 0.0, 0.7, 0.13 - swing)
+    if t5 >= 0.0 and t5 < best { best = t5; part = 5; face = f5 }
+    if part < 0 { return (-1.0, -1, 0) }
+    return (best, part, face)
+}
+
+fn mob_color(part: int, face: int, hx: float, hy: float, hz: float, distance: float) -> int {
+    var red = 96
+    var green = 158
+    var blue = 82
+    if part == 1 { red = 40; green = 128; blue = 158 }
+    if part == 4 or part == 5 { red = 58; green = 52; blue = 140 }
+    // Pixel-sized grain so the surfaces are not flat.
+    let grain = (int(floor(hx * 16.0)) * 7 + int(floor(hy * 16.0)) * 13 + int(floor(hz * 16.0)) * 5) % 9 - 4
+    red += grain * 2
+    green += grain * 2
+    blue += grain * 2
+    if part == 0 and face == 4 {
+        // Face on the front of the head: dark eyes and a mouth.
+        if hy > 1.62 and hy < 1.74 and ((hx > 0.06 and hx < 0.19) or (hx < -0.06 and hx > -0.19)) { red = 18; green = 30; blue = 18 }
+        if hy > 1.47 and hy < 1.54 and hx > -0.13 and hx < 0.13 { red = 40; green = 70; blue = 36 }
+    }
+    if part == 2 or part == 3 {
+        if face == 3 or face == 0 { red -= 10; green -= 14; blue -= 8 }
+    }
+    var light = 0.8
+    if face == 0 { light = 1.0 }
+    else if face == 1 or face == 4 { light = 0.82 }
+    else if face == 2 or face == 5 { light = 0.68 }
+    else { light = 0.5 }
+    let factor = light * clamp(1.0 - distance * 0.012, 0.58, 1.0) * (0.36 + day_light * 0.64)
+    var r = float(clamp(red, 0, 255)) * factor
+    var g = float(clamp(green, 0, 255)) * factor
+    var b = float(clamp(blue, 0, 255)) * factor
+    let fog = clamp((distance - 9.0) / 14.0, 0.0, 0.64)
+    let night_fog = clamp((0.76 - day_light) / 0.55, 0.0, 1.0)
+    r = r * (1.0 - fog) + (143.0 * (1.0 - night_fog) + 15.0 * night_fog) * fog
+    g = g * (1.0 - fog) + (193.0 * (1.0 - night_fog) + 24.0 * night_fog) * fog
+    b = b * (1.0 - fog) + (229.0 * (1.0 - night_fog) + 58.0 * night_fog) * fog
+    return pack_rgb(int(r), int(g), int(b))
+}
+
 fn draw_game(c: Canvas) {
     let aspect_x = 1.09
     let aspect_y = 0.68
+
+    // Each zombie faces the camera. Put the camera into the zombie's own space once per frame, so every
+    // pixel only has to rotate its ray direction.
+    let mob_count = mob_xs.len()
+    if mob_lox.len() != mob_count {
+        mob_lox = array_make::<float>(mob_count)
+        mob_loy = array_make::<float>(mob_count)
+        mob_loz = array_make::<float>(mob_count)
+        mob_rx = array_make::<float>(mob_count)
+        mob_rz = array_make::<float>(mob_count)
+        mob_fx = array_make::<float>(mob_count)
+        mob_fz = array_make::<float>(mob_count)
+        mob_swing = array_make::<float>(mob_count)
+    }
+    for i in 0..mob_count {
+        var fx = camera_x - mob_xs[i]
+        var fz = camera_z - mob_zs[i]
+        let flat = sqrt(fx * fx + fz * fz)
+        if flat < 0.001 { fx = 0.0; fz = 1.0 } else { fx = fx / flat; fz = fz / flat }
+        mob_fx[i] = fx
+        mob_fz[i] = fz
+        mob_rx[i] = fz
+        mob_rz[i] = -fx
+        let ax = camera_x - mob_xs[i]
+        let az = camera_z - mob_zs[i]
+        mob_lox[i] = ax * fz + az * -fx
+        mob_loz[i] = ax * fx + az * fz
+        mob_loy[i] = camera_y - mob_ys[i]
+        mob_swing[i] = sin_atf(game_time * 7.0 + float(i) * 1.7) * 0.16
+    }
 
     if column_screen_x.len() != render_w {
         column_screen_x = array_make::<float>(render_w)
@@ -3091,7 +3581,21 @@ fn draw_game(c: Canvas) {
             let ndz = dz / ray_length
             let (block, bx, by, bz, px, py, pz, distance) = trace_ray(ndx, ndy, ndz, VIEW_DISTANCE)
             var color = 0
-            if block != 0 {
+            var mob_t = 1e30
+            var mob_pixel = 0
+            for i in 0..mob_count {
+                let dlx = ndx * mob_rx[i] + ndz * mob_rz[i]
+                let dlz = ndx * mob_fx[i] + ndz * mob_fz[i]
+                let (t, part, face) = mob_trace(mob_lox[i], mob_loy[i], mob_loz[i], dlx, ndy, dlz, mob_swing[i])
+                if part >= 0 and t < mob_t {
+                    mob_t = t
+                    mob_pixel = mob_color(part, face, mob_lox[i] + dlx * t, mob_loy[i] + ndy * t, mob_loz[i] + dlz * t, t)
+                }
+            }
+            let block_t = if block != 0 { distance } else { 1e29 }
+            if mob_t < block_t {
+                color = mob_pixel
+            } else if block != 0 {
                 let face = face_from_hit(bx, by, bz, px, py, pz, ndx, ndy, ndz)
                 let hit_x = camera_x + ndx * distance
                 let hit_y = camera_y + ndy * distance
@@ -3122,7 +3626,6 @@ fn draw_game(c: Canvas) {
 
     c.pixels_smooth(0, 0, c.w, c.h, frame_pixels, render_w, render_h)
     draw_dropped_items(c)
-    draw_mobs(c)
     draw_hud(c)
 }
 
@@ -3133,11 +3636,31 @@ fn view() -> Node {
         ui_mouse_capture(true)
         ui_every(FRAME_TIME_MS, game_tick)
     }
-    return canvas(|c| { draw_game(c) }).grow().on_pointer(|x, y| {
+    let game = canvas(|c| { draw_game(c) }).grow().on_pointer(|x, y| {
         inv_click_x = x
         inv_click_y = y
         inv_click_pending = true
     })
+    if not console_open { return game }
+
+    var lines: [Node] = []
+    for l in console_log { lines.push(text(l).color(WHITE).font_size(14)) }
+    let cmd_box = textbox(console_text, |s| { console_text = s })
+        .key("cmdline")
+        .placeholder("/command  (Enter runs it, Esc closes)")
+        .on_submit(|| {
+            let line = console_text
+            console_text = ""
+            run_console_command(line)
+            close_console()
+        })
+        .bg(rgba(0, 0, 0, 0.8))
+        .color(WHITE)
+    let panel = column([
+        column(lines).bg(rgba(0, 0, 0, 0.5)).padding(8).gap(2),
+        cmd_box,
+    ]).padding(12).gap(6)
+    return stack([game, column([spacer(), panel])])
 }
 
 fn main() {

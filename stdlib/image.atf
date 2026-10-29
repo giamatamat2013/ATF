@@ -1,0 +1,216 @@
+// std/image - pictures as arrays of pixels: make them, load and save BMP files, scale, crop, flip.
+//
+//   import "std/image"
+//   var img = image_new(16, 16, 0x336699)
+//   img.set(3, 4, 0xffffff)
+//   image_save(img, "tile.bmp")
+//   if let tex = image_load("texture.bmp") { println("{tex.w} x {tex.h}, first pixel {tex.get(0, 0):x}") }
+//
+// An Image has w, h and pix: w * h colors as 0xRRGGBB ints, row by row from the top left corner. That is
+// exactly what Canvas.pixels(x, y, w, h, img.pix, img.w, img.h) in std/ui draws. Colors are
+// 0xRRGGBB (no alpha). image_load reads uncompressed BMP files with 24 or 32 bits per pixel; save a
+// picture from any program as BMP (Paint can) to use it as a texture.
+
+struct Image {
+    w: int
+    h: int
+    pix: [int]
+}
+
+impl Image {
+    // color at (x, y); coordinates outside the picture wrap around (handy for tiled textures)
+    fn get(self, x: int, y: int) -> int {
+        var xx = x % self.w
+        var yy = y % self.h
+        if xx < 0 { xx += self.w }
+        if yy < 0 { yy += self.h }
+        return self.pix[yy * self.w + xx]
+    }
+    // set the color at (x, y); outside the picture nothing happens
+    fn set(self, x: int, y: int, color: int) {
+        if x < 0 or y < 0 or x >= self.w or y >= self.h { return }
+        self.pix[y * self.w + x] = color
+    }
+    // fill the whole picture
+    fn fill(self, color: int) {
+        for i in 0..self.pix.len() { self.pix[i] = color }
+    }
+    fn copy(self) -> Image { return Image(self.w, self.h, copy(self.pix)) }
+}
+
+// a picture of one color
+fn image_new(w: int, h: int, color: int = 0) -> Image {
+    var pix = array_make::<int>(w * h)
+    if color != 0 {
+        for i in 0..w * h { pix[i] = color }
+    }
+    return Image(w, h, pix)
+}
+
+fn image_u16(s: str, at: int) -> int {
+    return int(s.byte_at(at)) | (int(s.byte_at(at + 1)) << 8)
+}
+
+fn image_u32(s: str, at: int) -> int {
+    return image_u16(s, at) | (image_u16(s, at + 2) << 16)
+}
+
+fn image_i32(s: str, at: int) -> int {
+    let v = image_u32(s, at)
+    if v >= 0x80000000 { return v - 0x100000000 }
+    return v
+}
+
+// read an uncompressed 24 or 32 bit BMP from the bytes of a file; Err says what is wrong
+fn image_parse_bmp(data: str) -> Result<Image, str> {
+    if data.len() < 54 or data[0..2] != "BM" { return Result.Err("not a BMP file") }
+    let offset = image_u32(data, 10)
+    let w = image_i32(data, 18)
+    var h = image_i32(data, 22)
+    let bits = image_u16(data, 28)
+    let comp = image_u32(data, 30)
+    if bits != 24 and bits != 32 { return Result.Err("only 24 and 32 bit BMP files are supported, this one has {bits}") }
+    if comp != 0 and comp != 3 { return Result.Err("compressed BMP files are not supported") }
+    var top_down = false
+    if h < 0 {
+        top_down = true
+        h = -h
+    }
+    if w <= 0 or h <= 0 { return Result.Err("empty picture") }
+    let bytes = bits / 8
+    let row = ((w * bytes + 3) / 4) * 4
+    if offset + row * h > data.len() + 3 { return Result.Err("the file is cut short") }
+    var pix = array_make::<int>(w * h)
+    for y in 0..h {
+        var src_row = y
+        if not top_down { src_row = h - 1 - y }
+        let base = offset + src_row * row
+        for x in 0..w {
+            let at = base + x * bytes
+            let b = int(data.byte_at(at))
+            let g = int(data.byte_at(at + 1))
+            let r = int(data.byte_at(at + 2))
+            pix[y * w + x] = (r << 16) | (g << 8) | b
+        }
+    }
+    return Result.Ok(Image(w, h, pix))
+}
+
+// load a BMP file; nil when the file is missing or not a supported BMP
+fn image_load(path: str) -> Image? {
+    let data = read_file(path)
+    if data == nil { return nil }
+    let r = image_parse_bmp(data!)
+    if r.is_err() { return nil }
+    return r.unwrap_or(image_new(1, 1))
+}
+
+// the bytes of a 24 bit BMP file for the picture
+fn image_to_bmp(img: Image) -> str {
+    let row = ((img.w * 3 + 3) / 4) * 4
+    let size = 54 + row * img.h
+    let out = str_new(size)
+    let d = str_data(out)
+    for i in 0..size { d[i] = byte(0) }
+    d[0] = byte(66)
+    d[1] = byte(77)
+    image_put32(d, 2, size)
+    image_put32(d, 10, 54)
+    image_put32(d, 14, 40)
+    image_put32(d, 18, img.w)
+    image_put32(d, 22, img.h)
+    d[26] = byte(1)
+    d[28] = byte(24)
+    image_put32(d, 34, row * img.h)
+    for y in 0..img.h {
+        let base = 54 + (img.h - 1 - y) * row
+        for x in 0..img.w {
+            let c = img.pix[y * img.w + x]
+            d[base + x * 3] = byte(c & 255)
+            d[base + x * 3 + 1] = byte((c >> 8) & 255)
+            d[base + x * 3 + 2] = byte((c >> 16) & 255)
+        }
+    }
+    return out
+}
+
+fn image_put32(d: ptr<byte>, at: int, v: int) {
+    d[at] = byte(v & 255)
+    d[at + 1] = byte((v >> 8) & 255)
+    d[at + 2] = byte((v >> 16) & 255)
+    d[at + 3] = byte((v >> 24) & 255)
+}
+
+// write the picture as a 24 bit BMP file
+fn image_save(img: Image, path: str) -> bool { return write_file(path, image_to_bmp(img)) }
+
+// a copy of the rectangle (x, y, w, h); parts outside the picture are black
+fn image_crop(img: Image, x: int, y: int, w: int, h: int) -> Image {
+    var out = image_new(w, h)
+    for yy in 0..h {
+        for xx in 0..w {
+            let sx = x + xx
+            let sy = y + yy
+            if sx >= 0 and sy >= 0 and sx < img.w and sy < img.h {
+                out.pix[yy * w + xx] = img.pix[sy * img.w + sx]
+            }
+        }
+    }
+    return out
+}
+
+// the picture stretched to w x h with the nearest pixel (keeps hard edges: pixel art)
+fn image_scale(img: Image, w: int, h: int) -> Image {
+    var out = image_new(w, h)
+    for y in 0..h {
+        let sy = y * img.h / h
+        for x in 0..w {
+            out.pix[y * w + x] = img.pix[sy * img.w + x * img.w / w]
+        }
+    }
+    return out
+}
+
+// mirror left to right
+fn image_flip_x(img: Image) -> Image {
+    var out = image_new(img.w, img.h)
+    for y in 0..img.h {
+        for x in 0..img.w { out.pix[y * img.w + x] = img.pix[y * img.w + img.w - 1 - x] }
+    }
+    return out
+}
+
+// mirror top to bottom
+fn image_flip_y(img: Image) -> Image {
+    var out = image_new(img.w, img.h)
+    for y in 0..img.h {
+        for x in 0..img.w { out.pix[y * img.w + x] = img.pix[(img.h - 1 - y) * img.w + x] }
+    }
+    return out
+}
+
+// copy src onto img with its top left corner at (x, y); the color skip (default none) is not copied
+fn image_blit(img: Image, src: Image, x: int, y: int, skip: int = -1) {
+    for yy in 0..src.h {
+        for xx in 0..src.w {
+            let c = src.pix[yy * src.w + xx]
+            if c != skip { img.set(x + xx, y + yy, c) }
+        }
+    }
+}
+
+// multiply every color by f (below 1.0 darkens, above 1.0 brightens)
+fn image_shade(img: Image, f: float) -> Image {
+    var out = image_new(img.w, img.h)
+    for i in 0..img.pix.len() {
+        let c = img.pix[i]
+        var r = int(float((c >> 16) & 255) * f)
+        var g = int(float((c >> 8) & 255) * f)
+        var b = int(float(c & 255) * f)
+        if r > 255 { r = 255 }
+        if g > 255 { g = 255 }
+        if b > 255 { b = 255 }
+        out.pix[i] = (r << 16) | (g << 8) | b
+    }
+    return out
+}

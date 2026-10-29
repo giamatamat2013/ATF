@@ -26,15 +26,16 @@ fn new_token(kind: TokKind, val: str, line: int, col: int) -> Token {
 let KEYWORDS: {str: bool} = make_set([
     "fn", "let", "var", "const", "if", "else", "while", "for", "in", "loop", "break", "continue", "return",
     "struct", "enum", "impl", "match", "import", "extern", "true", "false", "and", "or", "not", "as",
-    "defer", "type", "nil", "step", "unsafe", "pub", "interface"
+    "defer", "type", "nil", "unsafe", "pub", "interface"
 ])
 
 let CONTINUERS: {str: bool} = make_set([
     "+", "-", "*", "/", "%", "=", "&", "|", "^", ",", "(", "[", ".", "==", "!=", "<=", ">=", "&&", "||",
-    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "->", "=>", "..", "::", "??", "**", "..=", "<<=", ">>=",
+    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "->", "=>", "..", "::", "??", "**", "..=", "<<=", ">>=", ">>>=",
     "**=", "and", "or", "not", "in", "as", ":", "|>"
 ])
 
+let OPS4: {str: bool} = make_set([">>>="])
 let OPS3: {str: bool} = make_set(["..=", "<<=", ">>>", ">>=", "**="])
 let OPS2: {str: bool} = make_set([
     "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
@@ -219,6 +220,8 @@ fn tokenize(src: str, file: str) -> [Token] {
             } else {
                 if starts_at(src, "&&", i) or starts_at(src, "||", i) or starts_at(src, "??", i) or starts_at(src, "|>", i) { sig = false }
                 if c == '.' and not starts_at(src, "..", i) { sig = false }
+                if starts_at(src, "and", i) and (i + 3 >= n or not is_ident_char(src.byte_at(i + 3))) { sig = false }
+                if starts_at(src, "or", i) and (i + 2 >= n or not is_ident_char(src.byte_at(i + 2))) { sig = false }
             }
             if sig and last != nil and last!.kind != TokKind.Newline {
                 let t = new_token(TokKind.Newline, "\n", line - 1, 0)
@@ -530,7 +533,9 @@ fn tokenize(src: str, file: str) -> [Token] {
 
         // ---- operators
         var op = ""
-        if i + 3 <= n and src[i..i + 3] in OPS3 {
+        if i + 4 <= n and src[i..i + 4] in OPS4 {
+            op = src[i..i + 4]
+        } else if i + 3 <= n and src[i..i + 3] in OPS3 {
             op = src[i..i + 3]
         } else if i + 2 <= n and src[i..i + 2] in OPS2 {
             op = src[i..i + 2]

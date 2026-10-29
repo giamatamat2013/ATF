@@ -140,6 +140,33 @@
       "}"
     ]
   },
+  "Play a sound": {
+    "prefix": "soundplay",
+    "description": "std/sound: build a tone and play it",
+    "body": [
+      "let ${1:beep} = sound_tone(${2:440.0}, ${3:200})",
+      "sound_play(${1:beep})$0"
+    ]
+  },
+  "Background job per frame": {
+    "prefix": "taskeach",
+    "description": "std/task: spread a loop over frames",
+    "body": [
+      "task_each(${1:100}, |${2:k}| {",
+      "    $0",
+      "})",
+      "// once per frame: task_run(${3:4})"
+    ]
+  },
+  "Load a BMP picture": {
+    "prefix": "imageload",
+    "description": "std/image: load a BMP and read a pixel",
+    "body": [
+      "if let ${1:img} = image_load(\"${2:texture.bmp}\") {",
+      "    let ${3:color} = ${1:img}.get(${4:0}, ${5:0})$0",
+      "}"
+    ]
+  },
   "Lazy iterator chain": {
     "prefix": "iterchain",
     "description": "std/iter: a lazy chain that is collected at the end",
@@ -316,6 +343,13 @@
     "description": "println with interpolation",
     "body": [
       "println(\"${1:value} = {${2:$1}}\")$0"
+    ]
+  },
+  "Version": {
+    "prefix": "atf",
+    "description": "Name the ATF version this file was written for (first line of the file)",
+    "body": [
+      "atf \"${1:1.2.0}\""
     ]
   },
   "Import": {

@@ -985,6 +985,22 @@ fn round(x: float) -> float {
 fn fabs(x: float) -> float { return __fabs(x) }
 // base-2 logarithm: log2(8.0) == 3.0
 fn log2(x: float) -> float { return log(x) / 0.6931471805599453 }
+
+// natural logarithm (the same as log)
+fn ln(x: float) -> float { return log(x) }
+
+// The position between a and b: lerp(10.0, 20.0, 0.5) == 15.0 (t = 0.0 gives a, t = 1.0 gives b)
+fn lerp(a: float, b: float, t: float) -> float { return a + (b - a) * t }
+
+// the part after the decimal point: fract(2.75) == 0.75, fract(-0.25) == 0.75
+fn fract(x: float) -> float { return x - floor(x) }
+
+// an array of n copies of value: array_repeat(0, 4) == [0, 0, 0, 0]
+fn array_repeat<T>(value: T, n: int) -> [T] {
+    var out = array_make::<T>(n)
+    for i in 0..n { out[i] = value }
+    return out
+}
 // true when x is nan (not a number), for example INF - INF
 fn is_nan(x: float) -> bool { return x != x }
 // true when x is INF or -INF

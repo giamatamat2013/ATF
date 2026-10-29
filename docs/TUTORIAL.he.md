@@ -179,11 +179,12 @@ b
 * הפקודה `print` מדפיסה בלי לעבור שורה.
 * בדרך כלל כותבים פקודה אחת בכל שורה. אם רוצים שתיים באותה שורה, מפרידים ביניהן ב-`;`.
 
-השורה הראשונה של קובץ יכולה לציין באיזו גרסה של ATF הקובץ נכתב, כמו `// ATF 1.2.0` בדוגמה הבאה. זו הערה, לכן היא לא חובה והמהדר לא צריך אותה. כשהמהדר ישן מהגרסה שכתובה שם, `atf run`, `atf build` ו-`atf check` מדפיסים אזהרה ב-stderr וממשיכים לקמפל את הקובץ. זה שימושי כשתוכנית עוברת למחשב שיש בו ATF ישן יותר.
+קובץ יכול להתחיל בהצהרה שמציינת באיזו גרסה של ATF הוא נכתב, כמו `atf "1.2.0"` בדוגמה הבאה. זו לא הערה אלא חלק מהשפה, אבל היא לא חובה והמהדר לא צריך אותה. כשהמהדר ישן מהגרסה שכתובה שם, `atf run`, `atf build` ו-`atf check` מדפיסים אזהרה ב-stderr וממשיכים לקמפל את הקובץ. זה שימושי כשתוכנית עוברת למחשב שיש בו ATF ישן יותר.
 
 <!-- id: version-line -->
 ```atf
-// ATF 1.2.0
+atf "1.2.0"
+
 fn main() {
     println("נכתב ל-ATF 1.2.0")
 }
@@ -872,7 +873,7 @@ B
 
 ### הלולאה for וטווחים
 
-הלולאה `for i in 0..5` עוברת על המספרים מ-0 עד 4 (בלי 5). כדי לכלול את הסוף כותבים `1..=5`, ו-`step` קובע את גודל הקפיצה:
+הלולאה `for i in 0..5` עוברת על המספרים מ-0 עד 4 (בלי 5). כדי לכלול את הסוף כותבים `1..=5`, ו-`step` קובע את גודל הקפיצה (`step` מיוחד רק מיד אחרי טווח, אז אפשר גם לקרוא כך למשתנה או לשדה):
 
 ```atf
 fn main() {
@@ -2521,6 +2522,56 @@ fn main() {
 [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
 120
 a, b
+```
+
+### צליל, תמונות, עבודות רקע ועכבר: `std/sound`, `std/image`, `std/task`
+
+ארבע תוספות קטנות למשחקים ולכלים:
+
+* `std/sound` מנגן צלילים דרך מנהל השמע של Windows. `sound_tone(freq, ms)`, `sound_noise(ms)` ו-`sound_sweep(from, to, ms)`
+  יוצרים קובץ WAV בזיכרון; `sound_play(wav)` מנגן בלי לחכות (קול אחד, צליל חדש מחליף את הישן), `sound_play_file(path)`
+  מנגן קובץ `.wav`, ו-`sound_stop()` עם `sound_mute(true)` משתיקים הכול.
+* `std/image` שומר תמונה כ-`Image` (השדות `w`, `h` ו-`pix`, הצבעים כמספרים `0xRRGGBB`, הפורמט ש-`Canvas.pixels` מצייר).
+  `image_load(path)` קורא קובץ BMP לא דחוס של 24 או 32 ביט, `image_save(img, path)` כותב אחד, ו-`image_scale`,
+  `image_crop`, `image_flip_x`, `image_flip_y`, `image_blit` ו-`image_shade` יוצרים תמונות חדשות.
+* `std/task` מריץ עבודה ארוכה קצת בכל פעם. `task_spawn(|| ...)` מוסיף משימה (פונקציה שמחזירה `true` כשהיא נגמרה),
+  `task_each(n, |k| ...)` הופך לולאה למשימה, ו-`task_run(budget_ms)` שנקראת פעם בכל פריים מריצה את המשימות לכל היותר
+  כמה אלפיות שנייה, כך שהחלון אף פעם לא נתקע.
+* ב-`std/ui`, הפונקציה `ui_mouse_pos()` והמתודות `c.mouse_x()`, `c.mouse_y()` ו-`c.hovered()` של canvas אומרות איפה
+  העכבר בלי קליק; החלון מצויר מחדש בכל תזוזה אחרי שביקשתם. מתאים להדגשה בריחוף או לפריט שעוקב אחרי הסמן.
+
+```atf
+import "std/task"
+import "std/image"
+import "std/sound"
+
+fn main() {
+    // std/task: a long job in small steps, so a window stays responsive
+    var done = 0
+    task_each(100, |k| { done += k })
+    var frames = 0
+    while task_run(0) > 0 { frames += 1 }
+    println("sum {done}, {frames} frames")
+
+    // std/image: pixels as 0xRRGGBB ints
+    var tile = image_new(4, 4, 0x336699)
+    tile.set(0, 0, 0xffffff)
+    let big = image_scale(tile, 8, 8)
+    println("{big.w}x{big.h} corner {big.get(1, 1):x} edge {big.get(7, 7):x}")
+    image_save(tile, "tile.bmp")
+    println("loaded {image_load("tile.bmp")!.get(0, 0):x}")
+    delete_file("tile.bmp")
+
+    // std/sound: a WAV made in memory (sound_play(beep) would play it)
+    let beep = sound_tone(440.0, 200)
+    println("{sound_millis(beep)} ms, {sound_samples(beep)} samples")
+}
+```
+```output
+sum 4950, 99 frames
+8x8 corner ffffff edge 336699
+loaded ffffff
+200 ms, 4410 samples
 ```
 
 ### תוכנית שורת פקודה שלמה

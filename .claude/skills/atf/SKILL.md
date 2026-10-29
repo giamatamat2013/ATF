@@ -1,9 +1,18 @@
 ---
 name: atf
-description: Write, read, debug, compile and explain programs in ATF ("Accessible Typed Fast", files ending in .atf), a small statically typed language that compiles to native Windows .exe files. Use this skill whenever the user mentions ATF, .atf files, `atf run` / `atf build`, the atefintalode project, the ATF compiler or its standard library (std/json, std/csv, ...), or asks to write or fix code in this language, even if they just say "the language in this repo". ATF looks like a mix of Rust and Python but has its own rules, so do not guess its syntax from other languages - consult this skill first.
+description: Write, read, debug, compile and explain programs in ATF ("Accessible Typed Fast", files ending in .atf), a small statically typed language that compiles to native Windows .exe files. Home of the language, compiler, docs, examples and releases - https://github.com/tamat2013/ATF. Use this skill whenever the user mentions ATF, .atf files, `atf run` / `atf build` / `atf check`, the ATF compiler, bin/atf.exe, the standard library (std/json, std/ui, std/csv, ...), GUI windows or games written in ATF, or asks to write, fix, port or explain code in this language, even if they just say "the language in this repo" or write in Hebrew (שפת ATF, תכתוב לי ב-ATF). ATF looks like a mix of Rust and Python but has its own rules, so never guess its syntax from other languages - consult this skill first, and compile what you write.
 ---
 
 # ATF language
+
+This skill is self-contained: everything needed to write correct ATF is below and in `references/stdlib.md`, with no internet needed. The GitHub repo is an optional extra for the newest docs, ready-made compiler builds and more examples: **https://github.com/tamat2013/ATF** (releases: https://github.com/tamat2013/ATF/releases, bugs and requests: its Issues page). If the repo is available locally and disagrees with this skill, the repo is newer.
+
+## Quick start (do this first)
+
+1. Find a compiler: `bin/atf.exe` in the current folder, or `atf` on PATH (`atf version`). If there is none, ask the user where it is, or point them to the Releases page above (`atf-X.Y.Z-windows-x64.zip`) or `git clone https://github.com/tamat2013/ATF`. Do not try to build ATF yourself. Without a compiler, still write the code from the rules below and say it was not compiled.
+2. Write the code, run `atf check f.atf`, then `atf run f.atf`. Only report "works" after a real run.
+3. Never invent a function. If unsure it exists, `Grep` it in `references/stdlib.md`. If it is not listed there (or in the prelude/examples of a local repo), it does not exist: write it yourself.
+4. If a local repo has `examples/`, copy the structure of a similar program (window/game programs: `examples/ui/`).
 
 ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), statically typed, garbage collected, with type inference. The compiler is self-hosted and lives in the ATF repo (`bin/atf.exe`, sources in `compiler/`). Its syntax resembles Rust/Python/Go, but it differs in many small ways, so write ATF from the rules below rather than from habit. Getting these wrong produces compile errors, which is the main failure mode.
 
@@ -24,7 +33,7 @@ ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), st
    ```
 3. Compiler errors are precise (message, `file:line:col`, a caret, often a `hint:`). Read the hint and fix; do not rewrite blindly.
 4. When changing the language, compiler or library in the ATF repo, follow its `CLAUDE.md`: the same piece of work updates the tutorials (English and Hebrew), README, `docs/STDLIB.md`, this skill and the VS Code extension.
-5. When unsure about a library function, check `references/stdlib.md` (copy of the repo's docs/STDLIB.md) or the repo's `docs/TUTORIAL.md`, `atf/stdlib/prelude.atf` (the always-available library, in ATF), and `examples/` (45 tested programs). Prefer the repo copies if present: they are newer than this skill.
+5. When unsure about a library function, check `references/stdlib.md` (copy of the repo's docs/STDLIB.md) and, if a local repo exists, its `docs/TUTORIAL.md`, `atf/stdlib/prelude.atf` (the always-available library, in ATF), and `examples/` (45 tested programs). Prefer the repo copies if present: they are newer than this skill.
 
 ## Program shape
 
@@ -33,8 +42,39 @@ fn main() {                       // or: fn main(args: [str]) -> int  (return va
     println("Hello, {name}!")     // {expr} interpolation, \{ for literal brace
 }
 ```
-Optional first line: `// ATF 1.2.0` names the version the file was written for. It is a comment; the compiler only warns (stderr) when it is newer than the compiler. Add it to new programs, do not require it.
+Optional first declaration: `atf "1.2.0"` names the version the file was written for (not a comment; must come before everything else). The compiler only warns (stderr) when it is newer than the compiler. Add it to new programs, do not require it.
 No semicolons needed (optional), no imports for the core library, no header files. Declarations outside functions can appear in any order. A statement continues onto the next line if the line ends with an operator/comma, is inside brackets, or the next line starts with `.`, `&&`, `||`, `??`.
+
+A typical small program (shows most of the idioms together):
+```atf
+atf "1.2.0"
+
+import "std/json"
+
+struct Task { title: str, done: bool = false }
+
+impl Task {
+    fn to_str(self) -> str => "[{if self.done { "x" } else { " " }}] {self.title}"
+}
+
+fn parse_count(s: str) -> Result<int, str> {
+    let n = s.parse_int()
+    if n == nil { return Result.Err("not a number: {s}") }
+    return Result.Ok(n!)
+}
+
+fn main(args: [str]) -> int {
+    var tasks: [Task] = [Task("write"), Task("test", true)]
+    for i, t in tasks { println("{i + 1}. {t}") }
+    let open = tasks.filter(|t| not t.done).len()
+    println("open: {open}")
+    match parse_count("12") {
+        Result.Ok(n) => println("n = {n}")
+        Result.Err(e) => { eprintln(e); return 1 }
+    }
+    return 0
+}
+```
 
 ## Core syntax cheat sheet
 
@@ -50,7 +90,7 @@ a, b = b, a          // multi-assign (rhs evaluated first); shadowing with a new
 
 if c { } else if d { } else { }          // condition must be bool; `if` is an expression (needs else)
 while c { }    loop { break }
-for i in 0..5 { }  0..=5  0..=20 step 5  10..0 step -3      // `step` is a keyword
+for i in 0..5 { }  0..=5  0..=20 step 5  10..0 step -3      // `step` only counts right after a range (still usable as a name)
 for x in arr { }   for i, x in arr { }   for k, v in map { }   for ch in "str" { }
 for x in it { }     // any value with  fn next(self) -> T?  (stops at nil); also for i, x in it
 for (a, b) in pairs   // unpacks tuple elements
@@ -137,7 +177,7 @@ let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 
 ### I/O, modules, misc
 `println print eprintln eprint flush`; `input(prompt)`; `read_line()` -> `str?` (nil at EOF); `read_all_stdin()`; `read_file(p)` -> `str?`; `write_file(p, text)` -> bool; `file_exists delete_file make_dir temp_dir getenv exit run_command run_process`; `rand_seed rand_int(lo,hi) rand_float rand_choice shuffle clock`; math `sqrt abs min max PI E INT_MAX INT_MIN`; `chr ord range range_from zip same copy`; GC: `gc gc_runs gc_live_bytes`.
-Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also algo, app, args, base64, bigint, bits, collections, crypto, iter, csv, datetime, fs, hash, hex, glob, html, http, httpd, ini, json, log, math, net, path, process, random, regex, test, text, toml, ui, url, websocket, xml, yaml).
+Modules: `import "other"` (path relative to the importing file) or `import "std/json"` (also algo, app, args, base64, bigint, bits, collections, crypto, image, iter, csv, datetime, fs, hash, hex, glob, html, http, httpd, ini, json, log, math, net, path, process, random, regex, test, text, toml, ui, url, websocket, xml, yaml).
 Python-style helpers for whole programs: `std/args` (`let p = args_parser("tool", "about")`, `p.flag/option/required_option/positional`, `p.parse_or_exit(argv)` with `fn main(argv: [str])`, then `a.get/get_int/flag/has`), `std/log` (`log_info(..)`, `log_set_level(LOG_DEBUG)`, `log_set_file(path)`, output on stderr), `std/text` (`text_wrap text_title text_snake_case text_template text_table text_distance`; in `text_template` write the `${name}` placeholders in a raw string `r"..."`), `std/algo` (C++ / itertools / lodash style, all `algo_*`: `lower_bound upper_bound binary_search prefix_sums rotate next_permutation permutations combinations product subsets flatten flat_map group_by count_by unique_by take_while argmin argmax union intersection difference`), `std/random` (`random_range random_sample random_choices random_weighted random_gauss random_string random_uuid`; `rand_seed` makes it repeatable), `std/bits` (`bits_length bits_rotl bits_reverse bits_set bits_get bits_is_power_of_two bits_to_str`; there is no `>>>=`, write `x = x >>> 1`), `std/math` (`math_is_prime math_primes math_factorial math_mod_pow stats_mean stats_median stats_stdev stats_percentile`). **One global namespace** across all files: give globals specific names; duplicate definitions are compile errors. `include_str("f.txt")` embeds a file at compile time.
 
 ### Windows and design (`import "std/ui"`)
@@ -175,6 +215,9 @@ fn main() { let app = App(); ui_run("Demo", 420, 300, || view(app)) }
   - `ui_shortcut("ctrl+s", fn())` (keys like `ctrl+shift+n`, `f5`, `delete`; a key without ctrl/alt is ignored while a text field is focused). Dialogs: `message_box(t, msg)`, `confirm_box(t, q) -> bool`, `open_file_dialog(title, "Text|*.txt|All|*.*") -> str?`, `save_file_dialog(title, filter, "txt") -> str?`. `clipboard_get() clipboard_set(s)`.
   - Popups, dialogs and tooltips are layers on top; they set their own light colours, so in a dark theme give `menu_bar(..)` and fields `.bg(..).color(..)` explicitly.
 - **Testing a UI program** (no window, no dialogs): `ui_headless(view, w, h)`, then `ui_click(x, y)`, `ui_click_text("Save")`, `ui_type("abc")`, `ui_keypress("ctrl+z")`, `ui_drag(..)`, `ui_mouse_move(x, y)`, `ui_answers(yes, path)` for the dialogs, `ui_last_dialog()`; check your own data afterwards. Keep the program's data in variables or structs the test can read.
+- **Mouse without a click**: `ui_mouse_pos() -> (int, int)` ((-1, -1) outside the window) and, inside a `canvas`, `c.mouse_x()`, `c.mouse_y()` (-1 when outside) and `c.hovered()`. Asking makes the window redraw on every mouse move. `.on_pointer` still fires only on press and drag.
+- **Sound, pictures, background jobs**: `std/sound` (`sound_tone(hz, ms, volume=0.5)`, `sound_noise(ms)`, `sound_sweep(a, b, ms)` build a 16 bit WAV in a `str`; `sound_play(wav)` / `sound_play_file(path)` return at once, one voice at a time; `sound_stop() sound_mute(bool) sound_save(path, wav) sound_samples(wav)`); `std/image` (`Image{w, h, pix}` with 0xRRGGBB ints, draw with `c.pixels(x, y, w, h, img.pix, img.w, img.h)`; `image_new(w, h, color)`, `image_load(path) -> Image?` for 24/32 bit BMP, `image_save(img, path)`, `img.get(x, y)` (wraps around), `img.set`, `image_scale/crop/flip_x/flip_y/blit/shade`); `std/task` (`task_spawn(|| -> bool)` returns true when finished, `task_each(n, |k| ..)`, call `task_run(budget_ms)` once per frame, `task_finish() task_pending() task_clear()`).
+- Small helpers in the always-available library: `lerp(a, b, t)`, `fract(x)`, `ln(x)`, `array_repeat(value, n)`. `x >>>= n` exists next to `<<=` and `>>=`. A line that starts with `and` / `or` continues the previous expression.
 - **Lazy iterators**: `std/iter` (`Iter<T>`; make with `iter_of(arr) iter_range(lo, hi) iter_count(start) iter_repeat(x) iter_lines(text) iter_successors(first, f) iter_from(fn() -> T? {...})`; lazy `map filter filter_map take skip take_while skip_while every enumerate zip chain inspect`; running `collect count sum(start) fold(init, f) for_each first last nth find any all min max join(sep)`; single use; `iter_count`/`iter_repeat` never end, so `take` first).
 - **Text, files, programs, config, XML, web, tests**: `std/path` (`path_basename path_dirname path_ext path_stem path_join path_normalize`, `\` is the separator); `std/fs` (`fs_exists fs_is_dir fs_list_dir fs_make_dirs fs_remove_all fs_copy fs_move fs_append_file fs_read_lines fs_write_lines fs_walk fs_cwd`); `std/process` (`proc_output(cmdline) -> (int, str)`, `proc_setenv`, `proc_pid`, `proc_cpu_count`); `std/regex` (`regex(p)` or `regex_compile(p)` -> `Regex` with `find` (returns `RxMatch?` with `.text .start .group(i)`), `find_all is_match full_match replace_all("$1") split`; **write `{` in a pattern as `\{`**, e.g. `"a\{2,3}"`, and backslashes doubled: `"\\d+"`); `std/toml` (`toml_parse(text) -> Result<JsonValue, str>`, `toml_stringify`); `std/yaml` (`yaml_parse(text) -> Result<JsonValue, str>`, `yaml_stringify(v)`; block and flow styles, `|` and `>` text blocks; no anchors or tags); `std/bigint` (`bigint(n)`, `bigint_parse(s) -> Result<BigInt, str>`, then `+ - * / %`, unary `-`, `== < >` and sorting work; `pow(e: int)`, `pow_mod(e, m)`, `divmod`, `abs sign is_zero digits`, `to_int() -> int?`, `bigint_gcd`, `bigint_factorial`; mixing with int needs `bigint(n)`, `a + 1` is a compile error); `std/crypto` (bcrypt.dll: `crypto_random_bytes(n)`, `crypto_random_int(lo, hi)`, `crypto_pbkdf2(password, salt, iterations, length = 32)`, `crypto_encrypt(key, text, extra = "") -> Result<str, str>` (AES-GCM, key of 16/24/32 bytes, result is nonce + ciphertext + tag), `crypto_decrypt(key, data, extra = "")` (Err on a wrong key or changed data), `crypto_equal(a, b)` (constant time); bytes are in a `str`, show them with `hash_to_hex` from `std/hash`, which also has `hash_sha256` and `hash_hmac_sha256`); `std/xml` (`xml_parse(text) -> Result<XmlNode, str>`, node `tag attrs children attr(name) child(tag) children_named find_all query("a/b") inner_text`, build with `xml_element(tag).set_attr(k, v).add(node)` / `.add_text(tag, text)`, `xml_stringify(n, indent)`); `std/http` (`http_get(url)`, `http_post(url, body, headers)`, `http_request`, `http_download` -> `Result<HttpResponse, str>`; any status is `Ok`, check `r.ok()`); `std/net` (`tcp_connect(host, port) -> Result<TcpConn, str>` with `write write_line read read_line read_exact read_all set_timeout close`, `tcp_listen(port)` (0 = any free port, see `.port`) and `server.accept()`, `net_resolve(host)`; UDP: `udp_bind(port = 0, host = "127.0.0.1") -> Result<UdpSocket, str>` (`.port`), `sock.send_to(host, port, data) -> bool`, `sock.receive(max = 65536) -> UdpPacket?` (`.data .host .port`, nil after the timeout), `set_timeout(ms)`, `close()`; `std/websocket` (`ws_connect("ws://host:port/path") -> Result<WebSocket, str>`, `ws_listen(port)` + `server.accept()`; `ws.send(text) send_binary(data) ping() close(code = 1000, reason = "")`, `ws.receive() -> WsMessage?` with `.kind` ("text", "binary", "close") `.data .code`, pings answered automatically; ws:// only, no wss://; one program cannot `ws_connect` to its own `ws_listen` (no threads): use `ws_handshake_request` + `server.accept()` + `ws_handshake_finish(conn, key)`); a timed-out read returns nil); `std/ini` (`ini_parse(text) -> Result<IniDoc, str>`, `doc.get(section, key) -> str?`, `get_or get_int get_bool set`, keys before a [section] are in section "", `ini_stringify`); `std/url` (`url_parse(s) -> Result<Url, str>` with `scheme host port path query fragment param(name)`, `url_join(base, ref)`, `url_encode(s, plus: false)`, `url_decode`, `url_query_parse`, `url_query_build`); `std/glob` (`glob_match(pattern, text)` with `* ? [a-z] **`, `glob_find(folder, pattern) -> [str]`); `std/httpd` (handler = `fn(HttpRequest) -> HttpReply`; `router_new()` + `app.get("/users/:id", |req| http_text(req.params["id"]))`, `app.handle(req)`; `http_listen(port).unwrap().serve(handler)` answers one connection at a time, `serve_one` answers a single request; replies: `http_text http_html http_json_reply http_redirect http_file http_static(req, folder)`); Websites: the starter site is `app/` (`site.atf` routes, `main.atf`, `public/` served at `/static/*`); a `main` is `http_run(|req| app.handle(req))`, which listens on `$PORT` (open to everyone when PORT is set, else 127.0.0.1:8080, `ATF_HOST` overrides) and `http_listen_env()` only listens; test routes with `app.handle(HttpRequest{ path: "/x" })`; the root `Dockerfile` runs `app/main.atf` on any Docker host; `std/test` (`test(name, || {...})`, `expect expect_eq expect_ne expect_near expect_panics`, `return test_report()` from main).
 - **Saving settings and data** (`import "std/app"`): `settings_open("myapp")` -> `Settings` with `get(k, fallback) get_int get_bool set set_int set_bool remove save()`; `app_dir("myapp")` / `app_path("myapp", "data.json")` is the program's folder in APPDATA; `recent_add(s, path)`. Use `std/json` (`json_read_file`, `json_write_file`) for bigger data.
@@ -203,6 +246,22 @@ fn main() { let app = App(); ui_run("Demo", 420, 300, || view(app)) }
 - Assigning a struct/array/map aliases it; use `copy(x)` (shallow) for an independent one.
 - Windows only (64-bit Windows 10/11; on Linux the programs run through Wine). Output is buffered; it is flushed on exit, on input and on stderr writes.
 
+## Most common compile errors and their fix
+
+| Mistake | Fix |
+|---|---|
+| Reassigning a `let` | use `var` |
+| `int?` used in arithmetic or as a plain value | `!`, `?? default` or `if let` |
+| `var a = []` | give a type: `var a: [int] = []` |
+| `if n {` with an int | write a bool: `if n != 0 {` |
+| `x in 1..10` | `x in (1..10)` |
+| Missing `_ =>` or a variant in `match` | add the arm |
+| Literal `{` in a string | `\{` |
+| Mixing int and float in a call or assignment | `float(n)` / `int(x)` |
+| A function name that already exists in another file or the library | one global namespace: rename it (prefix it) |
+| Using `step`, `type`, `pub`, `in`... as a name | pick another name (`by`) |
+| Python/Rust habits (`def`, `elif`, `;` required, `&mut`, `self` without `fn`) | `fn`, `else if`, no `&`, `fn f(self)` |
+
 ## Converting to and from Python and Rust
 `atf run tools/convert.atf prog.py --to atf` (also `.rs`, and `--to py|rs`, `-o out`) translates between ATF, Python and Rust. The result is a starting point, not a finished port: comments are dropped, types and ownership are guessed, and library functions with no counterpart (`str_builder`, `regex`, `std/ui`) are kept as they are. Notes about guesses go to stderr as `note: ...`. After converting to ATF, always run `atf check` and fix what it reports. Details: `docs/CONVERT.md`.
 
@@ -214,3 +273,4 @@ When the user wants to *learn* ATF rather than get code written, go step by step
 
 ## Reference files
 - `references/stdlib.md` - every library function, method and std module (large; search it with Grep for a function name instead of reading it whole).
+- Optional, online: https://github.com/tamat2013/ATF (tutorial, STDLIB, examples, releases, issues).
