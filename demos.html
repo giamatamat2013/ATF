@@ -440,6 +440,16 @@ const lessons = [
     "atf": "import \"std/net\"\n\nfn main() {\n    let a = udp_bind().unwrap()                      // port 0: any free port\n    let b = udp_bind().unwrap()\n    a.send_to(\"127.0.0.1\", b.port, \"ping\")\n    if let m = b.receive() {\n        println(m.data, m.port == a.port)\n        b.send_to(m.host, m.port, \"pong\")            // answer the sender\n    }\n    if let m = a.receive() { println(m.data) }\n    b.set_timeout(100)\n    println(b.receive() == nil)                      // nothing more came\n}\n",
     "py": null,
     "output": "ping true\npong\ntrue"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/websocket",
+    "text": [
+      "WebSocket הוא ערוץ דו-כיווני של הודעות, כמו בצ'אט בדפדפן: שרת ולקוח שולחים זה לזה הודעות טקסט או בתים, ו-receive עונה לפינגים לבד."
+    ],
+    "atf": "import \"std/websocket\"\n\nfn main() {\n    let server = ws_listen(0).unwrap()               // port 0: any free port\n\n    // both sides in one program, so the client handshake goes in two halves\n    // (a normal client just calls ws_connect(\"ws://host:port/chat\"))\n    let conn = tcp_connect(\"127.0.0.1\", server.port).unwrap()\n    let key = ws_new_key()\n    conn.write(ws_handshake_request(\"127.0.0.1\", \"/chat\", key))\n    let srv = server.accept().unwrap()\n    let cli = ws_handshake_finish(conn, key).unwrap()\n\n    cli.send(\"hello\")\n    if let m = srv.receive() { srv.send(\"you said {m.data} on {srv.path}\") }\n    if let m = cli.receive() { println(m.kind, m.data) }\n    cli.close(1000, \"done\")\n    if let m = srv.receive() { println(m.kind, m.code, m.data) }\n}\n",
+    "py": null,
+    "output": "text you said hello on /chat\nclose 1000 done"
   }
 ];
 // LESSONS-END

@@ -2309,7 +2309,7 @@ fn main() {
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
-* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/yaml`, `std/xml`, `std/bigint`, `std/crypto`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
+* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/yaml`, `std/xml`, `std/bigint`, `std/crypto`, `std/websocket`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
 * `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
 * `std/app` - תיקייה והגדרות לתוכנית שנשמרות בין הרצות (ראו בהמשך הפרק).
 
@@ -2690,6 +2690,39 @@ fn main() {
 ping true
 pong
 true
+```
+
+* `std/websocket` מדבר WebSocket, ערוץ ההודעות הדו-כיווני שדפדפנים משתמשים בו: `ws_connect("ws://host:port/path")`
+  מחזיר `WebSocket`, ו-`ws_listen(port)` מחזיר שרת שה-`accept()` שלו מחכה ללקוח ועונה ללחיצת היד שלו.
+  `send(text)`, `send_binary(data)` ו-`ping()` שולחים; `receive()` מחזיר `WsMessage` (`kind` הוא `"text"`,
+  `"binary"` או `"close"`, ואחריו `data` ו-`code`), עונה לפינגים לבד ומחזיר `nil` כשהחיבור נפל או שהזמן עבר.
+  `close(code, reason)` נפרד מהצד השני. רק `ws://` נתמך, לא `wss://`. בלי threads תוכנית אחת לא יכולה
+  לעשות `ws_connect` לשרת של עצמה, ולכן הדוגמה עושה את לחיצת היד של הלקוח בשני חלקים.
+
+```atf
+import "std/websocket"
+
+fn main() {
+    let server = ws_listen(0).unwrap()               // port 0: any free port
+
+    // both sides in one program, so the client handshake goes in two halves
+    // (a normal client just calls ws_connect("ws://host:port/chat"))
+    let conn = tcp_connect("127.0.0.1", server.port).unwrap()
+    let key = ws_new_key()
+    conn.write(ws_handshake_request("127.0.0.1", "/chat", key))
+    let srv = server.accept().unwrap()
+    let cli = ws_handshake_finish(conn, key).unwrap()
+
+    cli.send("hello")
+    if let m = srv.receive() { srv.send("you said {m.data} on {srv.path}") }
+    if let m = cli.receive() { println(m.kind, m.data) }
+    cli.close(1000, "done")
+    if let m = srv.receive() { println(m.kind, m.code, m.data) }
+}
+```
+```output
+text you said hello on /chat
+close 1000 done
 ```
 
 * `std/url` מפרק ובונה כתובות אינטרנט: `url_parse(text)` מחזיר `Url` (`scheme`, `host`, `port`, `path`, `query`,

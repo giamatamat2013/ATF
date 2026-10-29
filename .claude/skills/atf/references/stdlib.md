@@ -57,6 +57,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/toml](#stdtoml)
   - [std/ui](#stdui)
   - [std/url](#stdurl)
+  - [std/websocket](#stdwebsocket)
   - [std/xml](#stdxml)
   - [std/yaml](#stdyaml)
   - [std/zlib](#stdzlib)
@@ -2765,6 +2766,106 @@ struct Url {
 - `.to_str() -> str` - the address as text again
 - `.request_target() -> str` - the part to put after GET in a request: path and query ("/" when the path is empty)
 - `.effective_port() -> int` - the port to connect to: the written one, or the default of the scheme (80, 443, 21, 22)
+
+## std/websocket
+
+WebSocket connections (RFC 6455): a client (ws_connect) and a server (ws_listen).
+
+```text
+import "std/websocket"
+
+match ws_connect("ws://127.0.0.1:8080/chat") {
+    Result.Ok(ws) => {
+        ws.send("hello")
+        if let m = ws.receive() { println(m.kind, m.data) }    // text hello
+        ws.close()
+    }
+    Result.Err(e) => println("error: " + e)
+}
+
+let server = ws_listen(8080).unwrap()
+let ws = server.accept().unwrap()          // waits for a client and answers its handshake
+while let m = ws.receive() {
+    if m.kind == "close" { break }
+    ws.send("you said " + m.data)
+}
+```
+
+receive() answers pings by itself and joins messages that arrive in pieces. It returns a WsMessage
+whose kind is "text", "binary" or "close", or nil when the connection broke or the read timed out
+(30 seconds by default, set_timeout(ms)). Only ws:// is supported; wss:// (encrypted) is not.
+The server answers one client at a time.
+
+The handshake also comes in two halves, so one program can be both sides (useful in tests):
+ws_handshake_request(host, path, key) is the text a client sends, and ws_handshake_finish(conn, key)
+reads the server's answer and returns the WebSocket.
+
+**Constants**
+
+- `WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"`
+- `WS_MAX_MESSAGE = 0x10000000          // 256 MB: a bigger message closes the connection`
+
+**Types**
+
+one message from the other side
+
+```text
+struct WsMessage {
+    kind: str           // "text", "binary" or "close"
+    data: str           // the text or the bytes; for "close", the reason the other side gave
+    code: int = 0       // for "close": the status code (1000 = normal), 0 when none was sent
+}
+```
+
+an open WebSocket connection
+
+```text
+struct WebSocket {
+    conn: TcpConn
+    client: bool        // true on the side that connected: its frames must be masked
+    path: str = "/"     // the path the client asked for (on the server side, e.g. "/chat")
+    closed: bool = false
+}
+```
+
+a server waiting for WebSocket clients
+
+```text
+struct WsServer {
+    server: TcpServer
+    port: int           // the port it listens on (useful after ws_listen(0))
+}
+```
+
+
+**Functions**
+
+- `fn ws_accept_key(key: str) -> str` - the Sec-WebSocket-Accept value a server sends back for a client's key
+- `fn ws_new_key() -> str` - a fresh random handshake key (16 random bytes in base64)
+- `fn ws_handshake_request(host: str, path: str, key: str) -> str` - the HTTP request a client sends to open a WebSocket
+- `fn ws_read_head(conn: TcpConn) -> Result<(str, {str: str}), str>` - reads an HTTP head (the first line and the headers) up to the empty line; names in lower case
+- `fn ws_handshake_finish(conn: TcpConn, key: str) -> Result<WebSocket, str>` - reads the server's answer to ws_handshake_request on conn and returns the open WebSocket
+- `fn ws_connect(address: str, timeout_ms: int = 10000) -> Result<WebSocket, str>` - connects to a ws:// address, e.g. "ws://127.0.0.1:8080/chat"
+- `fn ws_listen(port: int, host: str = "127.0.0.1") -> Result<WsServer, str>` - listens on a port; host "" listens on every network, "127.0.0.1" (the default) only on this computer
+- `fn ws_accept_conn(conn: TcpConn) -> Result<WebSocket, str>` - answers the handshake of a client on an accepted connection; replies 400 to a request that is not a WebSocket handshake
+- `fn ws_mask(data: str, mask: str) -> str` - data XOR-ed with a 4-byte mask (masking and unmasking are the same)
+- `fn ws_frame(opcode: int, data: str, mask: str) -> str` - one frame as bytes; mask is "" (server side) or 4 bytes (client side)
+- `fn ws_read_frame(conn: TcpConn) -> (bool, int, str)?` - one frame read from the connection: (fin, opcode, data); nil when the connection broke
+
+**Methods of `WsServer`**
+
+- `.accept() -> Result<WebSocket, str>` - waits for the next client and answers its handshake
+- `.close()` - stops listening
+
+**Methods of `WebSocket`**
+
+- `.set_timeout(ms: int)` - how long receive (and a send) may wait, in milliseconds; 0 waits forever
+- `.send_frame(opcode: int, data: str) -> bool`
+- `.send(text: str) -> bool` - sends a text message; false when the connection is closed or broken
+- `.send_binary(data: str) -> bool` - sends a binary message (any bytes)
+- `.ping(data: str = "") -> bool` - sends a ping; the other side answers with a pong, which receive() skips
+- `.receive() -> WsMessage?` - the next message; nil when the connection broke or the read timed out. A "close" message means the other side is done: the connection is closed after it.
+- `.close(code: int = 1000, reason: str = "")` - says goodbye with a status code (1000 = normal) and a reason, waits briefly for the answer and closes
 
 ## std/xml
 

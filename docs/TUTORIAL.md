@@ -2685,6 +2685,41 @@ pong
 true
 ```
 
+* `std/websocket` speaks WebSocket, the two-way message channel browsers use: `ws_connect("ws://host:port/path")`
+  gives a `WebSocket`, and `ws_listen(port)` gives a server whose `accept()` waits for a client and answers its
+  handshake. `send(text)`, `send_binary(data)` and `ping()` send; `receive()` returns a `WsMessage` (`kind` is
+  `"text"`, `"binary"` or `"close"`, then `data` and `code`), answers pings by itself and returns `nil` when the
+  connection broke or the read timed out. `close(code, reason)` says goodbye. Only `ws://` works, not `wss://`.
+  Without threads one program cannot `ws_connect` to its own server, so the sample below does the client handshake
+  in two halves.
+
+<!-- id: websocket-basic -->
+```atf
+import "std/websocket"
+
+fn main() {
+    let server = ws_listen(0).unwrap()               // port 0: any free port
+
+    // both sides in one program, so the client handshake goes in two halves
+    // (a normal client just calls ws_connect("ws://host:port/chat"))
+    let conn = tcp_connect("127.0.0.1", server.port).unwrap()
+    let key = ws_new_key()
+    conn.write(ws_handshake_request("127.0.0.1", "/chat", key))
+    let srv = server.accept().unwrap()
+    let cli = ws_handshake_finish(conn, key).unwrap()
+
+    cli.send("hello")
+    if let m = srv.receive() { srv.send("you said {m.data} on {srv.path}") }
+    if let m = cli.receive() { println(m.kind, m.data) }
+    cli.close(1000, "done")
+    if let m = srv.receive() { println(m.kind, m.code, m.data) }
+}
+```
+```output
+text you said hello on /chat
+close 1000 done
+```
+
 * `std/url` takes web addresses apart and builds them: `url_parse(text)` gives a `Url` (`scheme`, `host`, `port`, `path`,
   `query`, `fragment`, `param(name)`), `url_join(base, link)` follows a link the way a browser does, and `url_encode` /
   `url_decode` do the %-escapes.

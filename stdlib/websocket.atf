@@ -1,0 +1,311 @@
+// std/websocket - WebSocket connections (RFC 6455): a client (ws_connect) and a server (ws_listen).
+//
+//   import "std/websocket"
+//
+//   match ws_connect("ws://127.0.0.1:8080/chat") {
+//       Result.Ok(ws) => {
+//           ws.send("hello")
+//           if let m = ws.receive() { println(m.kind, m.data) }    // text hello
+//           ws.close()
+//       }
+//       Result.Err(e) => println("error: " + e)
+//   }
+//
+//   let server = ws_listen(8080).unwrap()
+//   let ws = server.accept().unwrap()          // waits for a client and answers its handshake
+//   while let m = ws.receive() {
+//       if m.kind == "close" { break }
+//       ws.send("you said " + m.data)
+//   }
+//
+// receive() answers pings by itself and joins messages that arrive in pieces. It returns a WsMessage
+// whose kind is "text", "binary" or "close", or nil when the connection broke or the read timed out
+// (30 seconds by default, set_timeout(ms)). Only ws:// is supported; wss:// (encrypted) is not.
+// The server answers one client at a time.
+//
+// The handshake also comes in two halves, so one program can be both sides (useful in tests):
+// ws_handshake_request(host, path, key) is the text a client sends, and ws_handshake_finish(conn, key)
+// reads the server's answer and returns the WebSocket.
+
+import "std/net"
+import "std/url"
+import "std/hash"
+import "std/base64"
+
+const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+const WS_MAX_MESSAGE = 0x10000000          // 256 MB: a bigger message closes the connection
+
+// one message from the other side
+struct WsMessage {
+    kind: str           // "text", "binary" or "close"
+    data: str           // the text or the bytes; for "close", the reason the other side gave
+    code: int = 0       // for "close": the status code (1000 = normal), 0 when none was sent
+}
+
+// an open WebSocket connection
+struct WebSocket {
+    conn: TcpConn
+    client: bool        // true on the side that connected: its frames must be masked
+    path: str = "/"     // the path the client asked for (on the server side, e.g. "/chat")
+    closed: bool = false
+}
+
+// the Sec-WebSocket-Accept value a server sends back for a client's key
+fn ws_accept_key(key: str) -> str => b64_encode(hash_sha1_raw(key + WS_GUID))
+
+// a fresh random handshake key (16 random bytes in base64)
+fn ws_new_key() -> str {
+    let sb = str_builder()
+    for _ in 0..16 { sb.add_byte(rand_int(0, 255) as byte) }
+    return b64_encode(sb.finish())
+}
+
+// the HTTP request a client sends to open a WebSocket
+fn ws_handshake_request(host: str, path: str, key: str) -> str {
+    return "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+        "Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+}
+
+// reads an HTTP head (the first line and the headers) up to the empty line; names in lower case
+fn ws_read_head(conn: TcpConn) -> Result<(str, {str: str}), str> {
+    let first = conn.read_line()
+    if first == nil { return Result.Err("the connection closed during the handshake") }
+    var headers: {str: str} = {}
+    loop {
+        let line = conn.read_line()
+        if line == nil { return Result.Err("the connection closed during the handshake") }
+        let l = line!
+        if l == "" { break }
+        let i = l.find(":")
+        if i > 0 { headers[l[0..i].trim().lower()] = l[i + 1..].trim() }
+    }
+    return Result.Ok((first!, headers))
+}
+
+// reads the server's answer to ws_handshake_request on conn and returns the open WebSocket
+fn ws_handshake_finish(conn: TcpConn, key: str) -> Result<WebSocket, str> {
+    let (status, headers) = ws_read_head(conn)?
+    let parts = status.split(" ")
+    if parts.len() < 2 or parts[1] != "101" {
+        conn.close()
+        return Result.Err("the server did not accept the WebSocket: " + status)
+    }
+    if headers.get("sec-websocket-accept", "") != ws_accept_key(key) {
+        conn.close()
+        return Result.Err("the server sent a wrong Sec-WebSocket-Accept")
+    }
+    return Result.Ok(WebSocket{ conn: conn, client: true })
+}
+
+// connects to a ws:// address, e.g. "ws://127.0.0.1:8080/chat"
+fn ws_connect(address: str, timeout_ms: int = 10000) -> Result<WebSocket, str> {
+    let u = url_parse(address)?
+    if u.scheme == "wss" { return Result.Err("wss:// (encrypted WebSocket) is not supported; use ws://") }
+    if u.scheme != "ws" { return Result.Err("not a ws:// address: " + address) }
+    let port = if u.port > 0 { u.port } else { 80 }
+    var path = if u.path == "" { "/" } else { u.path }
+    if u.query != "" { path = path + "?" + u.query }
+    let host = if u.port > 0 { "{u.host}:{u.port}" } else { u.host }
+    let conn = tcp_connect(u.host, port, timeout_ms)?
+    let key = ws_new_key()
+    if not conn.write(ws_handshake_request(host, path, key)) {
+        conn.close()
+        return Result.Err("cannot send the handshake to " + address)
+    }
+    return ws_handshake_finish(conn, key)
+}
+
+// a server waiting for WebSocket clients
+struct WsServer {
+    server: TcpServer
+    port: int           // the port it listens on (useful after ws_listen(0))
+}
+
+// listens on a port; host "" listens on every network, "127.0.0.1" (the default) only on this computer
+fn ws_listen(port: int, host: str = "127.0.0.1") -> Result<WsServer, str> {
+    let s = tcp_listen(port, host)?
+    return Result.Ok(WsServer{ server: s, port: s.port })
+}
+
+// answers the handshake of a client on an accepted connection; replies 400 to a request that is not
+// a WebSocket handshake
+fn ws_accept_conn(conn: TcpConn) -> Result<WebSocket, str> {
+    let r = ws_read_head(conn)
+    if r.is_err() {
+        conn.close()
+        return Result.Err(r.err()!)
+    }
+    let (first, headers) = r.unwrap()
+    let parts = first.split(" ")
+    let key = headers.get("sec-websocket-key", "")
+    if parts.len() < 3 or parts[0] != "GET" or not headers.get("upgrade", "").lower().contains("websocket") or key == "" {
+        conn.write("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 27\r\nConnection: close\r\n\r\nexpected a WebSocket client")
+        conn.close()
+        return Result.Err("not a WebSocket handshake: " + first)
+    }
+    conn.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+        "Sec-WebSocket-Accept: {ws_accept_key(key)}\r\n\r\n")
+    return Result.Ok(WebSocket{ conn: conn, client: false, path: parts[1] })
+}
+
+impl WsServer {
+    // waits for the next client and answers its handshake
+    fn accept(self) -> Result<WebSocket, str> {
+        let conn = self.server.accept()?
+        return ws_accept_conn(conn)
+    }
+
+    // stops listening
+    fn close(self) { self.server.close() }
+}
+
+// data XOR-ed with a 4-byte mask (masking and unmasking are the same)
+fn ws_mask(data: str, mask: str) -> str {
+    let n = data.len()
+    if n == 0 { return "" }
+    let out = __alloc_atomic(n)
+    let src = str_data(data)
+    let m = str_data(mask)
+    for i in 0..n { out[i] = (int(src[i]) ^ int(m[i & 3])) as byte }
+    return str_from_ptr(out, n)
+}
+
+// one frame as bytes; mask is "" (server side) or 4 bytes (client side)
+fn ws_frame(opcode: int, data: str, mask: str) -> str {
+    let sb = str_builder()
+    sb.add_byte((0x80 | opcode) as byte)                  // FIN: the whole message in one frame
+    let bit = if mask == "" { 0 } else { 0x80 }
+    let n = data.len()
+    if n < 126 {
+        sb.add_byte((bit | n) as byte)
+    } else if n < 65536 {
+        sb.add_byte((bit | 126) as byte)
+        sb.add_byte((n >> 8) as byte)
+        sb.add_byte((n & 255) as byte)
+    } else {
+        sb.add_byte((bit | 127) as byte)
+        for k in 0..8 { sb.add_byte(((n >> ((7 - k) * 8)) & 255) as byte) }
+    }
+    if mask == "" {
+        sb.add(data)
+    } else {
+        sb.add(mask)
+        sb.add(ws_mask(data, mask))
+    }
+    return sb.finish()
+}
+
+// one frame read from the connection: (fin, opcode, data); nil when the connection broke
+fn ws_read_frame(conn: TcpConn) -> (bool, int, str)? {
+    let head = conn.read_exact(2)
+    if head == nil { return nil }
+    let h = head!
+    let b0 = int(h.byte_at(0))
+    let b1 = int(h.byte_at(1))
+    var n = b1 & 127
+    if n == 126 {
+        let ext = conn.read_exact(2)
+        if ext == nil { return nil }
+        n = int(ext!.byte_at(0)) * 256 + int(ext!.byte_at(1))
+    } else if n == 127 {
+        let ext = conn.read_exact(8)
+        if ext == nil { return nil }
+        n = 0
+        for k in 0..8 { n = (n << 8) | int(ext!.byte_at(k)) }
+    }
+    if n < 0 or n > WS_MAX_MESSAGE { return nil }
+    var mask = ""
+    if (b1 & 0x80) != 0 {
+        let m = conn.read_exact(4)
+        if m == nil { return nil }
+        mask = m!
+    }
+    var data = ""
+    if n > 0 {
+        let d = conn.read_exact(n)
+        if d == nil { return nil }
+        data = d!
+        if mask != "" { data = ws_mask(data, mask) }
+    }
+    return ((b0 & 0x80) != 0, b0 & 15, data)
+}
+
+impl WebSocket {
+    // how long receive (and a send) may wait, in milliseconds; 0 waits forever
+    fn set_timeout(self, ms: int) { self.conn.set_timeout(ms) }
+
+    fn send_frame(self, opcode: int, data: str) -> bool {
+        if self.closed { return false }
+        var mask = ""
+        if self.client {
+            let sb = str_builder()
+            for _ in 0..4 { sb.add_byte(rand_int(0, 255) as byte) }
+            mask = sb.finish()
+        }
+        return self.conn.write(ws_frame(opcode, data, mask))
+    }
+
+    // sends a text message; false when the connection is closed or broken
+    fn send(self, text: str) -> bool { return self.send_frame(1, text) }
+
+    // sends a binary message (any bytes)
+    fn send_binary(self, data: str) -> bool { return self.send_frame(2, data) }
+
+    // sends a ping; the other side answers with a pong, which receive() skips
+    fn ping(self, data: str = "") -> bool { return self.send_frame(9, data) }
+
+    // the next message; nil when the connection broke or the read timed out.
+    // A "close" message means the other side is done: the connection is closed after it.
+    fn receive(self) -> WsMessage? {
+        if self.closed { return nil }
+        var kind = ""
+        let parts = str_builder()
+        loop {
+            let f = ws_read_frame(self.conn)
+            if f == nil { return nil }
+            let (fin, opcode, data) = f!
+            if opcode == 9 {                                   // ping: answer and go on
+                self.send_frame(10, data)
+                continue
+            }
+            if opcode == 10 { continue }                       // pong
+            if opcode == 8 {                                   // close: answer it, then close
+                var code = 0
+                var reason = ""
+                if data.len() >= 2 {
+                    code = int(data.byte_at(0)) * 256 + int(data.byte_at(1))
+                    reason = data[2..]
+                }
+                self.send_frame(8, data[0..min(2, data.len())])
+                self.closed = true
+                self.conn.close()
+                return WsMessage{ kind: "close", data: reason, code: code }
+            }
+            if opcode == 1 { kind = "text" } else if opcode == 2 { kind = "binary" } else if opcode != 0 {
+                return nil                                     // an unknown frame type
+            }
+            parts.add(data)
+            if fin { return WsMessage{ kind: kind, data: parts.finish() } }
+        }
+        return nil
+    }
+
+    // says goodbye with a status code (1000 = normal) and a reason, waits briefly for the answer and closes
+    fn close(self, code: int = 1000, reason: str = "") {
+        if self.closed { return }
+        let sb = str_builder()
+        sb.add_byte((code >> 8) as byte)
+        sb.add_byte((code & 255) as byte)
+        sb.add(reason)
+        if self.send_frame(8, sb.finish()) {
+            self.conn.set_timeout(1000)
+            loop {                                             // skip what is still on the way
+                let f = ws_read_frame(self.conn)
+                if f == nil { break }
+                if f!.1 == 8 { break }
+            }
+        }
+        self.closed = true
+        self.conn.close()
+    }
+}

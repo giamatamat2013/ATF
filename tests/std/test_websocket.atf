@@ -1,0 +1,103 @@
+// tests for std/websocket. One program plays both sides, so the client handshake is done in two halves.
+import "std/websocket"
+
+var failures = 0
+
+fn check(name: str, ok: bool) {
+    if not ok {
+        println("FAIL " + name)
+        failures += 1
+    }
+}
+
+fn show(m: WsMessage?) -> str {
+    if let x = m { return "{x.kind} {x.data.len()} {x.code}" }
+    return "nil"
+}
+
+fn text_of(m: WsMessage?) -> str {
+    if let x = m { return x.data }
+    return "nil"
+}
+
+// opens a client and a server side connected to each other
+fn pair(server: WsServer, path: str) -> (WebSocket, WebSocket) {
+    let conn = tcp_connect("127.0.0.1", server.port).unwrap()
+    let key = ws_new_key()
+    conn.write(ws_handshake_request("127.0.0.1:{server.port}", path, key))
+    let srv = server.accept().unwrap()
+    let cli = ws_handshake_finish(conn, key).unwrap()
+    return (cli, srv)
+}
+
+fn main() -> int {
+    // the example from RFC 6455
+    println(ws_accept_key("dGhlIHNhbXBsZSBub25jZQ=="))
+    check("key length", ws_new_key().len() == 24)
+
+    // frames: short, 16-bit and 64-bit lengths, masked and not
+    check("frame short", ws_frame(1, "Hi", "") == "\x81\x02Hi")
+    check("frame masked", ws_frame(1, "Hi", "\x01\x02\x03\x04") == "\x81\x82\x01\x02\x03\x04" + ws_mask("Hi", "\x01\x02\x03\x04"))
+    check("mask twice", ws_mask(ws_mask("hello", "abcd"), "abcd") == "hello")
+    check("frame 126", ws_frame(2, "x".repeat(300), "").len() == 304)
+    check("frame 127", ws_frame(2, "x".repeat(70000), "").len() == 70010)
+
+    let server = ws_listen(0).unwrap()
+    let (cli, srv) = pair(server, "/chat?room=1")
+    println(srv.path)
+
+    // text both ways
+    cli.send("hello")
+    println(text_of(srv.receive()))
+    srv.send("שלום")
+    println(text_of(cli.receive()))
+
+    // empty, binary and long messages
+    cli.send("")
+    println(show(srv.receive()))
+    let bytes = "\x00\x01\xFF" + "z".repeat(100000)
+    cli.send_binary(bytes)
+    if let m = srv.receive() {
+        check("binary", m.kind == "binary" and m.data == bytes)
+    } else {
+        check("binary arrived", false)
+    }
+    srv.send("y".repeat(200))
+    check("server long", text_of(cli.receive()) == "y".repeat(200))
+
+    // a ping is answered by receive and then skipped
+    cli.ping("p")
+    cli.send("after ping")
+    srv.send("pong is skipped")
+    println(text_of(srv.receive()))                // answers the ping, then reads the text
+    println(text_of(cli.receive()))                // skips the pong
+
+    // a message sent in pieces arrives whole
+    srv.conn.write("\x01\x03abc" + "\x00\x03def" + "\x80\x03ghi")
+    println(text_of(cli.receive()))
+
+    // close: the other side sees the code and the reason
+    cli.close(1001, "bye")
+    println(show(srv.receive()))
+    check("closed send", not cli.send("late"))
+    check("closed receive", cli.receive() == nil)
+
+    // a plain HTTP request is refused
+    let plain = tcp_connect("127.0.0.1", server.port).unwrap()
+    plain.write("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    check("refused", server.accept().is_err())
+    println(plain.read_line() ?? "nil")
+    plain.close()
+
+    // client errors
+    check("wss", ws_connect("wss://example.com/").is_err())
+    check("bad scheme", ws_connect("http://example.com/").is_err())
+    let gone = tcp_listen(0).unwrap()
+    let gone_port = gone.port
+    gone.close()
+    check("refused port", ws_connect("ws://127.0.0.1:{gone_port}/", 2000).is_err())
+
+    server.close()
+    println("failures:", failures)
+    return failures
+}
