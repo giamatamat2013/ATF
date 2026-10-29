@@ -1,8 +1,8 @@
 // A ruler at real size. The window is as wide as the screen, and its marks are drawn in millimetres and
 // inches from the size the monitor reports (ui_screen_info), so 1 cm on the screen is 1 cm of the ruler.
-// Below it, a credit card is drawn at its real size (85.60 x 53.98 mm): hold a real card against it.
-// If the edges do not match, the monitor's size is a little off. The buttons correct it, and the
-// correction is saved for the next start.
+// Below it, real-size objects are drawn (a credit card, SIM cards, coins, a square): hold a real one
+// against its outline. If the edges do not match, the monitor's size is a little off. The buttons
+// correct it, and the correction is saved for the next start.
 import "std/ui"
 import "std/app"
 
@@ -18,12 +18,27 @@ struct RulerState {
     factor: int
 }
 
+// an object of a known size, drawn at its real size: round objects are drawn by their diameter (w)
+struct Reference {
+    name: str
+    w: float
+    h: float
+    round: bool
+}
+
 fn clamp_factor(v: int) -> int { return max(900, min(1100, v)) }
 
 fn set_factor(st: RulerState, store: Settings, v: int) {
     st.factor = clamp_factor(v)
     store.set_int("factor", st.factor)
     store.save()
+}
+
+fn draw_outline(c: Canvas, x: float, y: float, w: float, h: float) {
+    c.frect(x, y, w, 1.5, RULER_INK)
+    c.frect(x, y + h - 1.5, w, 1.5, RULER_INK)
+    c.frect(x, y, 1.5, h, RULER_INK)
+    c.frect(x + w - 1.5, y, 1.5, h, RULER_INK)
 }
 
 // mmx and mmy are the logical units (100% scale) of one millimetre, already corrected
@@ -51,18 +66,37 @@ fn draw_ruler(c: Canvas, mmx: float, mmy: float) {
         q += 1
     }
 
-    // a credit card at its real size: its outline must match the card you hold against the screen
-    let x0 = 10.0 * mmx
-    let y0 = CARD_TOP_MM * mmy
-    let cw = CARD_W_MM * mmx
-    let ch = CARD_H_MM * mmy
-    c.frect(x0, y0, cw, ch, hex("#dbeafe"))
-    c.frect(x0, y0, cw, 1.5, RULER_INK)
-    c.frect(x0, y0 + ch - 1.5, cw, 1.5, RULER_INK)
-    c.frect(x0, y0, 1.5, ch, RULER_INK)
-    c.frect(x0 + cw - 1.5, y0, 1.5, ch, RULER_INK)
-    c.text(int(x0), int(y0 + ch) + 8, "credit card, 85.60 x 53.98 mm: hold a real card against this outline", RULER_INK, 12)
-    c.text(int(x0), int(y0 + ch) + 30, "screen width {float(c.w) / mmx / 10.0:.1f} cm", RULER_INK, 12)
+    // real-size objects in a row under the ruler: each outline must match the real object held against the screen
+    let top = CARD_TOP_MM * mmy
+    let base = top + CARD_H_MM * mmy
+    let items = [
+        Reference("credit card (ID-1)", CARD_W_MM, CARD_H_MM, false),
+        Reference("SIM card", 25.0, 15.0, false),
+        Reference("nano SIM", 12.3, 8.8, false),
+        Reference("2 euro coin", 25.75, 25.75, true),
+        Reference("US quarter", 24.26, 24.26, true),
+        Reference("1 inch square", 25.4, 25.4, false),
+    ]
+    var x = 10.0 * mmx
+    var i = 0
+    for r in items {
+        let w = r.w * mmx
+        let h = r.h * mmy
+        if r.round {
+            c.fcircle(x + w / 2.0, top + h / 2.0, w / 2.0, RULER_INK)
+            c.fcircle(x + w / 2.0, top + h / 2.0, w / 2.0 - 1.5, hex("#dbeafe"))
+        } else {
+            c.frect(x, top, w, h, hex("#dbeafe"))
+            draw_outline(c, x, top, w, h)
+        }
+        // labels alternate between two heights, so the labels of neighbours do not overlap
+        let dy = if i % 2 == 0 { 8.0 } else { 44.0 }
+        c.text(int(x), int(base + dy), r.name, RULER_INK, 12)
+        c.text(int(x), int(base + dy) + 16, "{r.w:.2f} x {r.h:.2f} mm", RULER_INK, 12)
+        x += w + 15.0 * mmx
+        i += 1
+    }
+    c.text(int(10.0 * mmx), int(base) + 80, "screen width {float(c.w) / mmx / 10.0:.1f} cm: hold a real object against its outline", RULER_INK, 12)
 }
 
 fn ruler_view(st: RulerState, store: Settings, lmx: float, lmy: float) -> Node {
@@ -91,6 +125,6 @@ fn main() {
     let st = RulerState(clamp_factor(store.get_int("factor", 1000)))
     // as wide as the screen; tall enough for the ruler, the card, its labels and the buttons
     let w = int(float(info.width) / scale)
-    let h = int((CARD_TOP_MM + CARD_H_MM + 4.0) * lmy) + 100
+    let h = int((CARD_TOP_MM + CARD_H_MM + 4.0) * lmy) + 150
     ui_run("ATF ruler", w, h, || ruler_view(st, store, lmx, lmy))
 }
