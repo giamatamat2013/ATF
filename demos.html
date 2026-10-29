@@ -509,7 +509,7 @@ const lessons = [
     ],
     "atf": "import \"std/xml\"\n\nfn main() {\n    let text = \"\"\"<library>\n  <book year=\"1954\"><title>The Hobbit</title><author>Tolkien</author></book>\n  <book year=\"1949\"><title>1984</title><author>Orwell</author></book>\n</library>\"\"\"\n    let root = xml_parse(text).unwrap()\n    for b in root.children_named(\"book\") {\n        let title = b.child(\"title\")!.inner_text()\n        println(\"{title} ({b.attr(\"year\") ?? \"?\"})\")\n    }\n    println(\"first author:\", root.query(\"book/author\")!.inner_text())\n    println(root.find_all(\"author\").len(), \"authors\")\n\n    // building a document\n    let doc = xml_element(\"note\").set_attr(\"lang\", \"he\")\n        .add_text(\"to\", \"Dana\")\n        .add_text(\"body\", \"see you at 5\")\n    println(xml_stringify(doc, 2))\n}\n",
     "py": null,
-    "output": "The Hobbit (1954)\n1984 (1949)\nfirst author: Tolkien\n2 authors\n<note lang=\"he\">\n  <to>Dana</to>\n  <body>see you at 5</body>\n</note>"
+    "output": "The Hobbit (1954)\n1984 (1949)\nfirst author: Tolkien\n2 authors\n<note lang=\"he\">\n  <to>Dana</to>\n  <body>see you at 5<\/body>\n</note>"
   },
   {
     "chapter": "הספרייה הסטנדרטית",
