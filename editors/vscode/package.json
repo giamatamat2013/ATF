@@ -27,7 +27,9 @@
     "commands": [
       { "command": "atf.run", "title": "ATF: Run File", "icon": "$(play)" },
       { "command": "atf.build", "title": "ATF: Build File" },
-      { "command": "atf.check", "title": "ATF: Check File" }
+      { "command": "atf.check", "title": "ATF: Check File" },
+      { "command": "atf.watch", "title": "ATF: Run File on Every Save" },
+      { "command": "atf.test", "title": "ATF: Run Tests" }
     ],
     "menus": {
       "editor/title/run": [

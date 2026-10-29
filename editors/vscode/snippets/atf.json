@@ -126,6 +126,27 @@
       "}"
     ]
   },
+  "Iterator type": {
+    "prefix": "iterator",
+    "description": "A type with next(), so a for loop can walk it",
+    "body": [
+      "struct ${1:Counter} { ${2:n}: int }",
+      "impl $1 {",
+      "\tfn next(self) -> int? {",
+      "\t\tif self.$2 <= 0 { return nil }",
+      "\t\tself.$2 -= 1",
+      "\t\treturn self.$2$0",
+      "\t}",
+      "}"
+    ]
+  },
+  "Lazy iterator chain": {
+    "prefix": "iterchain",
+    "description": "std/iter: a lazy chain that is collected at the end",
+    "body": [
+      "let ${1:result} = iter_of(${2:items}).filter(|x| ${3:x > 0}).map(|x| ${4:x * 2}).take(${5:10}).collect()$0"
+    ]
+  },
   "Match": {
     "prefix": "match",
     "description": "match with a catch-all arm",

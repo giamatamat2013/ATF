@@ -17,6 +17,10 @@ ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), st
    atf build f.atf -o f.exe   # stand-alone exe
    atf fmt f.atf [--check]    # fix indentation
    atf repl
+   atf test [folder]          # runs test_*.atf / *_test.atf (pass = exit 0, and output == NAME.out if present)
+   atf new name               # project: lib.atf + main.atf + test_lib.atf (a test has its own main: import lib, not main)
+   atf doc f.atf [-o f.md]    # Markdown docs from the // comments above fns and types
+   atf watch f.atf            # rerun on every save of f.atf or its local imports
    ```
 3. Compiler errors are precise (message, `file:line:col`, a caret, often a `hint:`). Read the hint and fix; do not rewrite blindly.
 4. When changing the language, compiler or library in the ATF repo, follow its `CLAUDE.md`: the same piece of work updates the tutorials (English and Hebrew), README, `docs/STDLIB.md`, this skill and the VS Code extension.

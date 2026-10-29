@@ -69,6 +69,8 @@ atf build hello.atf -o greet.exe   # choose the name of the program
 atf check hello.atf                # only check for errors, prints "ok"
 atf repl                           # type code line by line and see the results at once
 atf fmt hello.atf                  # fix the indentation (atf fmt hello.atf --check only reports)
+atf watch hello.atf                # run it again every time you save it (Ctrl+C stops)
+atf new myapp                      # start a project folder (see "Tests" in section 25)
 atf version                        # which compiler is this?
 ```
 
@@ -3013,6 +3015,36 @@ fn main() -> int {
 ```output
 ok   addition
 1 tests, all passed
+```
+
+`atf test` runs your tests for you. It finds every file named `test_*.atf` or `*_test.atf` in the current folder and
+the folders below it (or in the folders and files you name), runs each one and reports `ok` or `FAIL`. A test passes
+when its exit code is 0, which is what `test_report()` returns when every check passed; when a file `NAME.out` sits
+next to `NAME.atf`, the output must also match it exactly. The exit code of `atf test` is 1 when any test failed, so
+it fits a CI script.
+
+`atf new myapp` starts a project folder laid out for this: the functions go in `lib.atf`, `main.atf` imports it and
+holds `main`, and `test_lib.atf` imports it too and tests it (a test file has its own `main`, so it cannot import
+`main.atf`). `atf doc lib.atf` prints a Markdown page of the file: its header comment, then every type and function
+with the comment written above it (`-o lib.md` writes it to a file). `atf watch main.atf` runs the program, waits
+until the file or a file it imports changes, and runs it again.
+
+```text
+> atf new myapp
+created myapp\ with lib.atf, main.atf, test_lib.atf, README.md and .gitignore
+> cd myapp
+> atf test
+ok     test_lib.atf (0.10s)
+
+1 passed, 0 failed
+> atf doc lib.atf
+# lib.atf
+
+myapp - the functions of the program (main.atf and the tests import this file).
+
+## Functions
+
+- `fn greeting(who: str) -> str` - the greeting for one person
 ```
 
 ### Windows and design: `std/ui`

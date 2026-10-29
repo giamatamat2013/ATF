@@ -226,5 +226,9 @@ atf build f.atf -o f.exe      write a stand-alone program
 atf check f.atf               report errors only
 atf fmt f.atf [--check]       fix indentation
 atf repl                      interactive prompt
+atf test [folder|file ...]    run test_*.atf / *_test.atf; pass = exit code 0 (and output == NAME.out if present)
+atf new name                  project folder: lib.atf, main.atf (imports lib), test_lib.atf, README.md, .gitignore
+atf doc f.atf [-o out.md]     Markdown: header comment, types, functions and methods with the comment above each
+atf watch f.atf [args...]     run, then run again whenever f.atf or a local file it imports changes
 atf version
 ```

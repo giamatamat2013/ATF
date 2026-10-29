@@ -1,0 +1,34 @@
+// atf new / test / doc / watch, run through bin\atf.exe (the tests run from the repository root)
+import "std/fs"
+import "std/regex"
+
+let ATF = "bin\\atf.exe"
+let DIR = temp_dir() + "atf-cli-test"
+
+// runs an atf command; prints its exit code and its output with the temp folder and the timings hidden
+fn atf(args: str) {
+    let out = DIR + "\\out.txt"
+    let code = run_command("cmd /c \"set ATF_WATCH_ONCE=1&& " + ATF + " " + args + " > \"" + out + "\" 2>&1\"")
+    var text = (read_file(out) ?? "").replace("\r\n", "\n").replace(DIR, "TMP")
+    text = regex("\\(\\d+\\.\\d+s\\)").replace_all(text, "(time)")
+    println("$ atf " + args.replace(DIR, "TMP") + "   -> exit {code}")
+    print(text)
+    println()
+}
+
+fn main() {
+    fs_remove_all(DIR)
+    make_dir(DIR)
+    atf("new \"" + DIR + "\\hello\"")
+    println(fs_list_dir(DIR + "\\hello") ?? [])
+    atf("new \"" + DIR + "\\hello\"")                                  // already exists
+    atf("run \"" + DIR + "\\hello\\main.atf\" Dana")
+    atf("test \"" + DIR + "\\hello\"")
+    write_file(DIR + "\\hello\\test_lib.out", "something else\n")
+    atf("test \"" + DIR + "\\hello\"")                                 // the output differs from the .out file
+    delete_file(DIR + "\\hello\\test_lib.out")
+    atf("test \"" + DIR + "\\nothing_here.atf\"")
+    atf("doc \"" + DIR + "\\hello\\lib.atf\"")
+    atf("watch \"" + DIR + "\\hello\\main.atf\" Bob")
+    fs_remove_all(DIR)
+}

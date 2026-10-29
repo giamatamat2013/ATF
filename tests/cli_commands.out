@@ -1,0 +1,42 @@
+$ atf new "TMP\hello"   -> exit 0
+created TMP\hello\ with lib.atf, main.atf, test_lib.atf, README.md and .gitignore
+
+  cd TMP\hello
+  atf run main.atf
+  atf test
+
+[".gitignore", "README.md", "lib.atf", "main.atf", "test_lib.atf"]
+$ atf new "TMP\hello"   -> exit 1
+error: TMP\hello already exists
+
+$ atf run "TMP\hello\main.atf" Dana   -> exit 0
+Hello, Dana!
+
+$ atf test "TMP\hello"   -> exit 0
+ok     TMP\hello\test_lib.atf (time)
+
+1 passed, 0 failed
+
+$ atf test "TMP\hello"   -> exit 1
+FAIL   TMP\hello\test_lib.atf (the output differs from test_lib.out)
+    ok   greeting
+    1 tests, all passed
+
+0 passed, 1 failed
+
+$ atf test "TMP\nothing_here.atf"   -> exit 2
+error: not found: TMP\nothing_here.atf
+
+$ atf doc "TMP\hello\lib.atf"   -> exit 0
+# lib.atf
+
+hello - the functions of the program (main.atf and the tests import this file).
+
+## Functions
+
+- `fn greeting(who: str) -> str` - the greeting for one person
+
+$ atf watch "TMP\hello\main.atf" Bob   -> exit 0
+Hello, Bob!
+[watch] exit code 0; waiting for changes in 2 file(s), Ctrl+C to stop
+

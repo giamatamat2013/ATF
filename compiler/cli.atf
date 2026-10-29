@@ -1,0 +1,436 @@
+// atf test | new | doc | watch - the project commands of the driver.
+// They run programs by starting this compiler again ("atf run file"), so every run starts clean.
+import "util"
+
+extern "kernel32" fn GetFileAttributesA(name: ptr<byte>) -> i32
+extern "kernel32" fn FindFirstFileA(pattern: ptr<byte>, data: ptr<int>) -> int
+extern "kernel32" fn FindNextFileA(h: int, data: ptr<int>) -> i32
+extern "kernel32" fn FindClose(h: int) -> i32
+
+fn cli_is_dir(path: str) -> bool {
+    let a = GetFileAttributesA(str_data(path)) & 0xFFFFFFFF
+    return a != 0xFFFFFFFF and (a & 0x10) != 0
+}
+
+// the names inside a folder, sorted (empty when it cannot be read)
+fn cli_list_dir(path: str) -> [str] {
+    var names: [str] = []
+    let data = __alloc(320) as ptr<int>
+    let h = FindFirstFileA(str_data(path + "\\*"), data)
+    if h == -1 { return names }
+    loop {
+        let base = data as ptr<byte>
+        var n = 0
+        while base[44 + n] != 0 { n += 1 }
+        let name = str_from_ptr(base + 44, n)
+        if name != "." and name != ".." { names.push(name) }
+        if FindNextFileA(h, data) == 0 { break }
+    }
+    FindClose(h)
+    names.sort()
+    return names
+}
+
+fn cli_base_name(path: str) -> str {
+    var i = path.len() - 1
+    while i >= 0 and path.byte_at(i) != '/' and path.byte_at(i) != '\\' { i -= 1 }
+    return path[i + 1..]
+}
+
+fn cli_quote(a: str) -> str {
+    if a.len() > 0 and not a.contains(" ") and not a.contains("\"") { return a }
+    return "\"" + a + "\""
+}
+
+// runs "atf run file args" with its output in a file; returns (exit code, output)
+fn cli_run_captured(file: str, args: [str]) -> (int, str) {
+    let dir = temp_dir() + "atf"
+    make_dir(dir)
+    let out = dir + "\\test-" + int_to_hex(str_hash(file) & 0xFFFFFFFF) + ".out"
+    var cmd = cli_quote(exe_path()) + " run " + cli_quote(file)
+    for a in args { cmd = cmd + " " + cli_quote(a) }
+    let code = run_command("cmd /c \"" + cmd + " < NUL > " + cli_quote(out) + " 2>&1\"")
+    let text = (read_file(out) ?? "").replace("\r\n", "\n")
+    delete_file(out)
+    return (code, text)
+}
+
+// ---------------------------------------------------------------- atf test
+fn is_test_file(name: str) -> bool {
+    if not name.ends_with(".atf") { return false }
+    return name.starts_with("test_") or name.ends_with("_test.atf")
+}
+
+fn find_tests(dir: str, found: [str]) {
+    for name in cli_list_dir(dir) {
+        var p = dir + "\\" + name
+        if dir == "." { p = name }
+        if cli_is_dir(p) {
+            if not name.starts_with(".") and name != "build" { find_tests(p, found) }
+        } else if is_test_file(name) {
+            found.push(p)
+        }
+    }
+}
+
+fn show_indented(text: str) {
+    for l in text.trim_end().split("\n") { println("    " + l) }
+}
+
+fn run_test_cmd(args: [str]) -> int {
+    var files: [str] = []
+    var paths = args
+    if paths.len() == 0 { paths = ["."] }
+    for p in paths {
+        if cli_is_dir(p) {
+            find_tests(p, files)
+        } else if file_exists(p) {
+            files.push(p)
+        } else {
+            eprintln("error: not found: {p}")
+            return 2
+        }
+    }
+    if files.len() == 0 {
+        println("no test files found (names like test_*.atf or *_test.atf)")
+        return 0
+    }
+    var failed = 0
+    for f in files {
+        let shown = f
+        let start = clock()
+        let r = cli_run_captured(f, [])
+        let secs = clock() - start
+        var problem = ""
+        if r.0 != 0 {
+            problem = "exit code {r.0}"
+        } else {
+            // a file name.out beside the test holds the output it must print
+            let want = read_file(f[..f.len() - 4] + ".out")
+            if want != nil and want!.replace("\r\n", "\n") != r.1 { problem = "the output differs from " + cli_base_name(f[..f.len() - 4]) + ".out" }
+        }
+        if problem == "" {
+            println("ok     {shown} ({secs:.2f}s)")
+        } else {
+            failed += 1
+            println("FAIL   {shown} ({problem})")
+            show_indented(r.1)
+        }
+    }
+    println()
+    println("{files.len() - failed} passed, {failed} failed")
+    if failed > 0 { return 1 }
+    return 0
+}
+
+// ---------------------------------------------------------------- atf new
+fn run_new_cmd(args: [str]) -> int {
+    if args.len() != 1 {
+        eprintln("usage: atf new name")
+        return 2
+    }
+    let dir = args[0]
+    let name = cli_base_name(dir)
+    if file_exists(dir) or cli_is_dir(dir) {
+        eprintln("error: {dir} already exists")
+        return 1
+    }
+    if not make_dir(dir) {
+        eprintln("error: cannot create the folder {dir}")
+        return 1
+    }
+    let ver = VERSION.split(" ")[0]
+    // the code lives in lib.atf, so that both main.atf and the tests can import it
+    let lib_src = "// ATF {ver}\n// {name} - the functions of the program (main.atf and the tests import this file).\n\n// the greeting for one person\nfn greeting(who: str) -> str => \"Hello, \{who}!\"\n"
+    let main_src = "// ATF {ver}\nimport \"lib\"\n\nfn main(args: [str]) -> int \{\n    var who = \"world\"\n    if args.len() > 0 \{ who = args[0] }\n    println(greeting(who))\n    return 0\n}\n"
+    let test_src = "// ATF {ver}\n// run with:  atf test\nimport \"std/test\"\nimport \"lib\"\n\nfn main() -> int \{\n    test(\"greeting\", || \{\n        expect_eq(greeting(\"ATF\"), \"Hello, ATF!\")\n    })\n    return test_report()\n}\n"
+    let readme = "# {name}\n\n```\natf run main.atf          run the program\natf test                  run the tests (test_*.atf)\natf build main.atf        make main.exe\natf watch main.atf        run again on every save\natf doc lib.atf           list the functions and their comments\n```\n"
+    let files = [("lib.atf", lib_src), ("main.atf", main_src), ("test_lib.atf", test_src), ("README.md", readme), (".gitignore", "*.exe\n")]
+    for f in files {
+        if not write_file(dir + "\\" + f.0, f.1) {
+            eprintln("error: cannot write {dir}\\{f.0}")
+            return 1
+        }
+    }
+    println("created {dir}\\ with lib.atf, main.atf, test_lib.atf, README.md and .gitignore")
+    println()
+    println("  cd {dir}")
+    println("  atf run main.atf")
+    println("  atf test")
+    return 0
+}
+
+// ---------------------------------------------------------------- atf doc
+fn doc_ident(c: byte) -> bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_'
+}
+
+// s[i0] is an opening bracket: the index just after its partner (strings are skipped)
+fn doc_close(s: str, i0: int) -> int {
+    var depth = 0
+    var i = i0
+    while i < s.len() {
+        let c = s.byte_at(i)
+        if c == '"' {
+            i += 1
+            while i < s.len() and s.byte_at(i) != '"' {
+                if s.byte_at(i) == '\\' { i += 1 }
+                i += 1
+            }
+        } else if c == '(' or c == '[' or c == '{' or c == '<' {
+            depth += 1
+        } else if c == ')' or c == ']' or c == '}' or c == '>' {
+            if not (c == '>' and i > 0 and s.byte_at(i - 1) == '-') {
+                depth -= 1
+                if depth == 0 { return i + 1 }
+            }
+        }
+        i += 1
+    }
+    return s.len()
+}
+
+fn doc_skip_type(s: str, i0: int) -> int {
+    var i = i0
+    while i < s.len() and s.byte_at(i) == ' ' { i += 1 }
+    if i >= s.len() { return i }
+    if s[i..].starts_with("fn(") {
+        i = doc_close(s, i + 2)
+        if s[i..].starts_with(" -> ") { i = doc_skip_type(s, i + 4) }
+    } else {
+        let c = s.byte_at(i)
+        if c == '[' or c == '{' or c == '(' {
+            i = doc_close(s, i)
+        } else {
+            while i < s.len() and (doc_ident(s.byte_at(i)) or s.byte_at(i) == '.') { i += 1 }
+            if i < s.len() and s.byte_at(i) == '<' { i = doc_close(s, i) }
+        }
+    }
+    while i < s.len() and s.byte_at(i) == '?' { i += 1 }
+    return i
+}
+
+// "fn name<T>(params) -> Ret { ..."  ->  (name, the signature)
+fn doc_fn_sig(t: str) -> (str, str) {
+    var i = 3
+    while i < t.len() and doc_ident(t.byte_at(i)) { i += 1 }
+    let name = t[3..i]
+    if i < t.len() and t.byte_at(i) == '<' { i = doc_close(t, i) }
+    if i >= t.len() or t.byte_at(i) != '(' { return (name, t) }
+    i = doc_close(t, i)
+    if t[i..].starts_with(" -> ") { i = doc_skip_type(t, i + 4) }
+    return (name, t[..i])
+}
+
+fn doc_strip_pub(t: str) -> str {
+    if t.starts_with("pub ") { return t[4..] }
+    return t
+}
+
+// a Markdown page of a source file: its header comment, then every type and function with the comment above it
+fn doc_markdown(path: str, text: str) -> str {
+    let sb = str_builder()
+    sb.add("# " + cli_base_name(path) + "\n")
+    let lines = text.replace("\r\n", "\n").split("\n")
+    var i = 0
+    // the header comment (a "// ATF x.y.z" line is skipped)
+    var intro: [str] = []
+    while i < lines.len() and lines[i].trim().starts_with("//") {
+        var c = lines[i].trim()[2..]
+        if c.starts_with(" ") { c = c[1..] }
+        if not (i == 0 and c.starts_with("ATF ")) { intro.push(c) }
+        i += 1
+    }
+    if intro.len() > 0 {
+        sb.add("\n")
+        var in_code = false
+        for l in intro {
+            let code = l.starts_with("  ")
+            if code and not in_code { sb.add("```\n") }
+            if in_code and not code { sb.add("```\n") }
+            in_code = code
+            if code { sb.add(l[2..] + "\n") } else { sb.add(l + "\n") }
+        }
+        if in_code { sb.add("```\n") }
+    }
+    var pending: [str] = []
+    var impl_type = ""
+    var types: [str] = []
+    var fns: [str] = []
+    var methods: [str] = []
+    while i < lines.len() {
+        let line = lines[i].trim_end()
+        let t = doc_strip_pub(line.trim())
+        i += 1
+        if t.starts_with("//") {
+            pending.push(t[2..].trim())
+            continue
+        }
+        if t == "" {
+            pending = []
+            continue
+        }
+        var doc = " ".join(pending)
+        pending = []
+        let top = not line.starts_with(" ")
+        if top and t.starts_with("impl") {
+            var s = t
+            if s.ends_with("{") { s = s[..s.len() - 1].trim() }
+            s = s[4..].trim()
+            if s.starts_with("<") { s = s[doc_close(s, 0)..].trim() }
+            impl_type = s
+            continue
+        }
+        if top and line == "}" {
+            impl_type = ""
+            continue
+        }
+        if t.starts_with("fn ") and (top or impl_type != "") {
+            let r = doc_fn_sig(t)
+            if r.0.starts_with("_") { continue }
+            if doc == "" {
+                // a comment at the end of a one-line function
+                let k = t.rfind("// ")
+                if k > 0 and t[..k].trim().ends_with("}") { doc = t[k + 3..].trim() }
+            }
+            var entry = "- `" + r.1 + "`"
+            if top {
+                if doc != "" { entry = entry + " - " + doc }
+                fns.push(entry)
+            } else {
+                entry = "- `" + impl_type + "`: `" + r.1 + "`"
+                if doc != "" { entry = entry + " - " + doc }
+                methods.push(entry)
+            }
+            continue
+        }
+        if top and (t.starts_with("struct ") or t.starts_with("enum ") or t.starts_with("interface ") or t.starts_with("type ") or t.starts_with("const ")) {
+            var decl = [t]
+            if t.ends_with("{") {
+                while i < lines.len() {
+                    let l = lines[i].trim_end()
+                    i += 1
+                    // a body of a default method is left out
+                    decl.push(l)
+                    if l == "}" { break }
+                }
+            }
+            var entry = ""
+            if doc != "" { entry = doc + "\n\n" }
+            types.push(entry + "```atf\n" + "\n".join(decl) + "\n```\n")
+        }
+    }
+    if types.len() > 0 {
+        sb.add("\n## Types and constants\n\n")
+        sb.add("\n".join(types))
+    }
+    if fns.len() > 0 {
+        sb.add("\n## Functions\n\n")
+        for f in fns { sb.add(f + "\n") }
+    }
+    if methods.len() > 0 {
+        sb.add("\n## Methods\n\n")
+        for m in methods { sb.add(m + "\n") }
+    }
+    return sb.finish()
+}
+
+fn run_doc_cmd(args: [str]) -> int {
+    var files: [str] = []
+    var out = ""
+    var k = 0
+    while k < args.len() {
+        if args[k] == "-o" and k + 1 < args.len() {
+            out = args[k + 1]
+            k += 2
+            continue
+        }
+        files.push(args[k])
+        k += 1
+    }
+    if files.len() == 0 {
+        eprintln("usage: atf doc file.atf [more.atf ...] [-o out.md]")
+        return 2
+    }
+    var parts: [str] = []
+    for f in files {
+        let text = read_file(f)
+        if text == nil {
+            eprintln("error: file not found: {f}")
+            return 2
+        }
+        parts.push(doc_markdown(f, text!))
+    }
+    let md = "\n".join(parts)
+    if out == "" {
+        print(md)
+        return 0
+    }
+    if not write_file(out, md) {
+        eprintln("error: cannot write {out}")
+        return 1
+    }
+    println("wrote {out}")
+    return 0
+}
+
+// ---------------------------------------------------------------- atf watch
+// the file and the local files it imports (std modules are left out)
+fn watch_files(path: str, found: [str]) {
+    let p = norm_path(path)
+    if found.contains(p) { return }
+    found.push(p)
+    let text = read_file(p)
+    if text == nil { return }
+    for raw in text!.split("\n") {
+        let t = raw.trim()
+        if not t.starts_with("import \"") { continue }
+        let name = t[8..].split("\"")[0]
+        if name.starts_with("std/") { continue }
+        var n = name
+        if not n.ends_with(".atf") { n = n + ".atf" }
+        let ip = norm_path(path_dir(p) + "/" + n)
+        if file_exists(ip) { watch_files(ip, found) }
+    }
+}
+
+fn watch_stamp(files: [str]) -> str {
+    let sb = str_builder()
+    for f in files {
+        sb.add(f + ":" + int_to_hex(str_hash(read_file(f) ?? "") & 0xFFFFFFFF) + ";")
+    }
+    return sb.finish()
+}
+
+fn run_watch_cmd(args: [str]) -> int {
+    if args.len() < 1 {
+        eprintln("usage: atf watch file.atf [args...]")
+        return 2
+    }
+    let path = args[0]
+    if not file_exists(path) {
+        eprintln("error: file not found: {path}")
+        return 2
+    }
+    var cmd = cli_quote(exe_path()) + " run " + cli_quote(path)
+    for a in args[1..] { cmd = cmd + " " + cli_quote(a) }
+    let once = getenv("ATF_WATCH_ONCE") != nil         // used by the tests: run one time and stop
+    loop {
+        var files: [str] = []
+        watch_files(path, files)
+        let stamp = watch_stamp(files)
+        let code = run_command(cmd)
+        println("[watch] exit code {code}; waiting for changes in {files.len()} file(s), Ctrl+C to stop")
+        flush()
+        if once { return 0 }
+        loop {
+            sleep(300)
+            var now: [str] = []
+            watch_files(path, now)
+            if watch_stamp(now) != stamp { break }
+        }
+        println("[watch] changed, running again")
+        println()
+    }
+    return 0
+}

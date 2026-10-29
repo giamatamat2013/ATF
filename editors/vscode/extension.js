@@ -268,6 +268,15 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("atf.run", () => runInTerminal("run")),
     vscode.commands.registerCommand("atf.build", () => runInTerminal("build")),
+    vscode.commands.registerCommand("atf.watch", () => runInTerminal("watch")),
+    vscode.commands.registerCommand("atf.test", () => {
+      // atf test in the workspace folder: runs every test_*.atf and *_test.atf below it
+      const doc = activeAtf();
+      if (!doc) return;
+      const term = vscode.window.createTerminal({ name: "ATF tests", cwd: workspaceRoot(doc) });
+      term.show();
+      term.sendText(quote(compilerPath(doc)) + " test");
+    }),
     vscode.commands.registerCommand("atf.check", () => {
       const doc = activeAtf();
       if (doc) check(doc);

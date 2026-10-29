@@ -7,13 +7,15 @@ Created by **TAMAT2013**.
 ## Features
 
 - **Syntax highlighting** for ATF, including the pipe `|>`, string interpolation, format specs, generics, lambdas and attributes. Also inside ```` ```atf ```` blocks in Markdown.
-- **Snippets** for functions, structs, enums, `impl`, `match`, loops and more. Window programs with `std/ui`: `uiapp` (a whole program), `uistyle`, `uirow`, `uicol`, `uimenu`, `uitextarea`, `uiselect`, `uidialog`, `uicanvas`, `uishortcut`, `uifile`, `uitest` (a test without a window) and `uisettings` (`std/app`). Also `argsparse` (`std/args` and `std/log`), `regex` (`std/regex`), `test` and `testprop` (`std/test`, a property test), `pipe` (the `|>` operator), `aiask` (`std/ai`), `term` (`std/term`), `httpget` (`std/http`), `xmlread` (`std/xml`), `tcpclient` (`std/net`) and `httpserve` (`std/httpd`).
+- **Snippets** for functions, structs, enums, `impl`, `match`, loops and more. Window programs with `std/ui`: `uiapp` (a whole program), `uistyle`, `uirow`, `uicol`, `uimenu`, `uitextarea`, `uiselect`, `uidialog`, `uicanvas`, `uishortcut`, `uifile`, `uitest` (a test without a window) and `uisettings` (`std/app`). Also `argsparse` (`std/args` and `std/log`), `regex` (`std/regex`), `test` and `testprop` (`std/test`, a property test), `pipe` (the `|>` operator), `iterator` (a type a `for` loop can walk) and `iterchain` (`std/iter`), `aiask` (`std/ai`), `term` (`std/term`), `httpget` (`std/http`), `xmlread` (`std/xml`), `tcpclient` (`std/net`) and `httpserve` (`std/httpd`).
 - **Automatic imports.** When you use a standard library name such as `json_parse`, `counter_from` or `button(...)`, the matching `import "std/..."` line is added at the top of the file.
 - **Compiler errors in the editor.** `atf check` runs when an `.atf` file is opened or saved, and the errors show up as red squiggles and in the Problems panel.
 - **Run and build commands** from the Command Palette:
   - `ATF: Run File` (also `F5`, `Ctrl+F5` and the play button in the editor title bar)
   - `ATF: Build File`
   - `ATF: Check File`
+  - `ATF: Run File on Every Save` (`atf watch`)
+  - `ATF: Run Tests` (`atf test` in the workspace folder: every `test_*.atf` and `*_test.atf`)
 - **Outline** and *Go to Symbol* for `fn`, `struct`, `enum`, `impl`, `type` and `const`.
 - Bracket matching, auto-closing pairs, comment toggling and indentation rules.
 

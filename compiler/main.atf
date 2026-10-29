@@ -17,6 +17,7 @@ import "codegen"
 import "opt"
 import "repl"
 import "fmt"
+import "cli"
 
 const VERSION = "1.2.0 (self-hosted)"
 const PRELUDE_SRC = include_str("../atf/stdlib/prelude.atf")
@@ -30,6 +31,10 @@ usage:
   atf check file.atf               check for errors only
   atf repl                         interactive mode
   atf fmt file.atf [--check]       re-indent source files
+  atf test [folder|file ...]       run test_*.atf / *_test.atf (and compare with a .out file)
+  atf new name                     start a project folder (main.atf, test_main.atf)
+  atf doc file.atf [-o out.md]     Markdown documentation from the doc comments
+  atf watch file.atf [args...]     run again whenever the file or its imports change
   atf version
 """
 
@@ -160,6 +165,10 @@ fn main(args: [str]) -> int {
     let cmd = args[0]
     if cmd == "repl" { return run_repl() }
     if cmd == "fmt" { return run_fmt(args[1..]) }
+    if cmd == "test" { return run_test_cmd(args[1..]) }
+    if cmd == "new" { return run_new_cmd(args[1..]) }
+    if cmd == "doc" { return run_doc_cmd(args[1..]) }
+    if cmd == "watch" { return run_watch_cmd(args[1..]) }
     if cmd == "version" {
         println("ATF {VERSION}")
         return 0

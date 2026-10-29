@@ -98,6 +98,10 @@ atf build hello.atf -o hello.exe
 atf check hello.atf            only look for errors
 atf repl                       try things interactively
 atf fmt hello.atf              fix the indentation of a file (--check only reports)
+atf new myapp                  start a project folder: lib.atf, main.atf, test_lib.atf
+atf test [folder]              run every test_*.atf and *_test.atf (and compare with NAME.out when there is one)
+atf doc lib.atf [-o lib.md]    Markdown documentation from the comments above functions and types
+atf watch hello.atf            run again every time the file or a file it imports is saved
 atf version
 ```
 
