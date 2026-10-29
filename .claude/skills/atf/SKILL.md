@@ -1,15 +1,15 @@
 ---
 name: atf
-description: Write, read, debug, compile and explain programs in ATF ("Accessible Typed Fast", files ending in .atf), a small statically typed language that compiles to native Windows .exe files. Home of the language, compiler, docs, examples and releases - https://github.com/tamat2013/ATF. Use this skill whenever the user mentions ATF, .atf files, `atf run` / `atf build` / `atf check`, the ATF compiler, bin/atf.exe, the standard library (std/json, std/ui, std/csv, ...), GUI windows or games written in ATF, or asks to write, fix, port or explain code in this language, even if they just say "the language in this repo" or write in Hebrew (שפת ATF, תכתוב לי ב-ATF). ATF looks like a mix of Rust and Python but has its own rules, so never guess its syntax from other languages - consult this skill first, and compile what you write.
+description: Write, read, debug, compile and explain programs in ATF ("Accessible Typed Fast", files ending in .atf), a small statically typed language that compiles to native Windows .exe files. Home of the language, compiler, docs, examples and releases - https://github.com/giamatamat2013/ATF. Use this skill whenever the user mentions ATF, .atf files, `atf run` / `atf build` / `atf check`, the ATF compiler, bin/atf.exe, the standard library (std/json, std/ui, std/csv, ...), GUI windows or games written in ATF, or asks to write, fix, port or explain code in this language, even if they just say "the language in this repo" or write in Hebrew (שפת ATF, תכתוב לי ב-ATF). ATF looks like a mix of Rust and Python but has its own rules, so never guess its syntax from other languages - consult this skill first, and compile what you write.
 ---
 
 # ATF language
 
-This skill is self-contained: everything needed to write correct ATF is below and in `references/stdlib.md`, with no internet needed. The GitHub repo is an optional extra for the newest docs, ready-made compiler builds and more examples: **https://github.com/tamat2013/ATF** (releases: https://github.com/tamat2013/ATF/releases, bugs and requests: its Issues page). If the repo is available locally and disagrees with this skill, the repo is newer.
+This skill is self-contained: everything needed to write correct ATF is below and in `references/stdlib.md`, with no internet needed. The GitHub repo is an optional extra for the newest docs, ready-made compiler builds and more examples: **https://github.com/giamatamat2013/ATF** (releases: https://github.com/giamatamat2013/ATF/releases, bugs and requests: its Issues page). If the repo is available locally and disagrees with this skill, the repo is newer.
 
 ## Quick start (do this first)
 
-1. Find a compiler: `bin/atf.exe` in the current folder, or `atf` on PATH (`atf version`). If there is none, ask the user where it is, or point them to the Releases page above (`atf-X.Y.Z-windows-x64.zip`) or `git clone https://github.com/tamat2013/ATF`. Do not try to build ATF yourself. Without a compiler, still write the code from the rules below and say it was not compiled.
+1. Find a compiler: `bin/atf.exe` in the current folder, or `atf` on PATH (`atf version`). If there is none, ask the user where it is, or point them to the Releases page above (`atf-X.Y.Z-windows-x64.zip`) or `git clone https://github.com/giamatamat2013/ATF`. Do not try to build ATF yourself. Without a compiler, still write the code from the rules below and say it was not compiled.
 2. Write the code, run `atf check f.atf`, then `atf run f.atf`. Only report "works" after a real run.
 3. Never invent a function. If unsure it exists, `Grep` it in `references/stdlib.md`. If it is not listed there (or in the prelude/examples of a local repo), it does not exist: write it yourself.
 4. If a local repo has `examples/`, copy the structure of a similar program (window/game programs: `examples/ui/`).
@@ -280,4 +280,4 @@ When the user wants to *learn* ATF rather than get code written, go step by step
 
 ## Reference files
 - `references/stdlib.md` - every library function, method and std module (large; search it with Grep for a function name instead of reading it whole).
-- Optional, online: https://github.com/tamat2013/ATF (tutorial, STDLIB, examples, releases, issues).
+- Optional, online: https://github.com/giamatamat2013/ATF (tutorial, STDLIB, examples, releases, issues).

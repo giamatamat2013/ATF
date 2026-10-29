@@ -1,6 +1,6 @@
 # ATF for Visual Studio Code
 
-Language support for [ATF](https://github.com/tamat2013) (*Accessible Typed Fast*), a small compiled programming language (`.atf` files).
+Language support for [ATF](https://github.com/giamatamat2013/ATF) (*Accessible Typed Fast*), a small compiled programming language (`.atf` files).
 
 Created by **TAMAT2013**.
 

@@ -55,14 +55,14 @@ python tests/compare_stages.py     bootstrap and native compiler behave the same
 
 ## Releasing ATF
 
-Repository: `tamat2013/ATF`. Default branch: `master`. Version number lives in `VERSION` (the single source of truth). Tag format: `vX.Y.Z`. Release workflow: `.github/workflows/release.yml`.
+Repository: `giamatamat2013/ATF`. Default branch: `master`. Version number lives in `VERSION` (the single source of truth). Tag format: `vX.Y.Z`. Release workflow: `.github/workflows/release.yml`.
 
 ### Rules
 
 1. **Never release before the change is known to work.** Besides the test suites, run the real thing: build with `rebuild_compiler.cmd` (it must reach the fixed point) and run `bin/atf.exe version` and one example.
 2. Work and release directly on `master` (no feature branches).
 3. Never release on top of a CI run you already know is red.
-4. A bad release is deleted with its tag (`DELETE /repos/tamat2013/ATF/releases/<id>` and `DELETE /repos/tamat2013/ATF/git/refs/tags/vX.Y.Z`), then fixed and released again with the same number.
+4. A bad release is deleted with its tag (`DELETE /repos/giamatamat2013/ATF/releases/<id>` and `DELETE /repos/giamatamat2013/ATF/git/refs/tags/vX.Y.Z`), then fixed and released again with the same number.
 5. The GitHub token always comes from `git credential fill` and is never printed or written to a file. `gh` is not installed: use the REST API from Python.
 
 ### Version numbers
@@ -125,9 +125,9 @@ A live local page that shows percent done, what is happening now, the pipeline s
 4. Rebuild with `rebuild_compiler.cmd` and check the real compiler runs (see rule 1).
 5. Run the local tests with the watcher.
 6. Commit and push to `master`; wait until `git status -sb` shows no "ahead".
-7. Check the tag does not exist: `GET /repos/tamat2013/ATF/git/ref/tags/<tag>` must be 404.
-8. Dispatch: `POST /repos/tamat2013/ATF/actions/workflows/release.yml/dispatches` with `{"ref":"master"}` (204). Do not release by pushing a tag; the workflow reads `VERSION`, runs the tests, builds, creates the tag and publishes.
-9. Watch it: `python tools/release_status/watch_release.py tamat2013/ATF` in the background (prints the jobs on change, exits 1 at the first failed job, 0 on success). At the first failure: read the job log (`GET /actions/jobs/<id>/logs`), cancel the run, fix, push, dispatch again.
+7. Check the tag does not exist: `GET /repos/giamatamat2013/ATF/git/ref/tags/<tag>` must be 404.
+8. Dispatch: `POST /repos/giamatamat2013/ATF/actions/workflows/release.yml/dispatches` with `{"ref":"master"}` (204). Do not release by pushing a tag; the workflow reads `VERSION`, runs the tests, builds, creates the tag and publishes.
+9. Watch it: `python tools/release_status/watch_release.py giamatamat2013/ATF` in the background (prints the jobs on change, exits 1 at the first failed job, 0 on success). At the first failure: read the job log (`GET /actions/jobs/<id>/logs`), cancel the run, fix, push, dispatch again.
 10. On success check that the Release has its 2 assets: `atf-X.Y.Z-windows-x64.zip` and `SHA256SUMS.txt`.
 11. Comment the version on every issue the release fixed and close it.
 12. Finish the dashboard: `todo.json` all `done`, a last log line.
