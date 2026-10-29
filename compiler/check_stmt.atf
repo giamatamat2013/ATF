@@ -1055,6 +1055,33 @@ impl Checker {
                 }
                 return c
             }
+            PatK.Array(elems, rest, rest_name) => {
+                if not self.is_array_t(t) {
+                    var hint = ""
+                    if is_opt(t) { hint = "the value may be nil; unwrap it first" }
+                    fail(pat.pos, "this pattern is for an array but the value being matched is {t.to_str()}", hint)
+                }
+                let elem = type_args(t)[0]
+                let n = elems.len()
+                let lenx = self.try_method(subj, "len", [], pat.pos)!
+                var op = "=="
+                if rest >= 0 { op = ">=" }
+                var c: TExpr? = self.compare(op, lenx, self.ci(n), pat.pos)
+                for i in 0..n {
+                    var idx = self.ci(i)
+                    if rest >= 0 and i >= rest {
+                        // after the '..': counted from the end
+                        idx = texpr(TK.Bin("sub", lenx, self.ci(n - i)), TInt, NOPOS)
+                    }
+                    let sub = texpr(TK.ArrIdx(subj, idx, self.esize(elem)), elem, NOPOS)
+                    c = self.and_(c, self.compile_pattern(elems[i], sub, binds, pos))
+                }
+                if rest >= 0 and rest_name != "" {
+                    let hi = texpr(TK.Bin("sub", lenx, self.ci(n - rest)), TInt, NOPOS)
+                    binds.push((rest_name, self.try_method(subj, "op_slice", [self.ci(rest), hi], pat.pos)!))
+                }
+                return c
+            }
             PatK.Variant(path, pargs) => {
                 if self.is_struct_pattern(t, path) {
                     let sf = self.pattern_struct(t, path, pat.pos)
@@ -1368,6 +1395,7 @@ impl Checker {
             }
             return out
         }
+        if self.is_array_t(t) { return self.uncovered_array(rows, t, rest_types) }
         // numbers, text, ...: only a catch-all covers everything
         var sub: [[Pattern]] = []
         for r in rows {
@@ -1378,6 +1406,61 @@ impl Checker {
         var col: [str] = ["_"]
         for x in miss[0] { col.push(x) }
         return [col]
+    }
+
+    // arrays: try every length up to the longest pattern, then "longer than that" (only '..' patterns reach it)
+    fn uncovered_array(self, rows: [[Pattern]], t: Type, rest_types: [Type]) -> [[str]] {
+        let elem = type_args(t)[0]
+        var maxn = 0
+        for r in rows {
+            match r[0].k {
+                PatK.Array(es, rest, rn) => {
+                    if es.len() > maxn { maxn = es.len() }
+                }
+                _ => {}
+            }
+        }
+        for size in 0..(maxn + 2) {
+            var sub: [[Pattern]] = []
+            for r in rows {
+                var nr: [Pattern] = []
+                if self.is_wild_pat(r[0], t) {
+                    for k in 0..size { nr.push(Pattern(PatK.Wild, r[0].pos)) }
+                } else {
+                    match r[0].k {
+                        PatK.Array(es, rest, rn) => {
+                            if rest < 0 {
+                                if es.len() != size { continue }
+                                for x in es { nr.push(x) }
+                            } else {
+                                if es.len() > size { continue }
+                                for k in 0..size { nr.push(Pattern(PatK.Wild, r[0].pos)) }
+                                for k in 0..rest { nr[k] = es[k] }
+                                let after = es.len() - rest
+                                for k in 0..after { nr[size - after + k] = es[rest + k] }
+                            }
+                        }
+                        _ => continue
+                    }
+                }
+                for i in 1..r.len() { nr.push(r[i]) }
+                sub.push(nr)
+            }
+            var sub_types: [Type] = []
+            for k in 0..size { sub_types.push(elem) }
+            for x in rest_types { sub_types.push(x) }
+            let miss = self.uncovered(sub, sub_types, false)
+            if miss.len() > 0 {
+                let w = miss[0]
+                var parts: [str] = []
+                for k in 0..size { parts.push(w[k]) }
+                if size == maxn + 1 { parts.push("..") }
+                var col: [str] = ["[" + ", ".join(parts) + "]"]
+                for k in size..w.len() { col.push(w[k]) }
+                return [col]
+            }
+        }
+        return []
     }
 
     // which enum variants does this pattern fully cover?
@@ -1445,6 +1528,9 @@ impl Checker {
                 var list = ", ".join(shown)
                 if missing.len() > 6 { list = list + ", ..." }
                 fail(pos, "this match does not cover: {list}", "add the missing cases or a catch-all arm:  _ => ...")
+            }
+            if is_expr and self.is_array_t(st) and missing[0][0] != "_" {
+                fail(pos, "this match does not cover: {missing[0][0]}", "add the missing case or a catch-all arm:  _ => ...")
             }
             if is_expr {
                 fail(pos, "a match used as a value must cover every case", "add a catch-all arm:  _ => ...")

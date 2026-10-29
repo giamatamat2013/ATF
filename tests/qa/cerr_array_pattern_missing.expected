@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: this match does not cover: [_, _, _, ..]
+  --> cerr_array_pattern_missing.atf:2:12
+ 2 |     return match a {
+   |            ^
+  hint: add the missing case or a catch-all arm:  _ => ...

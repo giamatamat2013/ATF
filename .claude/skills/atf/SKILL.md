@@ -92,6 +92,8 @@ let area = match s {                                        // exhaustive for en
 }
 // patterns: literals, 1 | 2, 4..=9, x if x < 0 (guard), _, tuples (0, _), nested Expr.Add(Expr.Num(0), rhs),
 // struct patterns Point(0, 0), Point{ x: 0, y }, Point{ y: 0, .. }; variant type name optional inside match
+// array patterns [] [x] [a, b] [first, ..rest] [.., last] [a, .., z]: `..` = zero or more elements,
+// `..name` binds them as a new array; [] + [x, ..rest] together are exhaustive
 if let Pattern = value { } else { }     while let n = cur { }
 ```
 Arms are separated by newlines (no commas). An arm may be an expression, a `{ block }`, an assignment, `return`, `break`, `continue`. A `match` used as a value must be exhaustive; add `_ =>` otherwise.

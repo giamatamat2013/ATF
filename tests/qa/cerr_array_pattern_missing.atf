@@ -1,0 +1,11 @@
+fn size(a: [int]) -> str {
+    return match a {
+        [] => "none"
+        [x] => "one"
+        [x, y] => "two"
+    }
+}
+
+fn main() {
+    println(size([1]))
+}

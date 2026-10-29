@@ -389,6 +389,10 @@ fn dpat(pt: Pattern, d: int, lab: str) {
             line(d, lab, "PFields " + p + " " + ".".join(path))
             for f in fields { dpat(f.pat, d + 1, f.name) }
         }
+        PatK.Array(elems, rest, rest_name) => {
+            line(d, lab, "PArray " + p + " rest=" + str(rest) + " " + rest_name)
+            for x in elems { dpat(x, d + 1, "") }
+        }
     }
 }
 

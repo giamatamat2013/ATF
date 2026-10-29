@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: this pattern is for an array but the value being matched is int
+  --> cerr_array_pattern_type.atf:4:9
+ 4 |         [x] => println(x)
+   |         ^

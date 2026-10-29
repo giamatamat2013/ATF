@@ -1873,6 +1873,47 @@ stopping
 
 ה-`match` נבדק מלמעלה למטה, והאפשרות הראשונה שמתאימה היא שרצה.
 
+### match על מערכים
+
+גם **מערכים** אפשר לפרק ב-`match`. `[]` הוא מערך ריק, `[a, b]` מערך של בדיוק שני איברים, ו-`..` מחליף מספר
+כלשהו של איברים (גם אפס) במקום אחד: `[first, ..]`, `[.., last]`, `[a, .., z]`. `..rest` גם שומר את האיברים
+האלה כמערך חדש. המהדר בודק ש-`match` על מערך מכסה כל אורך: `[]` ו-`[first, ..rest]` יחד מכסים כל מערך.
+
+```atf
+fn sum(a: [int]) -> int {
+    return match a {
+        [] => 0
+        [first, ..rest] => first + sum(rest)
+    }
+}
+
+fn run(words: [str]) -> str {
+    return match words {
+        ["copy", from, to] => "copy {from} to {to}"
+        ["help"] | [] => "usage: copy FROM TO"
+        [.., last] if last == "!" => "shouting"
+        [cmd, ..] => "unknown command {cmd}"
+    }
+}
+
+fn main() {
+    println(sum([1, 2, 3, 4]))
+    println(run("copy a.txt b.txt".split(" ")))
+    println(run([]))
+    println(run(["go", "!"]))
+    println(run(["jump"]))
+    if let [x, y] = [3, 4] { println(x * y) }
+}
+```
+```output
+10
+copy a.txt to b.txt
+usage: copy FROM TO
+shouting
+unknown command jump
+12
+```
+
 ### תרגיל 14.1
 
 הגדירו `enum Light { Red, Yellow, Green }` עם מתודה `next(self) -> Light` שמחזירה את הצבע הבא ברמזור

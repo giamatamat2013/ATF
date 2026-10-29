@@ -145,7 +145,8 @@ let area = match s {
 
 A `match` used as a value must cover every case (or end with `_ =>`). Patterns: literals, `1 | 2`, ranges `4..=9`,
 guards `x if x < 0`, `_`, tuples, nested enum variants, and structs (`Point(0, 0)`, `Point{ x: 0, y }`,
-`Point{ y: 0, .. }`). Arms are separated by newlines. `if let` and `while let` take one pattern.
+`Point{ y: 0, .. }`), and arrays (`[]`, `[a, b]`, `[first, ..rest]`, `[.., last]`; `..` matches zero or more
+elements and `..name` binds them). Arms are separated by newlines. `if let` and `while let` take one pattern.
 
 ## Optionals and errors
 

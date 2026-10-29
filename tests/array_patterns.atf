@@ -1,0 +1,75 @@
+// array patterns in match and if let
+
+fn describe(a: [int]) -> str {
+    return match a {
+        [] => "empty"
+        [x] => "one: {x}"
+        [0, ..] => "starts with zero"
+        [first, .., last] if first == last => "same ends {first}"
+        [a, b] => "two: {a} {b}"
+        [first, ..rest] => "first {first}, {rest.len()} more"
+    }
+}
+
+fn sum(a: [int]) -> int {
+    return match a {
+        [] => 0
+        [x, ..rest] => x + sum(rest)
+    }
+}
+
+enum Tok { Num(int), Plus }
+
+fn eval(toks: [Tok]) -> int {
+    return match toks {
+        [Tok.Num(a), Tok.Plus, Tok.Num(b)] => a + b
+        [Tok.Num(a)] => a
+        _ => -1
+    }
+}
+
+fn main() {
+    println(describe([]))
+    println(describe([7]))
+    println(describe([0, 5, 6]))
+    println(describe([3, 9, 3]))
+    println(describe([1, 2]))
+    println(describe([1, 2, 3, 4]))
+    println(sum([1, 2, 3, 4, 5]))
+    println(eval([Tok.Num(2), Tok.Plus, Tok.Num(40)]))
+    println(eval([Tok.Num(9)]))
+    println(eval([Tok.Plus]))
+
+    // words
+    let words = "copy a.txt b.txt".split(" ")
+    match words {
+        ["copy", from, to] => println("copy {from} -> {to}")
+        ["help"] => println("help")
+        [cmd, ..] => println("unknown {cmd}")
+        [] => println("nothing")
+    }
+
+    // the last elements, and '..' with a name in the middle
+    match [1, 2, 3, 4, 5] {
+        [a, ..mid, y, z] => println("{a} {mid} {y} {z}")
+        _ => println("short")
+    }
+
+    // if let
+    let pair = [10, 20]
+    if let [x, y] = pair {
+        println(x + y)
+    }
+    if let [x, y] = [1, 2, 3] {
+        println("not reached")
+    } else {
+        println("not a pair")
+    }
+
+    // nested arrays, and '..' that matches everything
+    let grid = [[1, 2], [3, 4]]
+    match grid {
+        [[a, _], [_, d]] => println("diagonal {a} {d}")
+        [..] => println("other")
+    }
+}

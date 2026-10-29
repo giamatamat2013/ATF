@@ -93,7 +93,8 @@ enum PatK {
     Variant([str], [Pattern]?),
     Tuple([Pattern]),
     Or([Pattern]),
-    Fields([str], [FieldPat])            // P{ x: 0, y }
+    Fields([str], [FieldPat]),           // P{ x: 0, y }
+    Array([Pattern], int, str)           // [a, b, ..rest, z]: elements, where '..' stands (-1: none), its name ("" : none)
 }
 
 // one field of a struct pattern:  x: pattern   (a bare  y  means  y: y)

@@ -460,6 +460,16 @@ const lessons = [
     "atf": "fn main() {\n    var total = 0\n    for text in [\"10\", \"x7\", \"5\"] {\n        try {\n            total += text.to_int()\n        } catch err {\n            println(\"skipped: {err}\")\n        }\n    }\n    println(\"total {total}\")\n\n    try {\n        assert(total > 100, \"total is too small\")\n    } catch {\n        println(\"the catch name is optional\")\n    }\n}\n",
     "py": null,
     "output": "skipped: cannot convert \"x7\" to an int\ntotal 15\nthe catch name is optional"
+  },
+  {
+    "chapter": "תכונות מתקדמות",
+    "title": "match על מערכים",
+    "text": [
+      "אפשר לפרק מערך בתוך match: [] הוא מערך ריק, [a, b] בדיוק שני איברים, ו-.. מחליף כמה איברים שרוצים (גם אפס). ..rest שומר אותם כמערך חדש. המהדר בודק שכל אורך מכוסה."
+    ],
+    "atf": "fn sum(a: [int]) -> int {\n    return match a {\n        [] => 0\n        [first, ..rest] => first + sum(rest)\n    }\n}\n\nfn run(words: [str]) -> str {\n    return match words {\n        [\"copy\", from, to] => \"copy {from} to {to}\"\n        [\"help\"] | [] => \"usage: copy FROM TO\"\n        [.., last] if last == \"!\" => \"shouting\"\n        [cmd, ..] => \"unknown command {cmd}\"\n    }\n}\n\nfn main() {\n    println(sum([1, 2, 3, 4]))\n    println(run(\"copy a.txt b.txt\".split(\" \")))\n    println(run([]))\n    println(run([\"go\", \"!\"]))\n    println(run([\"jump\"]))\n    if let [x, y] = [3, 4] { println(x * y) }\n}\n",
+    "py": null,
+    "output": "10\ncopy a.txt to b.txt\nusage: copy FROM TO\nshouting\nunknown command jump\n12"
   }
 ];
 // LESSONS-END
