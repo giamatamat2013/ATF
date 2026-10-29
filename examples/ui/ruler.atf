@@ -1,26 +1,51 @@
 // A ruler at real size. The window is as wide as the screen, and its marks are drawn in millimetres and
 // inches from the size the monitor reports (ui_screen_info), so 1 cm on the screen is 1 cm of the ruler.
-// Below it, real-size objects are drawn (a credit card, SIM cards, coins, a square): hold a real one
-// against its outline. If the edges do not match, the monitor's size is a little off. The buttons
-// correct it, and the correction is saved for the next start.
+// Below it, real-size objects are drawn (a credit card, SIM cards, coins, a square), each with a picture
+// of what it is: hold a real one against its outline. If the edges do not match, the monitor's size is a
+// little off. The buttons correct it, and the correction is saved for the next start.
 import "std/ui"
 import "std/app"
 
-let RULER_PAPER = hex("#fff6cf")
-let RULER_INK = hex("#1f2937")
+let RULER_BG = hex("#0f172a")
+let RULER_PAPER = hex("#f8f4e3")
+let RULER_EDGE = hex("#b8a673")
+let RULER_INK = hex("#0f172a")
+let RULER_MID = hex("#334155")
+let RULER_FINE = hex("#64748b")
+let RULER_INCH = hex("#b45309")
+let RULER_LABEL = hex("#e2e8f0")
+let RULER_MUTED = hex("#94a3b8")
+let RULER_ACCENT = hex("#38bdf8")
+let RULER_BAR = hex("#1e293b")
+let OBJ_FILL = hex("#ffffff")
+let OBJ_EDGE = hex("#38bdf8")
+let OBJ_GOLD = hex("#d4af37")
+let OBJ_GOLD_DARK = hex("#a16207")
+let OBJ_SILVER = hex("#cbd5e1")
+let OBJ_STEEL = hex("#94a3b8")
+let OBJ_LOGO = hex("#1d4ed8")
+let OBJ_BAR = hex("#64748b")
+let OBJ_GRID = hex("#cbd5e1")
 let RULER_MM = 30.0      // height of the ruler strip
-let CARD_TOP_MM = 38.0   // the card starts this far below the top of the window
-let CARD_W_MM = 85.60
-let CARD_H_MM = 53.98
+let CARD_TOP_MM = 38.0   // the objects start this far below the top of the window
+let CARD_H_MM = 53.98    // the tallest object: the credit card
+
+// the twelve stars of the euro, as unit vectors (no trigonometry in the library)
+let EURO_STARS = [(1.0, 0.0), (0.866, 0.5), (0.5, 0.866), (0.0, 1.0), (-0.5, 0.866), (-0.866, 0.5),
+    (-1.0, 0.0), (-0.866, -0.5), (-0.5, -0.866), (0.0, -1.0), (0.5, -0.866), (0.866, -0.5)]
+
+let BUTTON = style().bg(hex("#334155")).color(hex("#f1f5f9")).radius(8).padding(6, 12).hover(style().bg(hex("#475569")))
 
 // factor is the correction in thousandths: 1000 keeps the size the monitor reports
 struct RulerState {
     factor: int
 }
 
-// an object of a known size, drawn at its real size: round objects are drawn by their diameter (w)
+// an object of a known size, drawn at its real size: round objects are drawn by their diameter (w).
+// kind picks the picture drawn inside it: card, sim, coin, quarter or square
 struct Reference {
     name: str
+    kind: str
     w: float
     h: float
     round: bool
@@ -35,24 +60,91 @@ fn set_factor(st: RulerState, store: Settings, v: int) {
 }
 
 fn draw_outline(c: Canvas, x: float, y: float, w: float, h: float) {
-    c.frect(x, y, w, 1.5, RULER_INK)
-    c.frect(x, y + h - 1.5, w, 1.5, RULER_INK)
-    c.frect(x, y, 1.5, h, RULER_INK)
-    c.frect(x + w - 1.5, y, 1.5, h, RULER_INK)
+    c.frect(x, y, w, 1.5, OBJ_EDGE)
+    c.frect(x, y + h - 1.5, w, 1.5, OBJ_EDGE)
+    c.frect(x, y, 1.5, h, OBJ_EDGE)
+    c.frect(x + w - 1.5, y, 1.5, h, OBJ_EDGE)
+}
+
+// a credit card, front: the bank's logo, the chip, the number as grey bars and the name
+fn draw_card(c: Canvas, x: float, y: float, w: float, h: float) {
+    c.frect(x + w * 0.70, y + h * 0.12, w * 0.22, h * 0.16, OBJ_LOGO)
+    c.frect(x + w * 0.10, y + h * 0.36, w * 0.14, h * 0.26, OBJ_GOLD)
+    c.frect(x + w * 0.10, y + h * 0.48, w * 0.14, 1.0, OBJ_GOLD_DARK)
+    c.frect(x + w * 0.15, y + h * 0.36, 1.0, h * 0.26, OBJ_GOLD_DARK)
+    for g in 0..4 {
+        c.frect(x + w * (0.10 + 0.21 * float(g)), y + h * 0.72, w * 0.16, h * 0.08, OBJ_BAR)
+    }
+    c.frect(x + w * 0.10, y + h * 0.88, w * 0.36, h * 0.04, OBJ_BAR)
+}
+
+// a SIM card: the gold contacts, eight of them in two rows of four
+fn draw_sim(c: Canvas, x: float, y: float, w: float, h: float) {
+    let cx = x + w * 0.16
+    let cy = y + h * 0.22
+    let cw = w * 0.42
+    let ch = h * 0.56
+    c.frect(cx, cy, cw, ch, OBJ_GOLD)
+    for k in 1..4 {
+        c.frect(cx + cw * float(k) / 4.0, cy, 1.0, ch, OBJ_GOLD_DARK)
+    }
+    c.frect(cx, cy + ch / 2.0, cw, 1.0, OBJ_GOLD_DARK)
+}
+
+// a 1 inch square, with the quarter inches marked on it
+fn draw_square(c: Canvas, x: float, y: float, w: float, h: float) {
+    for k in 1..4 {
+        c.frect(x + w * float(k) / 4.0, y, 1.0, h, OBJ_GRID)
+        c.frect(x, y + h * float(k) / 4.0, w, 1.0, OBJ_GRID)
+    }
+}
+
+fn draw_flat(c: Canvas, kind: str, x: float, y: float, w: float, h: float) {
+    if kind == "card" {
+        draw_card(c, x, y, w, h)
+    } else if kind == "sim" {
+        draw_sim(c, x, y, w, h)
+    } else {
+        draw_square(c, x, y, w, h)
+    }
+}
+
+// a 2 euro coin: a gold ring with twelve stars and a silver centre; a US quarter: a steel rim, silver, the value
+// r is the radius of the disc, drawn inside the blue outline
+fn draw_round(c: Canvas, kind: str, cx: float, cy: float, r: float) {
+    if kind == "coin" {
+        c.fcircle(cx, cy, r, OBJ_GOLD)
+        c.fcircle(cx, cy, r * 0.74, OBJ_SILVER)
+        for (dx, dy) in EURO_STARS {
+            c.fcircle(cx + dx * r * 0.87, cy + dy * r * 0.87, r * 0.05, OBJ_GOLD_DARK)
+        }
+        let size = int(r * 0.9)
+        c.text(int(cx) - c.text_width("2", size, true) / 2, int(cy) - int(float(size) * 0.6), "2", RULER_INK, size, true)
+    } else {
+        c.fcircle(cx, cy, r, OBJ_STEEL)
+        c.fcircle(cx, cy, r * 0.92, OBJ_SILVER)
+        let size = int(r * 0.7)
+        c.text(int(cx) - c.text_width("25", size, true) / 2, int(cy) - int(float(size) * 0.6), "25", RULER_MID, size, true)
+    }
 }
 
 // mmx and mmy are the logical units (100% scale) of one millimetre, already corrected
 fn draw_ruler(c: Canvas, mmx: float, mmy: float) {
-    c.clear(hex("#f3f4f6"))
+    c.clear(RULER_BG)
+    // the strip: warm paper with a darker edge underneath, and a shadow under that
     c.frect(0.0, 0.0, float(c.w), RULER_MM * mmy, RULER_PAPER)
+    c.frect(0.0, RULER_MM * mmy - 1.5, float(c.w), 1.5, RULER_EDGE)
+    c.frect(0.0, RULER_MM * mmy, float(c.w), 3.0, hex("#020617"))
 
-    // millimetres from the top edge: centimetres long, then halves, then millimetres
+    // millimetres from the top edge: centimetres long and dark, then halves, then millimetres in grey
     var mm = 0
     while float(mm) * mmx <= float(c.w) {
         let x = float(mm) * mmx
         let len = if mm % 10 == 0 { 10.0 } else if mm % 5 == 0 { 6.0 } else { 3.0 }
-        c.frect(x, 0.0, 1.0, len * mmy, RULER_INK)
-        if mm > 0 and mm % 10 == 0 { c.text(int(x) + 3, int((len + 1.0) * mmy), "{mm / 10}", RULER_INK, 11) }
+        let tick_color = if mm % 10 == 0 { RULER_INK } else if mm % 5 == 0 { RULER_MID } else { RULER_FINE }
+        let tick_w = if mm % 10 == 0 { 1.5 } else { 1.0 }
+        c.frect(x, 0.0, tick_w, len * mmy, tick_color)
+        if mm > 0 and mm % 10 == 0 { c.text(int(x) + 4, int((len + 1.0) * mmy), "{mm / 10}", RULER_INK, 12, true) }
         mm += 1
     }
 
@@ -61,21 +153,23 @@ fn draw_ruler(c: Canvas, mmx: float, mmy: float) {
     while float(q) * 6.35 * mmx <= float(c.w) {
         let x = float(q) * 6.35 * mmx
         let len = if q % 4 == 0 { 10.0 } else if q % 2 == 0 { 7.0 } else { 4.0 }
-        c.frect(x, (RULER_MM - len) * mmy, 1.0, len * mmy, RULER_INK)
-        if q > 0 and q % 4 == 0 { c.text(int(x) + 3, int((RULER_MM - 12.0) * mmy), "{q / 4} in", RULER_INK, 11) }
+        let tick_w = if q % 4 == 0 { 1.5 } else { 1.0 }
+        c.frect(x, (RULER_MM - len) * mmy, tick_w, len * mmy, RULER_INCH)
+        if q > 0 and q % 4 == 0 { c.text(int(x) + 4, int((RULER_MM - 13.0) * mmy), "{q / 4} in", RULER_INCH, 12, true) }
         q += 1
     }
 
     // real-size objects in a row under the ruler: each outline must match the real object held against the screen
     let top = CARD_TOP_MM * mmy
     let base = top + CARD_H_MM * mmy
+    c.text(int(10.0 * mmx), int((RULER_MM + 2.0) * mmy), "REAL SIZE", RULER_ACCENT, 11, true)
     let items = [
-        Reference("credit card (ID-1)", CARD_W_MM, CARD_H_MM, false),
-        Reference("SIM card", 25.0, 15.0, false),
-        Reference("nano SIM", 12.3, 8.8, false),
-        Reference("2 euro coin", 25.75, 25.75, true),
-        Reference("US quarter", 24.26, 24.26, true),
-        Reference("1 inch square", 25.4, 25.4, false),
+        Reference("credit card (ID-1)", "card", 85.60, 53.98, false),
+        Reference("SIM card", "sim", 25.0, 15.0, false),
+        Reference("nano SIM", "sim", 12.3, 8.8, false),
+        Reference("2 euro coin", "coin", 25.75, 25.75, true),
+        Reference("US quarter", "quarter", 24.26, 24.26, true),
+        Reference("1 inch square", "square", 25.4, 25.4, false),
     ]
     var x = 10.0 * mmx
     var i = 0
@@ -83,35 +177,43 @@ fn draw_ruler(c: Canvas, mmx: float, mmy: float) {
         let w = r.w * mmx
         let h = r.h * mmy
         if r.round {
-            c.fcircle(x + w / 2.0, top + h / 2.0, w / 2.0, RULER_INK)
-            c.fcircle(x + w / 2.0, top + h / 2.0, w / 2.0 - 1.5, hex("#dbeafe"))
+            c.fcircle(x + w / 2.0, top + h / 2.0, w / 2.0, OBJ_EDGE)
+            draw_round(c, r.kind, x + w / 2.0, top + h / 2.0, w / 2.0 - 1.5)
         } else {
-            c.frect(x, top, w, h, hex("#dbeafe"))
+            c.frect(x, top, w, h, OBJ_FILL)
+            draw_flat(c, r.kind, x, top, w, h)
             draw_outline(c, x, top, w, h)
         }
         // labels alternate between two heights, so the labels of neighbours do not overlap
-        let dy = if i % 2 == 0 { 8.0 } else { 44.0 }
-        c.text(int(x), int(base + dy), r.name, RULER_INK, 12)
-        c.text(int(x), int(base + dy) + 16, "{r.w:.2f} x {r.h:.2f} mm", RULER_INK, 12)
+        let dy = if i % 2 == 0 { 8.0 } else { 46.0 }
+        let dims = if r.round { "diameter {r.w:.2f} mm" } else { "{r.w:.2f} x {r.h:.2f} mm" }
+        c.text(int(x), int(base + dy), r.name, RULER_LABEL, 12, true)
+        c.text(int(x), int(base + dy) + 17, dims, RULER_MUTED, 11)
         x += w + 15.0 * mmx
         i += 1
     }
-    c.text(int(10.0 * mmx), int(base) + 80, "screen width {float(c.w) / mmx / 10.0:.1f} cm: hold a real object against its outline", RULER_INK, 12)
+    c.text(int(10.0 * mmx), int(base) + 84, "hold a real object against its outline: the edges must match", RULER_MUTED, 12)
 }
 
-fn ruler_view(st: RulerState, store: Settings, lmx: float, lmy: float) -> Node {
+// the drawing with its controls under it: the correction, the screen width and the buttons
+fn ruler_view(st: RulerState, store: Settings, lmx: float, lmy: float, mm_w: float) -> Node {
     let f = float(st.factor) / 1000.0
     let pct = float(st.factor) / 10.0 - 100.0
+    let sign = if pct >= 0.0 { "+" } else { "" }
+    // the screen is as many millimetres wide as the monitor reports, divided by the correction
+    let screen_cm = mm_w / f / 10.0
     return column([
         canvas(|c| { draw_ruler(c, lmx * f, lmy * f) }).grow(),
         row([
-            button("-1%", || { set_factor(st, store, st.factor - 10) }),
-            button("-0.1%", || { set_factor(st, store, st.factor - 1) }),
-            text("correction {pct:.1f}%"),
-            button("+0.1%", || { set_factor(st, store, st.factor + 1) }),
-            button("+1%", || { set_factor(st, store, st.factor + 10) }),
-            button("reset", || { set_factor(st, store, 1000) }),
-        ]).gap(8).padding(10),
+            text("correction {sign}{pct:.1f}%").bold().color(RULER_LABEL),
+            text("screen width {screen_cm:.1f} cm").color(RULER_MUTED),
+            spacer(),
+            button("-1%", || { set_factor(st, store, st.factor - 10) }).style(BUTTON),
+            button("-0.1%", || { set_factor(st, store, st.factor - 1) }).style(BUTTON),
+            button("+0.1%", || { set_factor(st, store, st.factor + 1) }).style(BUTTON),
+            button("+1%", || { set_factor(st, store, st.factor + 10) }).style(BUTTON),
+            button("reset", || { set_factor(st, store, 1000) }).style(BUTTON),
+        ]).gap(8).padding(12).bg(RULER_BAR).align(Align.Center),
     ]).grow()
 }
 
@@ -123,8 +225,8 @@ fn main() {
     let lmy = float(info.height) / float(info.mm_height) / scale
     let store = settings_open("atf-ruler")
     let st = RulerState(clamp_factor(store.get_int("factor", 1000)))
-    // as wide as the screen; tall enough for the ruler, the card, its labels and the buttons
+    // as wide as the screen; tall enough for the ruler, the objects, their labels and the controls
     let w = int(float(info.width) / scale)
-    let h = int((CARD_TOP_MM + CARD_H_MM + 4.0) * lmy) + 150
-    ui_run("ATF ruler", w, h, || ruler_view(st, store, lmx, lmy))
+    let h = int((CARD_TOP_MM + CARD_H_MM + 4.0) * lmy) + 170
+    ui_run("ATF ruler", w, h, || ruler_view(st, store, lmx, lmy, float(info.mm_width)))
 }
