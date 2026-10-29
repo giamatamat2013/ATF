@@ -182,6 +182,9 @@ interface Shape { fn area(self) -> float }           // structural: any type wit
 let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 ```
 
+An interface method with a body (`fn describe(self) -> str { ... }` or `=> expr`) is a default: a type without a
+method of that name uses it. Inside the default, `self` is the interface value.
+
 ## Modules
 
 `import "other"` loads `other.atf` (the path is relative to the importing file, the ending may be left out).

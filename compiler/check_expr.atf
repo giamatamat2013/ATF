@@ -286,7 +286,9 @@ impl Checker {
                 }
                 var r = TVoid
                 if m.ret != nil { r = self.resolve_type(m.ret!, {}) }
-                ms.push(IfaceMethod(m.name, ps, r))
+                var dflt = ""
+                if m.body != nil { dflt = iface_default_name(info.name, m.name) }
+                ms.push(IfaceMethod(m.name, ps, r, dflt))
             }
             info.methods = ms
         }
@@ -313,6 +315,10 @@ impl Checker {
                 if subst(ps[i + 1], bm) != m.params[i] { ok = false }
             }
             if ok { return self.get_inst(h.fi, targs) }
+        }
+        // the interface's default body, for a type with no method of that name
+        if m.dflt != "" and self.find_methods(t, m.name).len() == 0 {
+            return self.get_inst(self.fns[m.dflt], [t])
         }
         // every type can be turned into text, so  fn to_str(self) -> str  is always available
         if m.name == "to_str" and m.params.len() == 0 and m.ret == TStr {

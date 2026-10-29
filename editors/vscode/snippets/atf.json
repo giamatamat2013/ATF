@@ -114,6 +114,18 @@
       "}"
     ]
   },
+  "Interface with default method": {
+    "prefix": "interfacedef",
+    "description": "Interface with a default method (used by types that lack it)",
+    "body": [
+      "interface ${1:Name} {",
+      "\tfn ${2:name}(self) -> str",
+      "\tfn ${3:describe}(self) -> str {",
+      "\t\treturn \"${4:it is} {self.${2:name}()}\"$0",
+      "\t}",
+      "}"
+    ]
+  },
   "Match": {
     "prefix": "match",
     "description": "match with a catch-all arm",

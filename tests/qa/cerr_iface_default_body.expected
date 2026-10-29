@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: interface Named has no method 'nmae'
+  --> cerr_iface_default_body.atf:3:46
+ 3 |     fn greet(self) -> str => "hello " + self.nmae()
+   |                                              ^
+  hint: did you mean 'name'?

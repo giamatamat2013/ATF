@@ -99,6 +99,23 @@ fn type_name_of(t: Type) -> str {
     }
 }
 
+fn iface_default_name(iface: str, method: str) -> str { return iface + "." + method }
+
+// The default body of an interface method becomes a hidden generic function
+//     fn Shape.describe<$S>($self: $S, ...) -> R { let self: Shape = $self; body }
+// instantiated for each type that lacks the method. Inside it `self` is the interface
+// value, so the body can call the other methods of the interface.
+fn iface_default_fn(iface: str, m: FnDecl) -> FnDecl {
+    let pos = m.pos
+    var params = [Param("$self", mk_type(TypeK.Name("$S", []), pos), nil, pos)]
+    for i in 1..m.params.len() { params.push(m.params[i]) }
+    let bind = mk_stmt(StmtK.Let(["self"], false, mk_type(TypeK.Name(iface, []), pos),
+        mk_expr(ExprK.Ident("$self", nil), pos), false), pos)
+    var stmts = [bind]
+    for s in m.body!.stmts { stmts.push(s) }
+    return FnDecl(iface_default_name(iface, m.name), ["$S"], params, m.ret, Block(stmts, m.body!.pos), [], pos)
+}
+
 fn new_fn_info(decl: FnDecl, prelude: bool, imp: ImplInfo?) -> FnInfo {
     fninfo_counter += 1
     var own: [Type] = []
@@ -237,6 +254,12 @@ impl Checker {
                 Item.Iface(d) => {
                     self.dup_check(d.name, d.pos)
                     self.ifaces[d.name] = IfaceInfo(next_uid(), d.name, d, d.pos, prelude, nil)
+                    for m in d.methods {
+                        if m.body == nil { continue }
+                        let fi = new_fn_info(iface_default_fn(d.name, m), prelude, nil)
+                        self.fns[fi.name] = fi
+                        if prelude { self.lib_fns[fi.name] = fi }
+                    }
                 }
                 Item.Fn(d) => {
                     let old = self.fns.try_get(d.name)

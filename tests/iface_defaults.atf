@@ -1,0 +1,58 @@
+// default methods in interfaces
+
+interface Shape {
+    fn area(self) -> float
+    fn name(self) -> str => "shape"
+    fn describe(self) -> str {
+        return "{self.name()} with area {self.area():.1f}"
+    }
+    fn scaled(self, k: float) -> float => self.area() * k
+}
+
+struct Square { side: float }
+impl Square {
+    fn area(self) -> float { return self.side * self.side }
+}
+
+struct Circle { r: float }
+impl Circle {
+    fn area(self) -> float { return 3.0 * self.r * self.r }
+    fn name(self) -> str { return "circle" }      // replaces the default
+}
+
+interface Counter {
+    fn next(self) -> int
+    fn take(self, n: int) -> [int] {
+        var out: [int] = []
+        for i in 0..n { out.push(self.next()) }
+        return out
+    }
+}
+
+struct Upwards { n: int }
+impl Upwards {
+    fn next(self) -> int {
+        self.n += 1
+        return self.n
+    }
+}
+
+// a default can be used with any type, including int.
+// inside a default, `self` has only the interface's methods
+interface Show {
+    fn to_str(self) -> str
+    fn show(self) -> str => "<{self.to_str()}>"
+}
+
+fn main() {
+    let shapes: [Shape] = [Square(2.0), Circle(1.0)]
+    for s in shapes {
+        println(s.describe())
+        println(s.scaled(2.0))
+    }
+    let c: Counter = Upwards(10)
+    println(c.take(3))
+    println(c.next())
+    let items: [Show] = [5, "hi", Square(1.0)]
+    for it in items { println(it.show()) }
+}

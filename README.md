@@ -54,7 +54,7 @@ total: 5.25
 
   A "hello world" program is a 17 KB `.exe`.
 - **Many features.** Structs with methods and field defaults, enums with data and `match` (checked for
-  missing cases, with array patterns like `[first, ..rest]`), generics, closures, interfaces, optional values (`int?`) and `Result` errors with `?`,
+  missing cases, with array patterns like `[first, ..rest]`), generics, closures, interfaces (with default methods), optional values (`int?`) and `Result` errors with `?`,
   operator overloading, string interpolation with formatting, list comprehensions, the pipe
   (`text |> str.trim |> parse`, where `x |> f(a)` means `f(x, a)`), modules, `defer`,
   `try`/`catch`, labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.

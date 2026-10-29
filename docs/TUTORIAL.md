@@ -2075,6 +2075,41 @@ total 9.14
 
 If a type does not fit, the compiler says which method is missing or has the wrong type.
 
+An interface method can also have a **default body**. A type that has its own method with that name uses its own;
+a type without it gets the default. Inside a default, `self` is the interface value, so the body can call the
+interface's other methods (and only those):
+
+<!-- id: interface-defaults -->
+```atf
+interface Animal {
+    fn name(self) -> str
+    fn sound(self) -> str => "..."
+    fn speak(self) -> str {
+        return "{self.name()} says {self.sound()}"
+    }
+}
+
+struct Dog { n: str }
+impl Dog {
+    fn name(self) -> str { return self.n }
+    fn sound(self) -> str { return "woof" }
+}
+
+struct Fish {}
+impl Fish {
+    fn name(self) -> str { return "the fish" }
+}
+
+fn main() {
+    let zoo: [Animal] = [Dog("Rex"), Fish()]
+    for a in zoo { println(a.speak()) }
+}
+```
+```output
+Rex says woof
+the fish says ...
+```
+
 ---
 
 ## 22. When things go wrong

@@ -1698,6 +1698,39 @@ circle with area 3.14
 square with area 9.00
 ```
 
+למתודה בממשק אפשר לתת גם **גוף ברירת מחדל**. טיפוס שיש לו מתודה משלו בשם הזה משתמש בשלו, וטיפוס שאין לו -
+מקבל את ברירת המחדל. בתוך ברירת המחדל `self` הוא ערך הממשק, ולכן הגוף יכול לקרוא למתודות האחרות של הממשק (ורק להן):
+
+```atf
+interface Animal {
+    fn name(self) -> str
+    fn sound(self) -> str => "..."
+    fn speak(self) -> str {
+        return "{self.name()} says {self.sound()}"
+    }
+}
+
+struct Dog { n: str }
+impl Dog {
+    fn name(self) -> str { return self.n }
+    fn sound(self) -> str { return "woof" }
+}
+
+struct Fish {}
+impl Fish {
+    fn name(self) -> str { return "the fish" }
+}
+
+fn main() {
+    let zoo: [Animal] = [Dog("Rex"), Fish()]
+    for a in zoo { println(a.speak()) }
+}
+```
+```output
+Rex says woof
+the fish says ...
+```
+
 אם תנסו להעביר ל-`describe` טיפוס שחסרה לו אחת המתודות, המהדר יגיד בדיוק איזו מתודה חסרה.
 
 ### אופרטורים לטיפוסים שלכם

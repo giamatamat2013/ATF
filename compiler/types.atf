@@ -41,7 +41,8 @@ struct EnumInfo {
 struct IfaceMethod {
     name: str,
     params: [Type],          // without self
-    ret: Type
+    ret: Type,
+    dflt: str                // name of the hidden function holding the default body, "" if none
 }
 
 struct IfaceInfo {

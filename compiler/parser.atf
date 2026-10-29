@@ -336,7 +336,7 @@ impl Parser {
         while not self.at_op("}") {
             let mpos = self.pos()
             if not self.at_kw("fn") {
-                self.error("an interface contains method signatures like  fn area(self) -> float")
+                self.error("an interface contains methods like  fn area(self) -> float  (a body makes it a default)")
             }
             self.i += 1
             let mname = self.expect_ident("a method name").val
@@ -347,7 +347,16 @@ impl Parser {
             }
             var ret: TypeExpr? = nil
             if self.eat_op("->") { ret = self.parse_type() }
-            methods.push(FnDecl(mname, [], params, ret, nil, [], mpos))
+            // a method with a body is a default: types without their own method use it
+            var body: Block? = nil
+            if self.eat_op("=>") {
+                let e = self.parse_expr(0)
+                body = Block([mk_stmt(StmtK.Return(e), e.pos)], e.pos)
+            } else if self.at_op("\{") or self.tok().kind == TokKind.Newline and self.peek().kind == TokKind.Op and self.peek().val == "\{" {
+                self.skip_nl_before_brace()
+                body = self.parse_block()
+            }
+            methods.push(FnDecl(mname, [], params, ret, body, [], mpos))
             self.end_stmt()
             self.skip_nl()
         }

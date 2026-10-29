@@ -470,6 +470,16 @@ const lessons = [
     "atf": "fn sum(a: [int]) -> int {\n    return match a {\n        [] => 0\n        [first, ..rest] => first + sum(rest)\n    }\n}\n\nfn run(words: [str]) -> str {\n    return match words {\n        [\"copy\", from, to] => \"copy {from} to {to}\"\n        [\"help\"] | [] => \"usage: copy FROM TO\"\n        [.., last] if last == \"!\" => \"shouting\"\n        [cmd, ..] => \"unknown command {cmd}\"\n    }\n}\n\nfn main() {\n    println(sum([1, 2, 3, 4]))\n    println(run(\"copy a.txt b.txt\".split(\" \")))\n    println(run([]))\n    println(run([\"go\", \"!\"]))\n    println(run([\"jump\"]))\n    if let [x, y] = [3, 4] { println(x * y) }\n}\n",
     "py": null,
     "output": "10\ncopy a.txt to b.txt\nusage: copy FROM TO\nshouting\nunknown command jump\n12"
+  },
+  {
+    "chapter": "תכונות מתקדמות",
+    "title": "ממשק עם ברירת מחדל",
+    "text": [
+      "מתודה בממשק יכולה לקבל גוף. טיפוס שאין לו את המתודה מקבל את גוף ברירת המחדל, וטיפוס שיש לו - משתמש בשלו. בתוך ברירת המחדל self הוא הממשק עצמו."
+    ],
+    "atf": "interface Animal {\n    fn name(self) -> str\n    fn sound(self) -> str => \"...\"\n    fn speak(self) -> str {\n        return \"{self.name()} says {self.sound()}\"\n    }\n}\n\nstruct Dog { n: str }\nimpl Dog {\n    fn name(self) -> str { return self.n }\n    fn sound(self) -> str { return \"woof\" }\n}\n\nstruct Fish {}\nimpl Fish {\n    fn name(self) -> str { return \"the fish\" }\n}\n\nfn main() {\n    let zoo: [Animal] = [Dog(\"Rex\"), Fish()]\n    for a in zoo { println(a.speak()) }\n}\n",
+    "py": null,
+    "output": "Rex says woof\nthe fish says ..."
   }
 ];
 // LESSONS-END

@@ -1,0 +1,12 @@
+interface Named {
+    fn name(self) -> str
+    fn greet(self) -> str => "hello " + self.nmae()
+}
+
+struct Dog { n: str }
+impl Dog { fn name(self) -> str { return self.n } }
+
+fn main() {
+    let d: Named = Dog("rex")
+    println(d.greet())
+}

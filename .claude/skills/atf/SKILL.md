@@ -124,6 +124,9 @@ struct Stack<T> { items: [T] }
 impl<T> Stack<T> { fn new() -> Stack<T> { return Stack{ items: [] } } ... }
 let s: Stack<int> = Stack.new()      set_new::<int>()      Stack::<str>{ items: [] }
 interface Shape { fn area(self) -> float }           // structural: any type with these methods fits
+interface Named { fn name(self) -> str
+    fn hi(self) -> str => "hi " + self.name() }   // default body: used by types without hi();
+                                                    // inside it self is the interface (only its methods)
 let shapes: [Shape] = [Circle(1.0), Rect(2.0, 3.0)]
 ```
 
