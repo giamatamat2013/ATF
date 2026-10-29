@@ -692,6 +692,10 @@
           "match": "\\b(?:break|continue|return|defer)\\b"
         },
         {
+          "name": "keyword.control.exception.atf",
+          "match": "\\btry(?=\\s*\\{)|\\bcatch(?=\\s*(?:[A-Za-z_]\\w*\\s*)?\\{)"
+        },
+        {
           "name": "storage.type.function.atf",
           "match": "\\bfn\\b"
         },

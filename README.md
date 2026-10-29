@@ -57,7 +57,7 @@ total: 5.25
   missing cases), generics, closures, interfaces, optional values (`int?`) and `Result` errors with `?`,
   operator overloading, string interpolation with formatting, list comprehensions, the pipe
   (`text |> str.trim |> parse`, where `x |> f(a)` means `f(x, a)`), modules, `defer`,
-  labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
+  `try`/`catch`, labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),

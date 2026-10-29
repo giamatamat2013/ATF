@@ -299,6 +299,17 @@
       "defer ${0:println(\"done\")}"
     ]
   },
+  "Try / catch": {
+    "prefix": "try",
+    "description": "Run a block and catch a panic in it (the message is a str)",
+    "body": [
+      "try {",
+      "\t${1:risky()}",
+      "} catch ${2:err} {",
+      "\t${0:println(\"failed: {$2}\")}",
+      "}"
+    ]
+  },
   "Web page": {
     "prefix": "htmlpage",
     "description": "A web page with std/html and a built-in animation",

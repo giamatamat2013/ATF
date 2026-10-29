@@ -166,6 +166,8 @@ let v = parse("1")?                   // on Err, returns that Err from the curre
 `x?` is allowed only in a function whose result type is a `Result` (or an optional, which then returns `nil`).
 `panic(msg)` stops the program with a traceback; `assert(cond, msg)` panics when `cond` is false;
 `catch_panic(|| { ... })` runs code and returns the panic message as a `str?`. `defer` blocks do not run on a panic.
+`try { ... } catch err { ... }` is the statement form: the catch block runs with the message when the try block
+panics (the name is optional). Inside the try block `return`, and `break`/`continue` to an outer loop, are errors.
 
 ## Generics and interfaces
 

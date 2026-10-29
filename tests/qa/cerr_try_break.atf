@@ -1,0 +1,9 @@
+fn main() {
+    for i in 0..3 {
+        try {
+            if i == 1 { break }
+        } catch e {
+            println(e)
+        }
+    }
+}

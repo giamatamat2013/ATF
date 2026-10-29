@@ -36,7 +36,7 @@ A Hebrew tutorial is in [TUTORIAL.he.md](TUTORIAL.he.md). Every detail of the la
 19. [`Result` and the `?` operator](#19-result-and-the--operator)
 20. [Closures and higher-order functions](#20-closures-and-higher-order-functions)
 21. [Generics and interfaces](#21-generics-and-interfaces)
-22. [When things go wrong: panics, `assert`, `catch_panic`, `defer`](#22-when-things-go-wrong)
+22. [When things go wrong: panics, `assert`, `catch_panic`, `try`/`catch`, `defer`](#22-when-things-go-wrong)
 23. [Reading a traceback](#23-reading-a-traceback)
 24. [Input, output and files](#24-input-output-and-files)
 25. [Modules: `import`](#25-modules-import)
@@ -2105,6 +2105,41 @@ parsed must be positive
 
 Use `catch_panic` sparingly — for example to keep a long-running program alive when one task fails.
 For failures you expect, `nil` and `Result` are clearer.
+
+### try / catch
+
+`try { ... } catch err { ... }` is the same thing as a statement: if the try block panics, the catch block runs
+with the message in `err` (a `str`); otherwise it is skipped. The name after `catch` is optional.
+
+<!-- id: try-catch -->
+```atf
+fn main() {
+    var total = 0
+    for text in ["10", "x7", "5"] {
+        try {
+            total += text.to_int()
+        } catch err {
+            println("skipped: {err}")
+        }
+    }
+    println("total {total}")
+
+    try {
+        assert(total > 100, "total is too small")
+    } catch {
+        println("the catch name is optional")
+    }
+}
+```
+```output
+skipped: cannot convert "x7" to an int
+total 15
+the catch name is optional
+```
+
+The try block runs as a closure, so `return`, and a `break` or `continue` aimed at a loop outside the try,
+are compile errors inside it: set a variable and act on it after the try. `try` and `catch` are not reserved
+words, so older code that uses them as names still compiles.
 
 ### defer: cleanup code
 

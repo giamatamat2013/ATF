@@ -109,6 +109,8 @@ fn parse(s: str) -> Result<int, str> {
 let v = parse("1")?          // on Err: return it from the current fn (also works for T? -> returns nil)
 r.unwrap_or(0)  r.is_ok()  r.is_err()
 panic("msg")  assert(cond, "msg")  catch_panic(|| { ... }) // returns str? (the message)
+try { risky() } catch err { println(err) }   // statement form of catch_panic; name optional: catch { }
+                             // no `return`, nor break/continue to an outer loop, inside the try block
 defer println("cleanup")     // runs at end of the enclosing block, LIFO; NOT run on panic
 ```
 An optional cannot be used as a plain value (`n + 1` with `n: int?` is a compile error): unwrap with `!`, `??` or `if let`.

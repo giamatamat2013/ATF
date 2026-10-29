@@ -44,11 +44,13 @@ struct Parser {
     toks: [Token],
     i: int,
     file: str,
-    no_struct: bool
+    no_struct: bool,
+    in_try: bool,           // inside the body of a try block (which becomes a closure)
+    try_loops: int          // loops opened inside that try body
 }
 
 fn new_parser(toks: [Token], file: str) -> Parser {
-    return Parser(toks, 0, file, false)
+    return Parser(toks, 0, file, false, false, 0)
 }
 
 impl Parser {
@@ -587,18 +589,30 @@ impl Parser {
                 self.i += 1
                 let cond = self.parse_cond()
                 self.skip_nl_before_brace()
+                self.try_loops += 1
                 let body = self.parse_block()
+                self.try_loops -= 1
                 self.end_stmt_soft()
                 return mk_stmt(StmtK.While(cond, body), pos)
             }
             if k == "loop" {
                 self.i += 1
                 self.skip_nl_before_brace()
+                self.try_loops += 1
                 let body = self.parse_block()
+                self.try_loops -= 1
                 self.end_stmt_soft()
                 return mk_stmt(StmtK.Loop(body), pos)
             }
-            if k == "for" { return self.parse_for() }
+            if k == "for" {
+                self.try_loops += 1
+                let fs = self.parse_for()
+                self.try_loops -= 1
+                return fs
+            }
+            if (k == "break" or k == "continue") and self.in_try and self.try_loops == 0 {
+                self.error("'{k}' cannot leave a try block (its body runs as a closure); set a variable and test it after the try")
+            }
             if k == "break" {
                 self.i += 1
                 if self.tok().kind == TokKind.Ident {
@@ -622,6 +636,9 @@ impl Parser {
                 return mk_stmt(StmtK.Continue, pos)
             }
             if k == "return" {
+                if self.in_try {
+                    self.error("'return' cannot leave a try block (its body runs as a closure); set a variable and return after the try")
+                }
                 self.i += 1
                 var val: Expr? = nil
                 if not (self.tok().kind == TokKind.Newline or self.tok().kind == TokKind.Eof or self.at_op("}") or self.at_op(";")) {
@@ -645,6 +662,10 @@ impl Parser {
             let b = self.parse_block()
             self.end_stmt_soft()
             return mk_stmt(StmtK.BlockS(b), pos)
+        }
+        // try { ... } catch err { ... }   ('try' and 'catch' are not reserved words)
+        if t.kind == TokKind.Ident and t.val == "try" and self.peek(1).kind == TokKind.Op and self.peek(1).val == "\{" {
+            return self.parse_try(pos)
         }
         // label: for/while/loop
         if t.kind == TokKind.Ident and self.peek(1).kind == TokKind.Op and self.peek(1).val == ":" and self.peek(2).kind == TokKind.Kw {
@@ -704,6 +725,39 @@ impl Parser {
             }
         }
         return mk_stmt(StmtK.BlockS(Block(stmts, pos)), pos)
+    }
+
+    // try { body } catch [name] { handler }
+    // becomes:  if let name = catch_panic(fn() { body }) { handler }
+    fn parse_try(self, pos: Pos) -> Stmt {
+        self.i += 1     // 'try'
+        let (st, sl) = (self.in_try, self.try_loops)
+        self.in_try = true
+        self.try_loops = 0
+        let body = self.parse_block()
+        self.in_try = st
+        self.try_loops = sl
+        var j = self.i
+        while self.toks[j].kind == TokKind.Newline { j += 1 }
+        let ct = self.toks[j]
+        if not (ct.kind == TokKind.Ident and ct.val == "catch") {
+            fail(pos, "this try block has no 'catch' after it", "write: try \{ ... } catch err \{ ... }")
+        }
+        self.i = j + 1
+        var name = "$caught{pos.line}_{pos.col}"
+        if self.tok().kind == TokKind.Ident {
+            name = self.tok().val
+            self.i += 1
+        }
+        self.skip_nl_before_brace()
+        if not self.at_op("\{") {
+            self.error("expected '\{' to start the catch block")
+        }
+        let handler = self.parse_block()
+        self.end_stmt_soft()
+        let lam = mk_expr(ExprK.Lambda([], nil, body), pos)
+        let call = mk_expr(ExprK.Call(mk_expr(ExprK.Ident("catch_panic", nil), pos), [Arg("", lam, pos)]), pos)
+        return mk_stmt(StmtK.If(Cond.Let(Pattern(PatK.Bind(name), pos), call), handler, nil), pos)
     }
 
     // after a block-ending statement a terminator is optional
@@ -1342,7 +1396,12 @@ impl Parser {
             if v == "if" { return self.parse_if_expr() }
             if v == "match" { return self.parse_match_expr() }
             if v == "fn" {
+                let (st, sl) = (self.in_try, self.try_loops)
+                self.in_try = false
+                self.try_loops = 0
                 let f = self.parse_fn([], true)
+                self.in_try = st
+                self.try_loops = sl
                 var lps: [LParam] = []
                 for p in f.params { lps.push(LParam(p.name, p.ty)) }
                 return mk_expr(ExprK.Lambda(lps, f.ret, f.body!), pos)
@@ -1439,6 +1498,9 @@ impl Parser {
                 }
                 var ret: TypeExpr? = nil
                 var body = Block([], pos)
+                let (st, sl) = (self.in_try, self.try_loops)
+                self.in_try = false
+                self.try_loops = 0
                 if self.eat_op("->") {
                     ret = self.parse_type()
                     body = self.parse_block()
@@ -1457,6 +1519,8 @@ impl Parser {
                         body = Block([mk_stmt(StmtK.Return(e), e.pos)], e.pos)
                     }
                 }
+                self.in_try = st
+                self.try_loops = sl
                 return mk_expr(ExprK.Lambda(params, ret, body), pos)
             }
         }

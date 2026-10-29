@@ -450,6 +450,16 @@ const lessons = [
     "atf": "import \"std/websocket\"\n\nfn main() {\n    let server = ws_listen(0).unwrap()               // port 0: any free port\n\n    // both sides in one program, so the client handshake goes in two halves\n    // (a normal client just calls ws_connect(\"ws://host:port/chat\"))\n    let conn = tcp_connect(\"127.0.0.1\", server.port).unwrap()\n    let key = ws_new_key()\n    conn.write(ws_handshake_request(\"127.0.0.1\", \"/chat\", key))\n    let srv = server.accept().unwrap()\n    let cli = ws_handshake_finish(conn, key).unwrap()\n\n    cli.send(\"hello\")\n    if let m = srv.receive() { srv.send(\"you said {m.data} on {srv.path}\") }\n    if let m = cli.receive() { println(m.kind, m.data) }\n    cli.close(1000, \"done\")\n    if let m = srv.receive() { println(m.kind, m.code, m.data) }\n}\n",
     "py": null,
     "output": "text you said hello on /chat\nclose 1000 done"
+  },
+  {
+    "chapter": "תכונות מתקדמות",
+    "title": "try / catch: תפיסת שגיאות",
+    "text": [
+      "try { ... } catch err { ... } מריץ בלוק, ואם הוא עושה panic (מספר לא תקין, אינדקס מחוץ לטווח, assert שנכשל) - בלוק ה-catch רץ עם ההודעה במקום שהתוכנית תיעצר. השם אחרי catch לא חובה."
+    ],
+    "atf": "fn main() {\n    var total = 0\n    for text in [\"10\", \"x7\", \"5\"] {\n        try {\n            total += text.to_int()\n        } catch err {\n            println(\"skipped: {err}\")\n        }\n    }\n    println(\"total {total}\")\n\n    try {\n        assert(total > 100, \"total is too small\")\n    } catch {\n        println(\"the catch name is optional\")\n    }\n}\n",
+    "py": null,
+    "output": "skipped: cannot convert \"x7\" to an int\ntotal 15\nthe catch name is optional"
   }
 ];
 // LESSONS-END

@@ -2129,6 +2129,40 @@ the program goes on
 
 השתמשו בזה במשורה. לכישלונות צפויים, `nil` ו-`Result` ברורים יותר.
 
+### try / catch
+
+`try { ... } catch err { ... }` עושה את אותו הדבר כפקודה: אם בלוק ה-try עושה panic, בלוק ה-catch רץ וההודעה
+נמצאת ב-`err` (מסוג `str`); אחרת הוא מדולג. השם אחרי `catch` לא חובה.
+
+```atf
+fn main() {
+    var total = 0
+    for text in ["10", "x7", "5"] {
+        try {
+            total += text.to_int()
+        } catch err {
+            println("skipped: {err}")
+        }
+    }
+    println("total {total}")
+
+    try {
+        assert(total > 100, "total is too small")
+    } catch {
+        println("the catch name is optional")
+    }
+}
+```
+```output
+skipped: cannot convert "x7" to an int
+total 15
+the catch name is optional
+```
+
+בלוק ה-try רץ כפונקציה אנונימית, ולכן `return`, ו-`break` או `continue` שמכוונים ללולאה שמחוץ ל-try, הם שגיאת
+קומפילציה בתוכו: שמרו ערך במשתנה ופעלו לפיו אחרי ה-try. `try` ו-`catch` אינן מילים שמורות, כך שקוד ישן
+שמשתמש בהן כשמות ממשיך לעבוד.
+
 ### תרגיל 16.1
 
 כתבו פונקציה `parse_percent(text: str) -> Result<int, str>` שמחזירה שגיאה אם הטקסט אינו מספר, או אם המספר אינו בין 0 ל-100.

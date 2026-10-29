@@ -1,0 +1,82 @@
+// try { ... } catch err { ... }: catching a panic as a statement
+
+fn risky(n: int) -> int {
+    if n < 0 { panic("negative: {n}") }
+    return n * 2
+}
+
+fn main() {
+    // no panic: the catch block does not run
+    var total = 0
+    try {
+        total = risky(5)
+    } catch err {
+        println("not reached: {err}")
+    }
+    println("total {total}")
+
+    // a panic: the message arrives in the catch block
+    try {
+        total = risky(-3)
+        println("not reached")
+    } catch err {
+        println("caught: {err}")
+    }
+
+    // runtime errors are caught too
+    let a = [1, 2, 3]
+    try {
+        println(a[10])
+    } catch e {
+        println("index error caught: {e.contains("index")}")
+    }
+
+    // catch without a name
+    try {
+        let m: {str: int} = {}
+        println(m["missing"])
+    } catch {
+        println("missing key")
+    }
+
+    // catch on its own line, loops inside the try body
+    var found = -1
+    try {
+        for i in 0..10 {
+            if i == 2 { continue }
+            if i == 4 {
+                found = i
+                break
+            }
+        }
+        assert(found == 99, "found is {found}")
+    }
+    catch msg {
+        println("assert: {msg}")
+    }
+
+    // nested
+    try {
+        try {
+            panic("inner")
+        } catch e {
+            println("inner caught: {e}")
+            panic("outer from handler")
+        }
+    } catch e {
+        println("outer caught: {e}")
+    }
+
+    // a closure inside the try body may return
+    try {
+        let f = |x: int| -> int { return x + 1 }
+        println(f(41))
+    } catch e {
+        println("not reached")
+    }
+
+    // 'try' and 'catch' are still usable as names
+    let try = 3
+    let catch = 4
+    println(try + catch)
+}

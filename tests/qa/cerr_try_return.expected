@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: 'return' cannot leave a try block (its body runs as a closure); set a variable and return after the try
+  --> cerr_try_return.atf:3:9
+ 3 |         return 1
+   |         ^

@@ -1,0 +1,9 @@
+total 10
+caught: negative: -3
+index error caught: true
+missing key
+assert: found is 4
+inner caught: inner
+outer caught: outer from handler
+42
+7

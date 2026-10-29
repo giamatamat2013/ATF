@@ -1,0 +1,5 @@
+COMPILE ERROR
+error: 'break' cannot leave a try block (its body runs as a closure); set a variable and test it after the try
+  --> cerr_try_break.atf:4:25
+ 4 |             if i == 1 { break }
+   |                         ^
