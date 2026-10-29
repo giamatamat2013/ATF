@@ -1,0 +1,11 @@
+// importing by hand still works, also for only some of the modules: std/json is imported here,
+// std/base64 is imported by the compiler
+import "std/json"
+import "std/path"
+
+fn main() {
+    let r = json_parse("[true]")
+    println(json_stringify(r.unwrap()))
+    println(path_basename("x/y.atf"))
+    println(b64_encode("hi"))
+}

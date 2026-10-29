@@ -1,0 +1,35 @@
+// Builds the text of stdlib/index.txt: which standard-library module defines each top-level name.
+// The compilers read that file to import a module by themselves when a program uses one of its names.
+// Run from the repo root:  bin/atf.exe run tools/make_stdlib_index.atf   (tests/stdlib_index_fresh.atf checks it)
+import "../compiler/autoimport"
+import "std/fs"
+
+fn index_names_in(path: str) -> [str] {
+    var out: [str] = []
+    for line in (read_file(path) ?? "").replace("\r\n", "\n").lines() {
+        let nm = ai_decl_name(line)
+        if nm != "" and not nm.starts_with("_") { out.push(nm) }
+    }
+    return out
+}
+
+fn build_stdlib_index() -> str {
+    var prelude: {str: bool} = {}
+    for nm in index_names_in("atf/stdlib/prelude.atf") { prelude[nm] = true }
+    var owner: {str: str} = {}
+    var ambiguous: {str: bool} = {}
+    for f in (fs_list_dir("stdlib") ?? []).sorted() {
+        if not f.ends_with(".atf") or f == "std.atf" { continue }
+        let module = f[..f.len() - 4]
+        for nm in index_names_in("stdlib/" + f) {
+            if nm in prelude { continue }
+            if nm in owner and owner[nm] != module { ambiguous[nm] = true }
+            owner[nm] = module
+        }
+    }
+    var lines: [str] = []
+    for nm in owner.keys().sorted() {
+        if not (nm in ambiguous) { lines.push(nm + " " + owner[nm]) }
+    }
+    return "\n".join(lines) + "\n"
+}

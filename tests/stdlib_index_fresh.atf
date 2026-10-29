@@ -1,0 +1,14 @@
+// stdlib/index.txt (the table behind automatic imports) matches the standard library.
+// If this fails, run:  bin/atf.exe run tools/make_stdlib_index.atf
+import "../tools/stdlib_index"
+
+fn main() -> int {
+    let want = build_stdlib_index()
+    let have = (read_file("stdlib/index.txt") ?? "").replace("\r\n", "\n")
+    if want != have {
+        println("stdlib/index.txt is out of date: run  bin/atf.exe run tools/make_stdlib_index.atf")
+        return 1
+    }
+    println("index is up to date")
+    return 0
+}

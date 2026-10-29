@@ -2529,6 +2529,12 @@ Without `rand_seed` the numbers are different each time.
 
 ## 25. Modules: `import`
 
+The standard library needs no `import` line: when a program uses a name from a `std/` module (`json_parse`, `ui_run`,
+`Node`, ...), the compiler imports that module itself. Writing `import "std/json"` by hand still works, also for only some
+of the modules, and it is never required. A name that your own program defines always wins over the library's. The
+table that maps names to modules is `stdlib/index.txt`. If you define a name that a module also defines, and you use
+that module, you get the usual "defined twice" error, exactly as with a hand-written import.
+
 Large programs can be split over several files. `import "path"` loads another `.atf` file (the path is relative to the
 importing file, and the `.atf` ending may be left out). All the functions, types, constants and global variables of the
 imported file become available. Here is a program in two files, `shapes.atf` and `main.atf`, in the same folder:
@@ -3340,7 +3346,7 @@ Beyond the basics, `std/ui` has what a whole application needs:
 | a dialog | `dialog("Title", body, [buttons], on_close)`, or `modal(content, on_close)` for your own card |
 | a hint on hover | `.tooltip("text")` |
 | small symbols | `icon("save")`, `icon("search")`, ... (a list is in [STDLIB.md](STDLIB.md#stdui)) |
-| drawing | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, with `.on_pointer(\|x, y\| ..)`. `c.pixels(x, y, w, h, colors, pw, ph)` draws a picture from an `[int]` of `0xRRGGBB` values: fast enough for software rendering. It scales with square blocks; `c.pixels_smooth(..)` takes the same arguments and scales smoothly, so a low resolution scene does not look pixelated. There is no resolution limit: `c.pixel_w()` and `c.pixel_h()` give the canvas size in real screen pixels, so a scene can be drawn at the full resolution of the window (with `.grow()` it follows the window size). `minecraft.atf` and `wolfenstein.atf` do this and lower the resolution by themselves only when a frame takes too long. For games: `ui_key_down("w")`, `ui_mouse_held(0)` (0 left, 1 right, 2 middle), and mouse look with `ui_mouse_capture(true)` + `ui_mouse_delta()` |
+| drawing | `canvas(\|c\| { c.rect(..); c.circle(..); c.line(..); c.text(..) })`, with `.on_pointer(\|x, y\| ..)`. Inside the handler `ui_pointer_button()` tells which button it was (0 left, 1 right; a right click reaches only `on_pointer`). `c.frect(..)`, `c.fcircle(..)` and `c.fline(..)` take float coordinates, so game code needs no `int(..)`. `floor_int(x)`, `ceil_int(x)` and `round_int(x)` give an int directly. `c.pixels(x, y, w, h, colors, pw, ph)` draws a picture from an `[int]` of `0xRRGGBB` values: fast enough for software rendering. It scales with square blocks; `c.pixels_smooth(..)` takes the same arguments and scales smoothly, so a low resolution scene does not look pixelated. There is no resolution limit: `c.pixel_w()` and `c.pixel_h()` give the canvas size in real screen pixels, so a scene can be drawn at the full resolution of the window (with `.grow()` it follows the window size). `minecraft.atf` and `wolfenstein.atf` do this and lower the resolution by themselves only when a frame takes too long. For games: `ui_key_down("w")`, `ui_mouse_held(0)` (0 left, 1 right, 2 middle), and mouse look with `ui_mouse_capture(true)` + `ui_mouse_delta()` |
 | shortcuts | `ui_shortcut("ctrl+s", save)` |
 | standard dialogs | `message_box`, `confirm_box`, `open_file_dialog`, `save_file_dialog` |
 | the clipboard | `clipboard_get()`, `clipboard_set(text)` |

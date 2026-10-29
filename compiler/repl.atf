@@ -98,7 +98,7 @@ fn repl_try(r: Repl, src: str, run_program: bool, skip: int) -> (bool, str, int)
     var interpreted: str? = nil
     let ok = guarded(|| {
         load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
-        load_module(path, false, nil, NOPOS)
+        load_user_program(path)
         var ms: [([Item], bool)] = []
         for m in modules { ms.push((m.items, m.prelude)) }
         let prog = check_program(ms)

@@ -1,0 +1,12 @@
+// no  import  lines: the std modules this program uses are imported by the compiler
+// a name the program defines itself (here  text_title ) is not taken from the library
+fn text_title(s: str) -> str => "mine: {s}"
+
+fn main() {
+    let r = json_parse("[1, 2, \{\"a\": true}]")
+    println(json_stringify(r.unwrap()))
+    println(text_title("x"))
+    println(path_basename("a/b.txt"))
+    // json_parse in a comment or "json_parse in a string" does not count by itself
+    println("done")
+}

@@ -970,6 +970,18 @@ impl Canvas {
     fn rect(self, x: int, y: int, w: int, h: int, c: int) {
         ui_fill_rect(self.ox + ui_sc(x), self.oy + ui_sc(y), ui_sc(w), ui_sc(h), c)
     }
+    // rect / circle / line with float coordinates (rounded to the nearest pixel): no int(...) in game code
+    fn frect(self, x: float, y: float, w: float, h: float, c: int) {
+        let x0 = int(floor(x + 0.5))
+        let y0 = int(floor(y + 0.5))
+        self.rect(x0, y0, int(floor(x + w + 0.5)) - x0, int(floor(y + h + 0.5)) - y0, c)
+    }
+    fn fcircle(self, cx: float, cy: float, r: float, c: int) {
+        self.circle(int(floor(cx + 0.5)), int(floor(cy + 0.5)), int(floor(r + 0.5)), c)
+    }
+    fn fline(self, x1: float, y1: float, x2: float, y2: float, width: float, c: int) {
+        self.line(int(floor(x1 + 0.5)), int(floor(y1 + 0.5)), int(floor(x2 + 0.5)), int(floor(y2 + 0.5)), int(floor(width + 0.5)), c)
+    }
     // rectangle with rounded corners
     fn rrect(self, x: int, y: int, w: int, h: int, r: int, c: int) {
         let rr = ui_sc(r)
@@ -2181,6 +2193,7 @@ var ui_anims: {str: UiAnim} = {}
 var ui_animating = false
 var ui_hov: {str: bool} = {}
 var ui_press = ""
+var ui_ptr_btn = 0
 var ui_focus = ""
 var ui_caret = 0
 var ui_caret_on = true
@@ -3269,6 +3282,26 @@ fn ui_mouse_down(x: int, y: int) {
     ui_invalidate()
 }
 
+// which button caused the current on_pointer call: 0 = left, 1 = right
+fn ui_pointer_button() -> int { return ui_ptr_btn }
+
+// press the right button: only the canvas under the pointer (its on_pointer handler) reacts
+fn ui_mouse_down_right(x: int, y: int) {
+    ui_mx = x
+    ui_my = y
+    if ui_open.len() > 0 and not ui_ovl_hit { return }
+    for c in ui_chain(x, y) {
+        if c.ptr_f != nil {
+            ui_ptr_btn = 1
+            ui_call_pointer(c, x, y)
+            ui_ptr_btn = 0
+            ui_invalidate()
+            return
+        }
+        if c.blocks { return }
+    }
+}
+
 fn ui_mouse_up(x: int, y: int) {
     if ui_hwnd != 0 { ReleaseCapture() }
     let was = ui_press
@@ -3841,6 +3874,9 @@ fn ui_wndproc(h: int, msg: int, wp: int, lp: int) -> int {
     } else if m == 514 {
         ui_mouse_up(ui_lo16s(lp), ui_lo16s(lp >> 16))
         return 0
+    } else if m == 516 {
+        ui_mouse_down_right(ui_lo16s(lp), ui_lo16s(lp >> 16))
+        return 0
     } else if m == 522 {
         ui_wheel(ui_lo16s(wp >> 16))
         return 0
@@ -4005,6 +4041,12 @@ fn ui_answers(yes: bool, path: str) {
 
 // the text of the last message_box or confirm_box
 fn ui_last_dialog() -> str { return ui_last_message }
+
+// move the mouse to (x, y) and press the right button (reaches on_pointer handlers only)
+fn ui_click_right(x: int, y: int) {
+    ui_mouse_move(x, y)
+    ui_mouse_down_right(x, y)
+}
 
 // move the mouse to (x, y), press and release the left button
 fn ui_click(x: int, y: int) {

@@ -160,6 +160,9 @@ These are part of the language itself (they accept values of any printable type 
 - `fn ln(x: float) -> float` - natural logarithm (the same as log)
 - `fn lerp(a: float, b: float, t: float) -> float` - The position between a and b: lerp(10.0, 20.0, 0.5) == 15.0 (t = 0.0 gives a, t = 1.0 gives b)
 - `fn fract(x: float) -> float` - the part after the decimal point: fract(2.75) == 0.75, fract(-0.25) == 0.75
+- `fn floor_int(x: float) -> int` - floor, ceil and round straight to an int: floor_int(-2.5) == -3, ceil_int(2.1) == 3, round_int(2.5) == 3
+- `fn ceil_int(x: float) -> int`
+- `fn round_int(x: float) -> int`
 - `fn array_repeat<T>(value: T, n: int) -> [T]` - an array of n copies of value: array_repeat(0, 4) == [0, 0, 0, 0]
 - `fn is_nan(x: float) -> bool` - true when x is nan (not a number), for example INF - INF
 - `fn is_inf(x: float) -> bool` - true when x is INF or -INF
@@ -2905,6 +2908,9 @@ struct UiColorTween {
 - `.mouse_y() -> int`
 - `.hovered() -> bool` - true while the pointer is over the canvas
 - `.rect(x: int, y: int, w: int, h: int, c: int)`
+- `.frect(x: float, y: float, w: float, h: float, c: int)` - rect / circle / line with float coordinates (rounded to the nearest pixel): no int(...) in game code
+- `.fcircle(cx: float, cy: float, r: float, c: int)`
+- `.fline(x1: float, y1: float, x2: float, y2: float, width: float, c: int)`
 - `.rrect(x: int, y: int, w: int, h: int, r: int, c: int)` - rectangle with rounded corners
 - `.outline(x: int, y: int, w: int, h: int, r: int, bw: int, c: int)` - only the border of a rectangle (bw pixels wide)
 - `.circle(cx: int, cy: int, r: int, c: int)`

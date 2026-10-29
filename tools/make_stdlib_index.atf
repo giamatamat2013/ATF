@@ -1,0 +1,9 @@
+// Rewrites stdlib/index.txt. Run from the repo root after adding, renaming or removing a top-level name in stdlib/*.atf:
+//   bin/atf.exe run tools/make_stdlib_index.atf
+import "stdlib_index"
+
+fn main() {
+    let text = build_stdlib_index()
+    write_file("stdlib/index.txt", text)
+    println("wrote stdlib/index.txt: {text.lines().len()} names")
+}

@@ -45,6 +45,9 @@ python tests/check_docs.py         compiles and runs every code sample in README
 python tests/compare_stages.py     bootstrap and native compiler behave the same
 ```
 
+- Tests are written in ATF (`tests/*.atf` + `.out`); Python is only for the runners and for the bootstrap compiler `atf/`.
+- Adding, renaming or removing a top-level name in `stdlib/*.atf` needs `bin/atf.exe run tools/make_stdlib_index.atf`, which rewrites `stdlib/index.txt` (`tests/stdlib_index_fresh.atf` fails when it is stale). A std module's own top-level names must not clash with another module's: a clashing name is left out of the index and needs an explicit `import`.
+
 - A compiler fix goes into both `compiler/*.atf` and `atf/*.py`, so the two compilers stay in step.
 - After changing any docs, run `python tests/check_docs.py`.
   - A sample that must not run goes in an ` ```atf nocheck ` block, e.g. one that opens a window.

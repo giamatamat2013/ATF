@@ -1,0 +1,25 @@
+import "std/ui"
+
+var log = ""
+var shot = 0
+
+fn view() -> Node {
+    return canvas(|c| {
+        c.frect(1.4, 2.6, 10.2, 5.0, rgb(255, 0, 0))
+        c.fcircle(30.4, 20.0, 5.0, rgb(0, 0, 255))
+        c.fline(0.0, 0.0, 40.0, 10.0, 2.0, BLACK)
+        shot += 1
+    }).size(100, 40).on_pointer(|x, y| {
+        log = log + "{ui_pointer_button()}:{x},{y} "
+    })
+}
+
+fn main() {
+    ui_headless(view, 100, 40)
+    ui_click(10, 12)
+    ui_click_right(20, 5)
+    ui_click(3, 4)
+    println(log.trim())
+    println(ui_pointer_button())
+    println("{floor_int(-2.5)} {ceil_int(2.1)} {round_int(2.5)}")
+}

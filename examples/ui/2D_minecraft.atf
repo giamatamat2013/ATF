@@ -1,0 +1,217 @@
+atf "1.2.0"
+
+// A very basic Minecraft-like sandbox (2D side view).
+// A/D or arrows: walk, W/Space/Up: jump, 1-5: pick a block.
+// Left click: mine a block. Right click: place the selected block.
+
+// no  import  needed: the compiler imports std/ui because the program uses it
+
+const TS = 24
+const WW = 96
+const WH = 48
+const VW = 960
+const VH = 540
+const REACH = 6.0
+
+struct Game {
+    world: [int],
+    px: float,
+    py: float,
+    vx: float,
+    vy: float,
+    sel: int = 1,
+    ground: bool = false,
+    inv: [int],
+}
+
+fn block_color(b: int) -> int {
+    return match b {
+        1 => rgb(95, 170, 60)
+        2 => rgb(134, 96, 67)
+        3 => rgb(125, 125, 130)
+        4 => rgb(110, 80, 45)
+        5 => rgb(190, 150, 90)
+        6 => rgb(50, 130, 50)
+        _ => rgb(0, 0, 0)
+    }
+}
+
+fn block_name(b: int) -> str {
+    return match b {
+        1 => "Grass"
+        2 => "Dirt"
+        3 => "Stone"
+        4 => "Wood"
+        5 => "Planks"
+        _ => "?"
+    }
+}
+
+fn tile_at(g: Game, x: int, y: int) -> int {
+    if x < 0 or x >= WW or y < 0 or y >= WH { return 0 }
+    return g.world[y * WW + x]
+}
+
+fn is_solid(g: Game, x: int, y: int) -> bool {
+    if x < 0 or x >= WW or y >= WH { return true }
+    if y < 0 { return false }
+    return g.world[y * WW + x] != 0
+}
+
+fn new_game() -> Game {
+    var w: [int] = array_make::<int>(WW * WH)
+    var inv: [int] = [0, 0, 0, 0, 0, 0]
+    var heights: [int] = array_make::<int>(WW)
+    for x in 0..WW {
+        let fx = float(x)
+        heights[x] = 20 + int(sin(fx * 0.15) * 3.0 + sin(fx * 0.4) * 1.5)
+    }
+    for x in 0..WW {
+        let h = heights[x]
+        for y in h..WH {
+            var b = 3
+            if y == h { b = 1 } else if y < h + 4 { b = 2 }
+            w[y * WW + x] = b
+        }
+    }
+    rand_seed(7)
+    var x = 4
+    while x < WW - 4 {
+        let h = heights[x]
+        for t in 1..=4 { w[(h - t) * WW + x] = 4 }
+        for ly in (h - 7)..(h - 3) {
+            for lx in (x - 2)..=(x + 2) {
+                if w[ly * WW + lx] == 0 { w[ly * WW + lx] = 6 }
+            }
+        }
+        x += rand_int(6, 11)
+    }
+    let g = Game{ world: w, px: 3.5, py: float(heights[3] - 1), vx: 0.0, vy: 0.0, inv: inv }
+    return g
+}
+
+fn hits(g: Game, x: float, y: float) -> bool {
+    let x0 = int(floor(x - 0.35))
+    let x1 = int(floor(x + 0.35))
+    let y0 = int(floor(y - 1.8))
+    let y1 = int(floor(y - 0.001))
+    for ty in y0..=y1 {
+        for tx in x0..=x1 {
+            if is_solid(g, tx, ty) { return true }
+        }
+    }
+    return false
+}
+
+fn step(g: Game) {
+    var dir = 0.0
+    if ui_key_down("a") or ui_key_down("left") { dir -= 1.0 }
+    if ui_key_down("d") or ui_key_down("right") { dir += 1.0 }
+    g.vx = dir * 0.13
+    if g.ground and (ui_key_down("w") or ui_key_down("up") or ui_key_down("space")) {
+        g.vy = -0.5
+        g.ground = false
+    }
+    for k in 1..=5 {
+        if ui_key_down(str(k)) { g.sel = k }
+    }
+    g.vy += 0.035
+    if g.vy > 0.9 { g.vy = 0.9 }
+
+    let nx = g.px + g.vx
+    if not hits(g, nx, g.py) { g.px = nx }
+
+    let ny = g.py + g.vy
+    g.ground = false
+    if hits(g, g.px, ny) {
+        if g.vy > 0.0 {
+            g.py = floor(ny)
+            g.ground = true
+        } else {
+            g.py = floor(ny - 1.8) + 2.8
+        }
+        g.vy = 0.0
+    } else {
+        g.py = ny
+    }
+}
+
+fn click(g: Game, mx: int, my: int) {
+    let camx = g.px - float(VW) / float(TS) / 2.0
+    let camy = g.py - 1.0 - float(VH) / float(TS) / 2.0
+    let tx = int(floor(float(mx) / float(TS) + camx))
+    let ty = int(floor(float(my) / float(TS) + camy))
+    if tx < 0 or tx >= WW or ty < 0 or ty >= WH { return }
+    let dx = float(tx) + 0.5 - g.px
+    let dy = float(ty) + 0.5 - (g.py - 0.9)
+    if sqrt(dx * dx + dy * dy) > REACH { return }
+    let b = g.world[ty * WW + tx]
+    if ui_pointer_button() == 0 {
+        if b == 0 { return }
+        g.world[ty * WW + tx] = 0
+        var kind = b
+        if b == 6 { kind = 0 }
+        if kind > 0 { g.inv[kind] += 1 }
+    } else if b == 0 and g.inv[g.sel] > 0 {
+        g.world[ty * WW + tx] = g.sel
+        if hits(g, g.px, g.py) {
+            g.world[ty * WW + tx] = 0
+        } else {
+            g.inv[g.sel] -= 1
+        }
+    }
+}
+
+fn draw(g: Game, c: Canvas) {
+    c.rect(0, 0, VW, VH, rgb(135, 195, 235))
+    let camx = g.px - float(VW) / float(TS) / 2.0
+    let camy = g.py - 1.0 - float(VH) / float(TS) / 2.0
+    let x0 = int(floor(camx))
+    let y0 = int(floor(camy))
+    for ty in y0..=(y0 + VH / TS + 1) {
+        for tx in x0..=(x0 + VW / TS + 1) {
+            let b = tile_at(g, tx, ty)
+            if b != 0 {
+                let sx = int((float(tx) - camx) * float(TS))
+                let sy = int((float(ty) - camy) * float(TS))
+                c.rect(sx, sy, TS, TS, block_color(b))
+                c.outline(sx, sy, TS, TS, 0, 1, rgba(0, 0, 0, 0.18))
+            }
+        }
+    }
+    // player
+    let pxs = (g.px - 0.35 - camx) * float(TS)
+    let pys = (g.py - 1.8 - camy) * float(TS)
+    c.frect(pxs, pys, 0.7 * float(TS), 1.8 * float(TS), rgb(60, 90, 200))
+    c.frect(pxs, pys, 0.7 * float(TS), 0.6 * float(TS), rgb(240, 200, 160))
+    // block under cursor
+    let mx = c.mouse_x()
+    let my = c.mouse_y()
+    if mx >= 0 {
+        let tx = int(floor(float(mx) / float(TS) + camx))
+        let ty = int(floor(float(my) / float(TS) + camy))
+        let sx = int((float(tx) - camx) * float(TS))
+        let sy = int((float(ty) - camy) * float(TS))
+        c.outline(sx, sy, TS, TS, 0, 2, rgb(255, 255, 255))
+    }
+    // hotbar
+    for k in 1..=5 {
+        let hx = 12 + (k - 1) * 58
+        var edge = rgba(0, 0, 0, 0.5)
+        if k == g.sel { edge = rgb(255, 255, 255) }
+        c.rect(hx, 12, 52, 52, rgba(0, 0, 0, 0.35))
+        c.rect(hx + 10, 22, 32, 32, block_color(k))
+        c.outline(hx, 12, 52, 52, 0, 3, edge)
+        c.text(hx + 4, 14, str(k), rgb(255, 255, 255), 12)
+        c.text(hx + 30, 48, str(g.inv[k]), rgb(255, 255, 255), 14, true)
+    }
+    c.text(12, VH - 24, "A/D move   Space jump   1-5 pick block   Left: mine   Right: place {block_name(g.sel)}", rgb(255, 255, 255), 14)
+}
+
+fn main() {
+    let g = new_game()
+    ui_every(30, || { step(g) })
+    ui_run("MiniCraft", VW, VH, || {
+        return canvas(|c| { draw(g, c) }).size(VW, VH).on_pointer(|x, y| { click(g, x, y) })
+    })
+}

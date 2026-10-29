@@ -19,6 +19,7 @@ import "opt"
 import "repl"
 import "fmt"
 import "cli"
+import "autoimport"
 
 const VERSION = "1.2.0 (self-hosted)"
 const PRELUDE_SRC = include_str("../atf/stdlib/prelude.atf")
@@ -100,6 +101,18 @@ fn load_module(path: str, prelude: bool, src_text: str?, from_pos: Pos) {
     modules.push(Module(items, prelude))
 }
 
+// load the program file, then the std modules it uses without importing them (see autoimport.atf)
+fn load_user_program(path: str) {
+    load_module(path, false, nil, NOPOS)
+    var user: [str] = []
+    for k, v in sources {
+        if k != PRELUDE_NAME and not k.starts_with(std_dir()) { user.push(k) }
+    }
+    for m in auto_import_modules(std_dir(), sources, user) {
+        load_module(std_dir() + "/" + m + ".atf", true, nil, NOPOS)
+    }
+}
+
 // "1.2.3" -> 1002003, so that versions compare as numbers; 0 when v is not three numbers
 fn version_value(v: str) -> int {
     let parts = v.split(" ")[0].split(".")
@@ -126,7 +139,7 @@ fn compile_file(path: str, check_only: bool) -> Bytes? {
     var exe: Bytes? = nil
     let ok = guarded(|| {
         load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
-        load_module(path, false, nil, NOPOS)
+        load_user_program(path)
         warn_if_newer(path)
         var ms: [([Item], bool)] = []
         for m in modules { ms.push((m.items, m.prelude)) }
@@ -260,7 +273,7 @@ fn main(args: [str]) -> int {
         var prog: Program? = nil
         let ok = guarded(|| {
             load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
-            load_module(path, false, nil, NOPOS)
+            load_user_program(path)
             warn_if_newer(path)
             var ms: [([Item], bool)] = []
             for m in modules { ms.push((m.items, m.prelude)) }

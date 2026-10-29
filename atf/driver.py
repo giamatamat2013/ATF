@@ -88,6 +88,16 @@ def load_program(path):
 
     load(os.path.join(STDLIB, "prelude.atf"), True)
     load(path, False)
+    # std modules the program uses without importing them (see autoimport.py)
+    from .autoimport import auto_import_modules
+    texts = {}
+    user = []
+    for p in seen:
+        texts[p] = read_source(p)
+        if not p.startswith(os.path.abspath(STDLIB)) and not p.startswith(os.path.abspath(STD_MODULES)):
+            user.append(p)
+    for m in auto_import_modules(STD_MODULES, texts, user):
+        load(os.path.join(STD_MODULES, m + ".atf"), True)
     return modules
 
 
