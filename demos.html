@@ -490,6 +490,36 @@ const lessons = [
     "atf": "import \"std/iter\"\n\n// any type with  fn next(self) -> T?  works in a for loop\nstruct Fib { a: int, b: int }\nimpl Fib {\n    fn next(self) -> int? {\n        let x = self.a\n        self.a, self.b = self.b, self.a + self.b\n        return x\n    }\n}\n\nfn main() {\n    // nothing is computed until collect() asks for values\n    let squares = iter_count(1).map(|x| x * x).filter(|x| x % 2 == 1).take(4)\n    println(squares.collect())\n\n    for i, w in iter_of([\"red\", \"green\", \"blue\"]).skip(1) {\n        println(\"{i}: {w}\")\n    }\n\n    var fibs: [int] = []\n    for x in Fib(0, 1) {\n        if x > 50 { break }\n        fibs.push(x)\n    }\n    println(fibs)\n\n    println(iter_range(1, 6).fold(1, |acc, x| acc * x))\n    println(iter_lines(\"a=1\\nb=2\").map(|l| l.split(\"=\")[0]).join(\", \"))\n}\n",
     "py": null,
     "output": "[1, 9, 25, 49]\n0: green\n1: blue\n[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]\n120\na, b"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "XML: קריאה ובנייה",
+    "text": [
+      "std/xml קורא מסמך XML לעץ של XmlNode: חיפוש ילדים לפי שם, מאפיינים, נתיב כמו book/author וטקסט פנימי. אותו עץ אפשר גם לבנות בקוד ולהדפיס עם הזחה."
+    ],
+    "atf": "import \"std/xml\"\n\nfn main() {\n    let text = \"\"\"<library>\n  <book year=\"1954\"><title>The Hobbit</title><author>Tolkien</author></book>\n  <book year=\"1949\"><title>1984</title><author>Orwell</author></book>\n</library>\"\"\"\n    let root = xml_parse(text).unwrap()\n    for b in root.children_named(\"book\") {\n        let title = b.child(\"title\")!.inner_text()\n        println(\"{title} ({b.attr(\"year\") ?? \"?\"})\")\n    }\n    println(\"first author:\", root.query(\"book/author\")!.inner_text())\n    println(root.find_all(\"author\").len(), \"authors\")\n\n    // building a document\n    let doc = xml_element(\"note\").set_attr(\"lang\", \"he\")\n        .add_text(\"to\", \"Dana\")\n        .add_text(\"body\", \"see you at 5\")\n    println(xml_stringify(doc, 2))\n}\n",
+    "py": null,
+    "output": "The Hobbit (1954)\n1984 (1949)\nfirst author: Tolkien\n2 authors\n<note lang=\"he\">\n  <to>Dana</to>\n  <body>see you at 5</body>\n</note>"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "שרת ולקוח TCP",
+    "text": [
+      "std/net: שרת שמאזין על פורט פנוי, לקוח שמתחבר אליו, ושורות טקסט שעוברות בשני הכיוונים. בלי ספריות חיצוניות."
+    ],
+    "atf": "import \"std/net\"\n\nfn main() {\n    // a server on any free port, and a client that connects to it\n    let server = tcp_listen(0).unwrap()\n    let client = tcp_connect(\"127.0.0.1\", server.port).unwrap()\n    let conn = server.accept().unwrap()\n\n    client.write_line(\"hello server\")\n    let got = conn.read_line() ?? \"\"\n    println(\"server got:\", got)\n    conn.write_line(got.upper())\n    println(\"client got:\", client.read_line() ?? \"\")\n\n    client.close()\n    conn.close()\n}\n",
+    "py": null,
+    "output": "server got: hello server\nclient got: HELLO SERVER"
+  },
+  {
+    "chapter": "תכונות מתקדמות",
+    "title": "קריאה ישירה ל-DLL",
+    "text": [
+      "extern מצהיר על פונקציה מ-DLL של Windows וקורא לה ישירות. as נותן לה שם משלכם בקוד, בזמן שהשם האמיתי ב-DLL נשאר כמו שהוא."
+    ],
+    "atf": "// calling Windows functions directly from a DLL; \"as\" gives them your own name\nextern \"kernel32\" fn process_id() -> i32 as \"GetCurrentProcessId\"\nextern \"kernel32\" fn mul_div(a: i32, b: i32, c: i32) -> i32 as \"MulDiv\"\n\nfn main() {\n    println(\"running as a process:\", process_id() > 0)\n    println(\"10 * 3 / 4, rounded:\", mul_div(10, 3, 4))\n    println(\"1000000 * 1000000 / 1000000:\", mul_div(1000000, 1000000, 1000000))\n}\n",
+    "py": null,
+    "output": "running as a process: true\n10 * 3 / 4, rounded: 8\n1000000 * 1000000 / 1000000: 1000000"
   }
 ];
 // LESSONS-END
