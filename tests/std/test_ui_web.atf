@@ -130,4 +130,10 @@ fn main() {
     let quit = header_of(last, "X-Quit")
     println("quit: {quit}")
     srv.close()
+
+    // open mode (ATF_UI_WEB_HOST): any Host, but an Origin must be the same site
+    println("same site: {ui_web_same_origin("atf.example.com", "https://atf.example.com")}")
+    println("no origin: {ui_web_same_origin("atf.example.com", "")}")
+    println("other site: {ui_web_same_origin("atf.example.com", "https://evil.example")}")
+    println("no host: {ui_web_same_origin("", "")}")
 }

@@ -1,0 +1,50 @@
+// The routes of the starter website. Edit this file (and the files in app/public/) to build your own site.
+// Run it:  atf run app/main.atf      then open http://127.0.0.1:8080/
+// Deploy it: see "Writing a website" in docs/TUTORIAL.md (the Dockerfile in the repo root runs app/main.atf).
+import "std/html"
+import "std/httpd"
+
+struct Visits { count: int = 0 }
+
+fn site_page(title: str, body: [HtmlNode]) -> HttpReply {
+    let css = css_rule("body", "font-family: system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px") + "\n" +
+        css_rule("nav a", "margin-right: 12px")
+    var nodes = [h("nav").add_all([h("a").attr("href", "/").text("Home"), h("a").attr("href", "/hello/ATF").text("Hello"), h("a").attr("href", "/guestbook").text("Guestbook")])]
+    for n in body { nodes.push(n) }
+    return http_html(html_page(title, nodes, css))
+}
+
+fn site_router() -> Router {
+    let visits = Visits()
+    var notes: [str] = []
+    var app = router_new()
+    app.get("/", |req| {
+        visits.count += 1
+        return site_page("My ATF site", [
+            h("h1").text("My ATF site").anim("fade-in"),
+            h("p").text("Visits so far: {visits.count}"),
+            h("p").text("Edit app/site.atf to change this page."),
+        ])
+    })
+    app.get("/hello/:name", |req| site_page("Hello", [h("h1").text("Hello, " + req.params["name"] + "!")]))
+    app.get("/guestbook", |req| {
+        var items: [HtmlNode] = []
+        for n in notes { items.push(h("li").text(n)) }
+        return site_page("Guestbook", [
+            h("h1").text("Guestbook"),
+            h("ul").add_all(items),
+            h("form").attr("method", "post").attr("action", "/guestbook").add_all([
+                h("input").attr("name", "note").attr("placeholder", "Write something"),
+                h("button").text("Send"),
+            ]),
+        ])
+    })
+    app.post("/guestbook", |req| {
+        let note = (req.form().try_get("note") ?? "").trim()
+        if note != "" and notes.len() < 100 { notes.push(note) }
+        return http_redirect("/guestbook", 303)
+    })
+    app.get("/api/visits", |req| http_json_reply("\{\"visits\": {visits.count}}"))
+    app.get("/static/*", |req| http_static(HttpRequest{ path: "/" + req.params["*"] }, "app/public"))
+    return app
+}

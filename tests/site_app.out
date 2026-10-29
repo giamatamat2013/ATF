@@ -1,0 +1,7 @@
+home: 200 true
+hello: 200 true
+post: 303
+guestbook: 200 true
+api: {"visits": 1}
+static: 200
+missing: 404

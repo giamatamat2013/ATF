@@ -21,3 +21,7 @@ pointer moved: 5 -3
 pointer locked: 1
 title: New%20title
 quit: 1
+same site: true
+no origin: true
+other site: false
+no host: false

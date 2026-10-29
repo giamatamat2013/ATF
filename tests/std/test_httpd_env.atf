@@ -1,0 +1,24 @@
+// tests for http_listen_env: the port and the address come from PORT and ATF_HOST, as hosting services set them
+import "std/httpd"
+import "std/process"
+
+fn main() {
+    // PORT set: a free port (0), open to other computers
+    proc_setenv("PORT", "0")
+    proc_setenv("ATF_HOST", "")
+    let s = http_listen_env().unwrap()
+    println("listens with PORT set: {s.port > 0}")
+    s.close()
+
+    // ATF_HOST says which address
+    proc_setenv("ATF_HOST", "127.0.0.1")
+    let t = http_listen_env().unwrap()
+    println("listens on 127.0.0.1: {t.port > 0}")
+    t.close()
+
+    // a port that is not a number falls back to the default (0 here, so any free port)
+    proc_setenv("PORT", "abc")
+    let u = http_listen_env(0).unwrap()
+    println("bad PORT uses the default: {u.port > 0}")
+    u.close()
+}

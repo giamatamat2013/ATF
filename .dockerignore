@@ -1,0 +1,9 @@
+.git
+build
+site
+tests
+bench
+tools
+docs
+editors
+*.md

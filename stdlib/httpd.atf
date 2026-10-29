@@ -238,6 +238,33 @@ fn http_listen(port: int, host: str = "127.0.0.1") -> Result<HttpServer, str> {
     return Result.Ok(HttpServer{ tcp: t, port: t.port })
 }
 
+// Starts listening the way a hosting service expects: the port is the PORT environment variable (default_port
+// when it is not set), and when PORT is set the server accepts other computers, otherwise only this one.
+// ATF_HOST overrides the address ("0.0.0.0" for everyone, "127.0.0.1" for this computer only).
+fn http_listen_env(default_port: int = 8080) -> Result<HttpServer, str> {
+    let port_text = getenv("PORT") ?? ""
+    let port = if port_text == "" { default_port } else { port_text.parse_int() ?? default_port }
+    let fallback = if port_text == "" { "127.0.0.1" } else { "0.0.0.0" }
+    var host = getenv("ATF_HOST") ?? ""
+    if host == "" { host = fallback }
+    return http_listen(port, if host == "0.0.0.0" or host == "all" { "" } else { host })
+}
+
+// Serves a site: listens as http_listen_env does, prints the address, and answers requests forever.
+// This is the whole main() of a website:  fn main() { http_run(|req| app.handle(req)) }
+fn http_run(handler: fn(HttpRequest) -> HttpReply, default_port: int = 8080) {
+    let r = http_listen_env(default_port)
+    if r.is_err() {
+        let why = r.err()!
+        eprintln("cannot start the server: {why}")
+        exit(1)
+    }
+    let server = r.unwrap()
+    println("serving on port {server.port} (http://127.0.0.1:{server.port}/ on this computer)")
+    flush()
+    server.serve(handler)
+}
+
 // Reads one request from a connection: Err when it is not valid HTTP.
 fn http_read_request(c: TcpConn) -> Result<HttpRequest, str> {
     let first = c.read_line() ?? ""

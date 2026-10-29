@@ -1635,6 +1635,8 @@ struct HttpServer {
 - `fn router_new() -> Router`
 - `fn route_match(pattern: str, path: str, params: {str: str}) -> bool` - Does the path match the pattern? A pattern part that starts with : matches any one part ("/users/:id"), and a last part * matches the rest of the path. Fills params with the captured parts.
 - `fn http_listen(port: int, host: str = "127.0.0.1") -> Result<HttpServer, str>` - Starts listening (port 0 picks a free port, see server.port). By default only this computer can connect; pass host "0.0.0.0" to accept other computers too.
+- `fn http_listen_env(default_port: int = 8080) -> Result<HttpServer, str>` - Starts listening the way a hosting service expects: the port is the PORT environment variable (default_port when it is not set), and when PORT is set the server accepts other computers, otherwise only this one. ATF_HOST overrides the address ("0.0.0.0" for everyone, "127.0.0.1" for this computer only).
+- `fn http_run(handler: fn(HttpRequest) -> HttpReply, default_port: int = 8080)` - Serves a site: listens as http_listen_env does, prints the address, and answers requests forever. This is the whole main() of a website:  fn main() { http_run(|req| app.handle(req)) }
 - `fn http_read_request(c: TcpConn) -> Result<HttpRequest, str>` - Reads one request from a connection: Err when it is not valid HTTP.
 - `fn http_write_reply(c: TcpConn, reply: HttpReply, head_only: bool = false)` - Sends a reply on a connection.
 

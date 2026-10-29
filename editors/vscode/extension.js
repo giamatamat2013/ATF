@@ -150,7 +150,7 @@ const PREFIX_MODULES = [
   [/^algo_/, "algo"], [/^bits_/, "bits"], [/^random_/, "random"], [/^text_/, "text"], [/^(math_|stats_)/, "math"],
   [/^(regex|regex_\w+|Regex|RxMatch)$/, "regex"], [/^(http_\w+|Http\w+)$/, "http"],
   [/^(html_\w+|css_\w+|HtmlNode|h)$/, "html"], [/^(xml_\w+|XmlNode)$/, "xml"], [/^(url_\w+|Url)$/, "url"], [/^(ini_\w+|IniDoc)$/, "ini"], [/^glob_/, "glob"],
-  [/^(http_listen|http_reply|http_text|http_html|http_json_reply|http_redirect|http_not_found|http_status_text|http_mime|http_file|http_static|http_read_request|http_write_reply|router_new|route_match|HttpRequest|HttpReply|HttpServer|Router|Route)$/, "httpd"], [/^(tcp_\w+|udp_\w+|net_resolve|TcpConn|TcpServer|UdpSocket|UdpPacket)$/, "net"],
+  [/^(http_listen|http_listen_env|http_run|http_reply|http_text|http_html|http_json_reply|http_redirect|http_not_found|http_status_text|http_mime|http_file|http_static|http_read_request|http_write_reply|router_new|route_match|HttpRequest|HttpReply|HttpServer|Router|Route)$/, "httpd"], [/^(tcp_\w+|udp_\w+|net_resolve|TcpConn|TcpServer|UdpSocket|UdpPacket)$/, "net"],
   [/^(test|test_report|expect|expect_eq|expect_ne|expect_near|expect_panics|test_fail|test_property|any_int|any_bool|any_float|any_str|any_int_list|any_of)$/, "test"],
   [/^(ai_\w+|AiChat|AiMessage)$/, "ai"], [/^markdown_\w+$/, "markdown"], [/^(semver_\w+|SemVer)$/, "semver"],
   [/^(term_\w+|red|green|yellow|blue|magenta|cyan|gray|bold|dim|italic|underline|color|color_rgb|background|strip_colors|visible_len|progress_bar|print_same_line|boxed)$/, "term"],

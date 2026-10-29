@@ -3169,12 +3169,78 @@ The program keeps running until it calls `ui_quit()`; the page then says that th
 
 - The page only works on the computer that runs the program: the server listens on `127.0.0.1` only, and it refuses
   requests from other sites (403), so another computer on the network cannot use it.
+- To serve the program to other computers (a server, a container, a proxy), also set `ATF_UI_WEB_HOST=0.0.0.0` (or a
+  specific address to listen on). The server then listens on every network and accepts any host name, but a request
+  that names an `Origin` must come from the same site (http or https). There is no password: anyone who reaches the
+  address drives the same program, and one program serves one browser at a time. Put it behind an authenticating proxy
+  if it is not public. See "Serving on the web" below.
 - Only the left mouse button is passed on, so `ui_mouse_held(1)` and `ui_mouse_held(2)` stay false in the browser.
 - `ui_mouse_capture(true)` locks the pointer in the page: click the picture to lock it, and press Esc to release it.
 - Dialogs (`message_box`, `confirm_box`, the file dialogs), the clipboard and the image files named by `image(path)`
   belong to the computer that runs the program. A dialog opens on that computer and waits there, so the page stops
   until it is answered.
 - Fonts are the ones of the computer that runs the program.
+
+#### Serving on the web
+
+A window program cannot run inside a static host such as GitHub Pages, because it is a program and not a page. Two things
+work everywhere:
+
+- **The site** (demo gallery, docs): `python tools/build_site.py` writes a plain static folder, `site/`. The workflow
+  `.github/workflows/pages.yml` publishes it to GitHub Pages (Settings > Pages > Source = "GitHub Actions"). For your own
+  domain set the repository variable `ATF_PAGES_DOMAIN` and point the domain's DNS at GitHub. `netlify.toml` and
+  `vercel.json` do the same on Netlify and Vercel; Cloudflare Pages, S3 and nginx take the `site/` folder as it is.
+- **The program** (a live window program in the visitor's browser): the `Dockerfile` runs it through Wine in browser mode,
+  open to other computers (`ATF_UI_WEB_HOST=0.0.0.0`). Any host that takes a Docker image runs it; `render.yaml` and
+  `fly.toml` are ready for Render and Fly.io.
+
+```bash
+docker build -t atf-web .
+docker run -p 8080:8080 -e ATF_APP=examples/ui/todo.atf atf-web
+```
+
+`ATF_APP` is the program to run and `PORT` (set by most hosts) is the port. Link to the running address from the Pages
+site. Fonts under Wine are not the Windows fonts, so text looks a little different from the window. See the notes above
+about open mode: there is no password.
+
+#### Writing a website
+
+A website is an ordinary ATF program built from `std/httpd` (routes, forms, static files) and `std/html` (pages). The
+repo has a starter site in `app/`: `app/site.atf` holds the routes, `app/main.atf` starts it, and `app/public/` holds
+files served under `/static/`. Edit them, then:
+
+```bash
+bin/atf.exe run app/main.atf        # http://127.0.0.1:8080/
+```
+
+The routes are plain functions, so they can be tested without a network:
+
+```atf
+import "std/httpd"
+import "std/html"
+
+fn main() {
+    var app = router_new()
+    app.get("/", |req| http_html(html_page("Hi", [h("h1").text("Hello from ATF")], "")))
+    app.get("/hello/:name", |req| http_text("Hello, " + req.params["name"]))
+    let reply = app.handle(HttpRequest{ path: "/hello/World" })
+    println(reply.status, reply.body)
+}
+```
+
+```output
+200 Hello, World
+```
+
+A real `main()` is two lines: `http_run(|req| app.handle(req))`. `http_run` listens the way hosting services expect: on
+the port in the `PORT` environment variable, open to other computers when `PORT` is set, and on `127.0.0.1:8080`
+otherwise (`ATF_HOST` overrides the address). `http_listen_env()` does only the listening. The server answers one
+connection at a time and keeps its data in memory, so it suits small sites; for data that must survive a restart write
+files (`std/json`, `std/app`) to a mounted volume.
+
+To put the site online use the `Dockerfile`: it runs `app/main.atf` and works on Render, Fly.io, Railway, Cloud Run and
+any VPS (`render.yaml` and `fly.toml` are ready). Put your own domain on the host's own settings page. See "Serving on
+the web" above.
 
 #### A complete program: menus, text, dialogs, files
 

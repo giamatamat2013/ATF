@@ -1,0 +1,13 @@
+# Fly.io: runs an ATF window program in the browser from the Dockerfile (fly launch --copy-config).
+app = "atf-web"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ATF_APP = "app/main.atf"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true

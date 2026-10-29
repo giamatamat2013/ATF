@@ -1,0 +1,39 @@
+name: pages
+# Publishes the demo gallery and the docs to GitHub Pages.
+# Custom domain: set the repository variable ATF_PAGES_DOMAIN (Settings > Secrets and variables > Actions > Variables)
+# and point the domain's DNS at GitHub Pages (a CNAME record to <owner>.github.io).
+# First time only: Settings > Pages > Source = "GitHub Actions".
+on:
+  push:
+    branches: [master]
+    paths: ["demos.html", "docs/**", "assets/**", "README.md", "tools/build_site.py", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the site
+        run: python tools/build_site.py --domain "${{ vars.ATF_PAGES_DOMAIN }}"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

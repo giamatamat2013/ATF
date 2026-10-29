@@ -1,0 +1,9 @@
+// The starter website. `atf run app/main.atf` serves it on http://127.0.0.1:8080/. On a host that sets the PORT
+// environment variable it listens on that port for everyone (see the Dockerfile). Change the routes in site.atf.
+import "site"
+import "std/httpd"
+
+fn main() {
+    let app = site_router()
+    http_run(|req| app.handle(req))
+}

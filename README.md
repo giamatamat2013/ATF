@@ -82,6 +82,9 @@ total: 5.25
   way to test the interface without a window (`ui_headless`, `ui_click`, `ui_type`). `std/app` keeps settings between runs.
   The same program also runs in a browser, without any change to it: `ATF_UI_WEB=8080 bin/atf.exe run examples/ui/counter.atf`,
   then open `http://127.0.0.1:8080/`. The page shows the picture the window would draw and sends the mouse and keyboard back.
+  To serve it to other people, add `ATF_UI_WEB_HOST=0.0.0.0` or use the `Dockerfile` (any host that takes Docker; see
+  "Serving on the web" in the tutorial). The demo gallery and docs publish to GitHub Pages, Netlify or Vercel with
+  `tools/build_site.py`, and to a custom domain through the `ATF_PAGES_DOMAIN` repository variable.
 
   ```atf nocheck
   button("Save", || save(doc)).bg(hex("#4f46e5")).color(WHITE).radius(10).hover(style().bg(hex("#4338ca")))
@@ -218,6 +221,9 @@ bench/                 benchmarks
 editors/               editor support
 tools/                 tools written in ATF (tools/stdlib_docs.atf writes docs/STDLIB.md,
                        tools/convert.atf converts between ATF, Python and Rust, see docs/CONVERT.md)
+app/                   a starter website in ATF (routes, pages, static files); `atf run app/main.atf`
+Dockerfile, deploy/    run the website (or a window program) in a browser on any Docker host (render.yaml, fly.toml)
+netlify.toml, vercel.json, .github/workflows/pages.yml   publish the static site (tools/build_site.py)
 CLAUDE.md              rules for Claude Code: every change also updates the docs, tutorials and the ATF skill
 .claude/skills/atf/    the Claude skill that teaches the language
 ```

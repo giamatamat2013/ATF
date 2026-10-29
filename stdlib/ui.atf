@@ -4106,6 +4106,7 @@ var ui_web_btn = false         // the left mouse button is held down in the brow
 var ui_web_keys: {int: bool} = {}
 var ui_web_dx = 0              // pointer lock movement since the last ui_mouse_delta() call
 var ui_web_dy = 0
+var ui_web_remote = false      // ATF_UI_WEB_HOST is set: other computers may connect (same-origin check only)
 var ui_web_quit = false        // ui_quit was called
 var ui_web_title = ""          // the title given to ui_title
 var ui_web_due: [int] = []     // when each ui_every timer runs next (GetTickCount64 milliseconds)
@@ -4130,14 +4131,19 @@ fn ui_web_begin(title: str, width: int, height: int, view: fn() -> Node) {
 // serve view() at http://127.0.0.1:port/ until the program calls ui_quit (port 0 picks a free port).
 // ui_run calls this when ATF_UI_WEB is set. The address is printed on stderr.
 fn ui_web_run(title: str, width: int, height: int, view: fn() -> Node, port: int) {
-    let r = tcp_listen(port)
+    // ATF_UI_WEB_HOST opens the page to other computers (a server, a container, a proxy): "0.0.0.0" or "all"
+    // listens on every network, any other value is the address to listen on
+    let bind = getenv("ATF_UI_WEB_HOST") ?? ""
+    ui_web_remote = bind.len() > 0
+    let r = if not ui_web_remote { tcp_listen(port) } else if bind == "0.0.0.0" or bind == "all" { tcp_listen(port, "") } else { tcp_listen(port, bind) }
     if r.is_err() {
         let why = r.err()!
         panic("ATF_UI_WEB: cannot serve on port {port}: {why}")
     }
     let srv = r.unwrap()
     ui_web_begin(title, width, height, view)
-    eprintln("ATF UI: open http://127.0.0.1:{srv.port}/ in a browser (the program ends when it calls ui_quit)")
+    let shown = if ui_web_remote { "port {srv.port} (open to other computers)" } else { "http://127.0.0.1:{srv.port}/" }
+    eprintln("ATF UI: open {shown} in a browser (the program ends when it calls ui_quit)")
     while not ui_web_quit { ui_web_step(srv) }
     srv.close()
     ui_web_on = false
@@ -4175,7 +4181,7 @@ fn ui_web_step(srv: TcpServer) {
     }
     let body = if clen > 0 { conn.read_exact(clen) ?? "" } else { "" }
     // a page from another site (DNS rebinding, a cross-site form) must not reach the program
-    let ok = ui_web_local(host) and (origin == "" or (origin.starts_with("http://") and ui_web_local(origin[7..])))
+    let ok = if ui_web_remote { ui_web_same_origin(host, origin) } else { ui_web_local(host) and (origin == "" or (origin.starts_with("http://") and ui_web_local(origin[7..]))) }
     if not ok {
         ui_web_reply(conn, "403 Forbidden", "text/plain; charset=utf-8", "", "Forbidden: open http://127.0.0.1/ in the browser")
         return
@@ -4225,6 +4231,16 @@ fn ui_web_state() -> str {
 // is this host name (from the Host header, or from Origin without its http://) this computer?
 fn ui_web_local(host: str) -> bool {
     return host == "127.0.0.1" or host == "localhost" or host.starts_with("127.0.0.1:") or host.starts_with("localhost:")
+}
+
+// open mode (ATF_UI_WEB_HOST): any Host is fine, but a request that names an Origin must come from the same
+// site (http or https, as a proxy may add TLS), so another site cannot drive the program from a visitor's browser
+fn ui_web_same_origin(host: str, origin: str) -> bool {
+    if host == "" { return false }
+    if origin == "" { return true }
+    if origin.starts_with("https://") { return origin[8..] == host }
+    if origin.starts_with("http://") { return origin[7..] == host }
+    return false
 }
 
 // the number in word i of a line of the page's events, 0 when it is missing

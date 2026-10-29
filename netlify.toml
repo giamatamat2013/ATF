@@ -1,0 +1,4 @@
+# Netlify: publishes the static site (demo gallery and docs). Programs themselves need the Dockerfile.
+[build]
+  command = "python tools/build_site.py"
+  publish = "site"

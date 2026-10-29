@@ -1,0 +1,8 @@
+# Render: runs an ATF window program in the browser from the Dockerfile.
+services:
+  - type: web
+    name: atf-web
+    runtime: docker
+    envVars:
+      - key: ATF_APP
+        value: app/main.atf

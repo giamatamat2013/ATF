@@ -1,0 +1,24 @@
+// The starter website in app/: the routes answer without a network, through Router.handle
+import "../app/site"
+import "std/httpd"
+
+fn get(app: Router, path: str) -> HttpReply {
+    return app.handle(HttpRequest{ method: "GET", target: path, path: path })
+}
+
+fn main() {
+    let app = site_router()
+    let home = get(app, "/")
+    println("home: {home.status} {home.body.contains("Visits so far: 1")}")
+    let hello = get(app, "/hello/World")
+    println("hello: {hello.status} {hello.body.contains("Hello, World!")}")
+    let post = app.handle(HttpRequest{ method: "POST", target: "/guestbook", path: "/guestbook", body: "note=Hi+there" })
+    println("post: {post.status}")
+    let book = get(app, "/guestbook")
+    println("guestbook: {book.status} {book.body.contains("Hi there")}")
+    let api = get(app, "/api/visits")
+    println("api: {api.body}")
+    let css = get(app, "/static/style.css")
+    println("static: {css.status}")
+    println("missing: {get(app, "/nothing").status}")
+}
