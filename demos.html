@@ -420,6 +420,16 @@ const lessons = [
     "atf": "import \"std/bigint\"\n\nfn main() {\n    let a = bigint_parse(\"123456789012345678901234567890\").unwrap()\n    println(a * bigint(1000) + bigint(7))\n    println(bigint(2).pow(100))\n    println(bigint_factorial(25))\n    println(a > bigint(INT_MAX), (a % bigint(1000)).to_int() ?? -1)\n}\n",
     "py": null,
     "output": "123456789012345678901234567890007\n1267650600228229401496703205376\n15511210043330985984000000\ntrue 890"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/crypto",
+    "text": [
+      "המודול `std/crypto` מצפין ב-AES-GCM עם מפתח שנגזר מסיסמה (PBKDF2). אם המפתח שגוי, או שמישהו שינה בית אחד, הפענוח מחזיר שגיאה במקום טקסט משובש. בפייתון צריך לשם כך ספרייה חיצונית (`cryptography`)."
+    ],
+    "atf": "import \"std/crypto\"\nimport \"std/hash\"\n\nfn main() {\n    let salt = crypto_random_bytes(16)\n    let key = crypto_pbkdf2(\"my password\", salt, 100000)\n    let box = crypto_encrypt(key, \"secret text\").unwrap()\n    println(box.len(), crypto_decrypt(key, box).unwrap())\n\n    let wrong = crypto_pbkdf2(\"guess\", salt, 100000)\n    match crypto_decrypt(wrong, box) {\n        Result.Ok(text) => println(\"opened: \" + text)\n        Result.Err(e) => println(e)\n    }\n    println(hash_to_hex(crypto_pbkdf2(\"password\", \"salt\", 1))[0..16])\n}\n",
+    "py": null,
+    "output": "39 secret text\ncannot decrypt: wrong key or the data was changed\n120fb6cffcf8b32c"
   }
 ];
 // LESSONS-END

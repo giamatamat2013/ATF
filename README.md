@@ -62,7 +62,7 @@ total: 5.25
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
   collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
-  XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`), YAML files (`std/yaml`), whole numbers of any size (`std/bigint`),
+  XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`), YAML files (`std/yaml`), whole numbers of any size (`std/bigint`), encryption, secure random bytes and keys from passwords (`std/crypto`),
   file name patterns (`std/glob`), a test framework with property tests on random values (`std/test`),
   colors, progress bars and boxes in the console (`std/term`), Markdown to HTML (`std/markdown`),
   version numbers and rules like `^1.2` (`std/semver`), questions to Claude, Anthropic's AI model (`std/ai`),

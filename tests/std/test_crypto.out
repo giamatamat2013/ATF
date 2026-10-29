@@ -1,0 +1,25 @@
+ok   random length: 32
+ok   random differs: true
+ok   random zero: 0
+ok   random_int range: true true true
+ok   random_int one value: 7
+ok   random_int wide: true
+ok   pbkdf2 1: 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b
+ok   pbkdf2 4096: c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a
+ok   pbkdf2 64 bytes: 55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783
+ok   gcm vector: cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919
+ok   gcm vector open: 00000000000000000000000000000000
+ok   box size: 42
+ok   round trip: attack at dawn
+ok   new nonce each time: true
+ok   empty text: 
+ok   large text: true
+ok   AES-128: short key
+ok   extra data: body
+ok   wrong key: cannot decrypt: wrong key or the data was changed
+ok   changed byte: cannot decrypt: wrong key or the data was changed
+ok   wrong extra: cannot decrypt: wrong key or the data was changed
+ok   too short: the data is too short to be encrypted text
+ok   bad key size: the key must be 16, 24 or 32 bytes, not 5
+ok   equal: true false false
+failures: 0

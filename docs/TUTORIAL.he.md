@@ -2309,7 +2309,7 @@ fn main() {
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
-* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/yaml`, `std/xml`, `std/bigint`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
+* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/yaml`, `std/xml`, `std/bigint`, `std/crypto`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
 * `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
 * `std/app` - תיקייה והגדרות לתוכנית שנשמרות בין הרצות (ראו בהמשך הפרק).
 
@@ -2515,6 +2515,33 @@ fn main() {
 ```output
 ["one", "two"]
 0 hello
+```
+
+* `std/crypto` משתמש בספריית ההצפנה של Windows: בתים אקראיים מאובטחים (`crypto_random_bytes`, `crypto_random_int`), מפתח מסיסמה (`crypto_pbkdf2`, כלומר PBKDF2-HMAC-SHA256) והצפנה ב-AES-GCM (`crypto_encrypt`, `crypto_decrypt`). התוצאה המוצפנת כוללת nonce אקראי ותג, ולכן פענוח עם מפתח שגוי, או אחרי שבית אחד השתנה, מחזיר `Err` ולא זבל. הבתים נשמרים ב-`str`. כדי להציג אותם משתמשים ב-`hash_to_hex` מ-`std/hash`, ושם יש גם SHA-256 ו-HMAC.
+
+<!-- id: crypto-basic -->
+```atf
+import "std/crypto"
+import "std/hash"
+
+fn main() {
+    let salt = crypto_random_bytes(16)
+    let key = crypto_pbkdf2("my password", salt, 100000)
+    let box = crypto_encrypt(key, "secret text").unwrap()
+    println(box.len(), crypto_decrypt(key, box).unwrap())
+
+    let wrong = crypto_pbkdf2("guess", salt, 100000)
+    match crypto_decrypt(wrong, box) {
+        Result.Ok(text) => println("opened: " + text)
+        Result.Err(e) => println(e)
+    }
+    println(hash_to_hex(crypto_pbkdf2("password", "salt", 1))[0..16])
+}
+```
+```output
+39 secret text
+cannot decrypt: wrong key or the data was changed
+120fb6cffcf8b32c
 ```
 
 * `std/bigint` מחזיק מספרים שלמים בכל גודל. `+ - * / %`, השוואות ומיון עובדים כמו ב-`int` (חילוק מעגל לכיוון אפס), אבל אין גלישה. יוצרים מספר עם `bigint(n)` או `bigint_parse(text)`. אי אפשר לערבב `int` עם `BigInt`, לכן כותבים `a + bigint(1)`. `to_int()` מחזיר `int?` שהוא nil כשהערך לא נכנס ב-64 ביט.

@@ -30,6 +30,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/bigint](#stdbigint)
   - [std/bits](#stdbits)
   - [std/collections](#stdcollections)
+  - [std/crypto](#stdcrypto)
   - [std/csv](#stdcsv)
   - [std/datetime](#stddatetime)
   - [std/fs](#stdfs)
@@ -1066,6 +1067,43 @@ struct Counter<T> {
 - `.clear()`
 - `.eq(o: Counter<T>) -> bool`
 - `.to_str() -> str`
+
+## std/crypto
+
+Secure random bytes, keys from passwords (PBKDF2) and encryption (AES-GCM), built on the
+Windows crypto library (bcrypt.dll).
+
+```text
+import "std/crypto"
+import "std/hash"
+
+let salt = crypto_random_bytes(16)
+let key = crypto_pbkdf2("my password", salt, 100000)     // 32 bytes, the same for the same password and salt
+let box = crypto_encrypt(key, "secret text").unwrap()   // a new random nonce every time
+println(crypto_decrypt(key, box).unwrap())             // secret text
+println(hash_to_hex(crypto_random_bytes(8)))            // e.g. 9f3c01d2a4b5e677
+```
+
+Text and keys are bytes in a str. crypto_encrypt returns nonce (12 bytes) + ciphertext + tag (16 bytes);
+crypto_decrypt refuses data that was changed or encrypted with another key. Use rand_int and std/random for
+games and simulations, and this module for passwords, tokens and keys.
+
+**Constants**
+
+- `CRYPTO_NONCE_SIZE = 12`
+- `CRYPTO_TAG_SIZE = 16`
+
+**Functions**
+
+- `fn crypto_random_bytes(n: int) -> str` - n bytes from the system's secure random generator
+- `fn crypto_random_int(lo: int, hi: int) -> int` - a secure random int from lo to hi, both included
+- `fn crypto_pbkdf2(password: str, salt: str, iterations: int, length: int = 32) -> str` - a key of `length` bytes from a password and a salt with PBKDF2-HMAC-SHA256; more iterations make guessing the password slower (100000 or more is a good choice for passwords people type)
+- `fn crypto_encrypt(key: str, plain: str, extra: str = "") -> Result<str, str>` - encrypts with AES-GCM; key is 16, 24 or 32 bytes (32 = AES-256). The result is nonce + ciphertext + tag. `extra` is data that is not encrypted but must arrive unchanged (for example a file name); pass the same value to crypto_decrypt.
+- `fn crypto_decrypt(key: str, data: str, extra: str = "") -> Result<str, str>` - decrypts what crypto_encrypt made; an error when the key is wrong or the data was changed
+- `fn crypto_equal(a: str, b: str) -> bool` - compares two secrets in time that does not depend on where they differ (for tokens and MACs)
+- `fn crypto_gcm(key: str, nonce: str, data: str, extra: str, encrypt: bool) -> Result<str, str>` - AES-GCM with a given nonce. Encrypting returns ciphertext + tag; decrypting takes ciphertext + tag and returns the plain text. Never use the same key and nonce twice.
+- `fn crypto_status(rc: int) -> str`
+- `fn crypto_check(rc: int, what: str)`
 
 ## std/csv
 

@@ -2504,6 +2504,33 @@ fn main() {
 0 hello
 ```
 
+* `std/crypto` uses the Windows crypto library for secure random bytes (`crypto_random_bytes`, `crypto_random_int`), keys from passwords (`crypto_pbkdf2`, PBKDF2-HMAC-SHA256) and encryption with AES-GCM (`crypto_encrypt`, `crypto_decrypt`). The encrypted result carries a random nonce and a tag, so decrypting with a wrong key, or after a single byte changed, returns an `Err` instead of garbage. Bytes are kept in a `str`; `hash_to_hex` from `std/hash` shows them, and `std/hash` also has SHA-256 and HMAC.
+
+<!-- id: crypto-basic -->
+```atf
+import "std/crypto"
+import "std/hash"
+
+fn main() {
+    let salt = crypto_random_bytes(16)
+    let key = crypto_pbkdf2("my password", salt, 100000)
+    let box = crypto_encrypt(key, "secret text").unwrap()
+    println(box.len(), crypto_decrypt(key, box).unwrap())
+
+    let wrong = crypto_pbkdf2("guess", salt, 100000)
+    match crypto_decrypt(wrong, box) {
+        Result.Ok(text) => println("opened: " + text)
+        Result.Err(e) => println(e)
+    }
+    println(hash_to_hex(crypto_pbkdf2("password", "salt", 1))[0..16])
+}
+```
+```output
+39 secret text
+cannot decrypt: wrong key or the data was changed
+120fb6cffcf8b32c
+```
+
 * `std/bigint` holds whole numbers of any size. `+ - * / %`, comparisons and sorting work as with `int` (division truncates toward zero), but nothing overflows. Make one with `bigint(n)` or `bigint_parse(text)`; an `int` and a `BigInt` do not mix, so write `a + bigint(1)`. `to_int()` gives an `int?` that is nil when the value does not fit.
 
 <!-- id: bigint-basic -->

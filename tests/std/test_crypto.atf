@@ -1,0 +1,82 @@
+// tests for std/crypto
+import "std/crypto"
+import "std/hash"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn zeros(n: int) -> str => "\x00".repeat(n)
+
+fn main() -> int {
+    // random bytes: the right length, and two draws differ
+    let r1 = crypto_random_bytes(32)
+    let r2 = crypto_random_bytes(32)
+    check("random length", str(r1.len()), "32")
+    check("random differs", str(r1 != r2), "true")
+    check("random zero", str(crypto_random_bytes(0).len()), "0")
+    var in_range = true
+    var seen_lo = false
+    var seen_hi = false
+    for _ in 0..2000 {
+        let x = crypto_random_int(-3, 3)
+        if x < -3 or x > 3 { in_range = false }
+        if x == -3 { seen_lo = true }
+        if x == 3 { seen_hi = true }
+    }
+    check("random_int range", "{in_range} {seen_lo} {seen_hi}", "true true true")
+    check("random_int one value", str(crypto_random_int(7, 7)), "7")
+    var wide_ok = true
+    for _ in 0..200 {
+        let x = crypto_random_int(-5, INT_MAX)
+        if x < -5 { wide_ok = false }
+    }
+    check("random_int wide", str(wide_ok), "true")
+
+    // PBKDF2-HMAC-SHA256 test vectors (RFC 7914 section 11 and the common SHA-256 vectors)
+    check("pbkdf2 1", hash_to_hex(crypto_pbkdf2("password", "salt", 1)), "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b")
+    check("pbkdf2 4096", hash_to_hex(crypto_pbkdf2("password", "salt", 4096)), "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a")
+    check("pbkdf2 64 bytes", hash_to_hex(crypto_pbkdf2("passwd", "salt", 1, 64)), "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783")
+
+    // AES-256-GCM test case 14 of the GCM specification: zero key, zero nonce, one zero block
+    let sealed = crypto_gcm(zeros(32), zeros(12), zeros(16), "", true).unwrap()
+    check("gcm vector", hash_to_hex(sealed), "cea7403d4d606b6e074ec5d3baf39d18d0d1c8a799996bf0265b98b5d48ab919")
+    check("gcm vector open", hash_to_hex(crypto_gcm(zeros(32), zeros(12), sealed, "", false).unwrap()), "00000000000000000000000000000000")
+
+    // round trips
+    let key = crypto_pbkdf2("correct horse", "pepper", 1000)
+    let box = crypto_encrypt(key, "attack at dawn").unwrap()
+    check("box size", str(box.len()), str(12 + 14 + 16))
+    check("round trip", crypto_decrypt(key, box).unwrap(), "attack at dawn")
+    check("new nonce each time", str(crypto_encrypt(key, "attack at dawn").unwrap() != box), "true")
+    check("empty text", crypto_decrypt(key, crypto_encrypt(key, "").unwrap()).unwrap(), "")
+    let big = "0123456789".repeat(10000)
+    check("large text", str(crypto_decrypt(key, crypto_encrypt(key, big).unwrap()).unwrap() == big), "true")
+    let k128 = crypto_random_bytes(16)
+    check("AES-128", crypto_decrypt(k128, crypto_encrypt(k128, "short key").unwrap()).unwrap(), "short key")
+    let labeled = crypto_encrypt(key, "body", "file.txt").unwrap()
+    check("extra data", crypto_decrypt(key, labeled, "file.txt").unwrap(), "body")
+
+    // what must be refused
+    let bad = "cannot decrypt: wrong key or the data was changed"
+    check("wrong key", crypto_decrypt(crypto_pbkdf2("wrong", "pepper", 1000), box).err() ?? "none", bad)
+    let flipped = box[0..20] + chr((box.byte_at(20) ^ 1) as int) + box[21..]
+    check("changed byte", crypto_decrypt(key, flipped).err() ?? "none", bad)
+    check("wrong extra", crypto_decrypt(key, labeled, "other.txt").err() ?? "none", bad)
+    check("too short", crypto_decrypt(key, "abc").err() ?? "none", "the data is too short to be encrypted text")
+    check("bad key size", crypto_encrypt("short", "x").err() ?? "none", "the key must be 16, 24 or 32 bytes, not 5")
+
+    // comparing secrets
+    let (s1, s2, s3) = ("abc", "abd", "ab")
+    check("equal", "{crypto_equal(s1, s1)} {crypto_equal(s1, s2)} {crypto_equal(s1, s3)}", "true false false")
+
+    println("failures: {failures}")
+    return failures
+}

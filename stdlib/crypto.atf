@@ -1,0 +1,154 @@
+// std/crypto - secure random bytes, keys from passwords (PBKDF2) and encryption (AES-GCM), built on the
+// Windows crypto library (bcrypt.dll).
+//
+//   import "std/crypto"
+//   import "std/hash"
+//
+//   let salt = crypto_random_bytes(16)
+//   let key = crypto_pbkdf2("my password", salt, 100000)     // 32 bytes, the same for the same password and salt
+//   let box = crypto_encrypt(key, "secret text").unwrap()   // a new random nonce every time
+//   println(crypto_decrypt(key, box).unwrap())             // secret text
+//   println(hash_to_hex(crypto_random_bytes(8)))            // e.g. 9f3c01d2a4b5e677
+//
+// Text and keys are bytes in a str. crypto_encrypt returns nonce (12 bytes) + ciphertext + tag (16 bytes);
+// crypto_decrypt refuses data that was changed or encrypted with another key. Use rand_int and std/random for
+// games and simulations, and this module for passwords, tokens and keys.
+
+extern "bcrypt" fn crypto_open_alg(handle: ptr<int>, alg: ptr<byte>, impl_name: ptr<byte>, flags: int) -> i32 as "BCryptOpenAlgorithmProvider"
+extern "bcrypt" fn crypto_close_alg(handle: int, flags: int) -> i32 as "BCryptCloseAlgorithmProvider"
+extern "bcrypt" fn crypto_set_property(handle: int, name: ptr<byte>, value: ptr<byte>, size: int, flags: int) -> i32 as "BCryptSetProperty"
+extern "bcrypt" fn crypto_make_key(alg: int, key: ptr<int>, obj: ptr<byte>, obj_size: int, secret: ptr<byte>, secret_size: int, flags: int) -> i32 as "BCryptGenerateSymmetricKey"
+extern "bcrypt" fn crypto_destroy_key(key: int) -> i32 as "BCryptDestroyKey"
+extern "bcrypt" fn crypto_bc_encrypt(key: int, input: ptr<byte>, in_size: int, info: ptr<int>, iv: ptr<byte>, iv_size: int, output: ptr<byte>, out_size: int, result: ptr<int>, flags: int) -> i32 as "BCryptEncrypt"
+extern "bcrypt" fn crypto_bc_decrypt(key: int, input: ptr<byte>, in_size: int, info: ptr<int>, iv: ptr<byte>, iv_size: int, output: ptr<byte>, out_size: int, result: ptr<int>, flags: int) -> i32 as "BCryptDecrypt"
+extern "bcrypt" fn crypto_gen_random(alg: int, buf: ptr<byte>, size: int, flags: int) -> i32 as "BCryptGenRandom"
+extern "bcrypt" fn crypto_bc_pbkdf2(prf: int, password: ptr<byte>, password_size: int, salt: ptr<byte>, salt_size: int, iterations: int, out: ptr<byte>, out_size: int, flags: int) -> i32 as "BCryptDeriveKeyPBKDF2"
+
+const CRYPTO_NONCE_SIZE = 12
+const CRYPTO_TAG_SIZE = 16
+
+// n bytes from the system's secure random generator
+fn crypto_random_bytes(n: int) -> str {
+    if n <= 0 { return "" }
+    let buf = __alloc_atomic(n)
+    let rc = crypto_gen_random(0, buf, n, 2)            // BCRYPT_USE_SYSTEM_PREFERRED_RNG
+    if rc != 0 { panic("crypto_random_bytes: the system random generator failed ({crypto_status(rc)})") }
+    return str_from_ptr(buf, n)
+}
+
+// a secure random int from lo to hi, both included
+fn crypto_random_int(lo: int, hi: int) -> int {
+    if hi < lo { panic("crypto_random_int: hi ({hi}) is below lo ({lo})") }
+    let span = hi - lo + 1                               // 0 when the range covers every int
+    loop {
+        let b = crypto_random_bytes(8)
+        var v = 0
+        for i in 0..8 { v = (v << 8) | int(b.byte_at(i)) }
+        if span == 0 { return v }
+        if span < 0 {                                    // more than half of all ints: keep v when it lands in range
+            let r = lo + v
+            if r >= lo and r <= hi { return r }
+            continue
+        }
+        let u = v >>> 1                                  // 0 .. 2**63 - 1
+        // throw away the top part that would make some results more likely than others
+        let limit = INT_MAX - (INT_MAX % span + 1) % span
+        if u <= limit { return lo + u % span }
+    }
+    return lo
+}
+
+// a key of `length` bytes from a password and a salt with PBKDF2-HMAC-SHA256; more iterations make
+// guessing the password slower (100000 or more is a good choice for passwords people type)
+fn crypto_pbkdf2(password: str, salt: str, iterations: int, length: int = 32) -> str {
+    if iterations < 1 { panic("crypto_pbkdf2: iterations must be at least 1") }
+    if length < 1 { panic("crypto_pbkdf2: length must be at least 1") }
+    let h = __alloc(8) as ptr<int>
+    crypto_check(crypto_open_alg(h, crypto_wide("SHA256"), 0 as ptr<byte>, 8), "open SHA256")   // HMAC flag
+    let out = __alloc_atomic(length)
+    let rc = crypto_bc_pbkdf2(h[0], str_data(password), password.len(), str_data(salt), salt.len(), iterations, out, length, 0)
+    crypto_close_alg(h[0], 0)
+    crypto_check(rc, "PBKDF2")
+    return str_from_ptr(out, length)
+}
+
+// encrypts with AES-GCM; key is 16, 24 or 32 bytes (32 = AES-256). The result is nonce + ciphertext + tag.
+// `extra` is data that is not encrypted but must arrive unchanged (for example a file name); pass the
+// same value to crypto_decrypt.
+fn crypto_encrypt(key: str, plain: str, extra: str = "") -> Result<str, str> {
+    let nonce = crypto_random_bytes(CRYPTO_NONCE_SIZE)
+    let r = crypto_gcm(key, nonce, plain, extra, true)
+    if r.is_err() { return r }
+    return Result.Ok(nonce + r.unwrap())
+}
+
+// decrypts what crypto_encrypt made; an error when the key is wrong or the data was changed
+fn crypto_decrypt(key: str, data: str, extra: str = "") -> Result<str, str> {
+    if data.len() < CRYPTO_NONCE_SIZE + CRYPTO_TAG_SIZE { return Result.Err("the data is too short to be encrypted text") }
+    return crypto_gcm(key, data[0..CRYPTO_NONCE_SIZE], data[CRYPTO_NONCE_SIZE..], extra, false)
+}
+
+// compares two secrets in time that does not depend on where they differ (for tokens and MACs)
+fn crypto_equal(a: str, b: str) -> bool {
+    if a.len() != b.len() { return false }
+    var diff = 0
+    for i in 0..a.len() { diff = diff | (int(a.byte_at(i)) ^ int(b.byte_at(i))) }
+    return diff == 0
+}
+
+// AES-GCM with a given nonce. Encrypting returns ciphertext + tag; decrypting takes ciphertext + tag and
+// returns the plain text. Never use the same key and nonce twice.
+fn crypto_gcm(key: str, nonce: str, data: str, extra: str, encrypt: bool) -> Result<str, str> {
+    if key.len() != 16 and key.len() != 24 and key.len() != 32 {
+        return Result.Err("the key must be 16, 24 or 32 bytes, not {key.len()}")
+    }
+    if nonce.len() != CRYPTO_NONCE_SIZE { return Result.Err("the nonce must be {CRYPTO_NONCE_SIZE} bytes") }
+    let alg = __alloc(8) as ptr<int>
+    crypto_check(crypto_open_alg(alg, crypto_wide("AES"), 0 as ptr<byte>, 0), "open AES")
+    let mode = crypto_wide("ChainingModeGCM")
+    crypto_check(crypto_set_property(alg[0], crypto_wide("ChainingMode"), mode, 32, 0), "set GCM mode")
+    let k = __alloc(8) as ptr<int>
+    crypto_check(crypto_make_key(alg[0], k, 0 as ptr<byte>, 0, str_data(key), key.len(), 0), "make key")
+
+    let size = if encrypt { data.len() } else { data.len() - CRYPTO_TAG_SIZE }
+    let tag = __alloc_atomic(CRYPTO_TAG_SIZE)
+    if not encrypt { __memcpy(tag, str_data(data) + size, CRYPTO_TAG_SIZE) }
+    // BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO, 88 bytes
+    let info = __alloc(88) as ptr<int>
+    info[0] = 88 | (1 << 32)
+    info[1] = str_data(nonce) as int
+    info[2] = CRYPTO_NONCE_SIZE
+    info[3] = if extra.len() > 0 { str_data(extra) as int } else { 0 }
+    info[4] = extra.len()
+    info[5] = tag as int
+    info[6] = CRYPTO_TAG_SIZE
+    let out = __alloc_atomic(max(size, 1))
+    let got = __alloc(8) as ptr<int>
+    let rc = if encrypt {
+        crypto_bc_encrypt(k[0], str_data(data), size, info, 0 as ptr<byte>, 0, out, size, got, 0)
+    } else {
+        crypto_bc_decrypt(k[0], str_data(data), size, info, 0 as ptr<byte>, 0, out, size, got, 0)
+    }
+    crypto_destroy_key(k[0])
+    crypto_close_alg(alg[0], 0)
+    if rc != 0 {
+        if not encrypt { return Result.Err("cannot decrypt: wrong key or the data was changed") }
+        return Result.Err("cannot encrypt ({crypto_status(rc)})")
+    }
+    let text = str_from_ptr(out, size)
+    if encrypt { return Result.Ok(text + str_from_ptr(tag, CRYPTO_TAG_SIZE)) }
+    return Result.Ok(text)
+}
+
+// a NUL-terminated UTF-16 copy of an ASCII name, for the bcrypt functions
+fn crypto_wide(s: str) -> ptr<byte> {
+    let p = __alloc_atomic(s.len() * 2 + 2)
+    for i in 0..s.len() { p[i * 2] = s.byte_at(i) }
+    return p
+}
+
+fn crypto_status(rc: int) -> str => "status 0x{rc & 0xFFFFFFFF:X}"
+
+fn crypto_check(rc: int, what: str) {
+    if rc != 0 { panic("std/crypto: {what} failed ({crypto_status(rc)})") }
+}
