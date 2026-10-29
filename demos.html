@@ -480,6 +480,16 @@ const lessons = [
     "atf": "interface Animal {\n    fn name(self) -> str\n    fn sound(self) -> str => \"...\"\n    fn speak(self) -> str {\n        return \"{self.name()} says {self.sound()}\"\n    }\n}\n\nstruct Dog { n: str }\nimpl Dog {\n    fn name(self) -> str { return self.n }\n    fn sound(self) -> str { return \"woof\" }\n}\n\nstruct Fish {}\nimpl Fish {\n    fn name(self) -> str { return \"the fish\" }\n}\n\nfn main() {\n    let zoo: [Animal] = [Dog(\"Rex\"), Fish()]\n    for a in zoo { println(a.speak()) }\n}\n",
     "py": null,
     "output": "Rex says woof\nthe fish says ..."
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "איטרטורים עצלים",
+    "text": [
+      "לולאת for עובדת על כל ערך עם מתודה next() שמחזירה T?. std/iter בונה שרשראות עצלות: map, filter ו-take לא עושים עבודה עד ש-collect מבקש ערכים, כך שאפשר לעבוד גם עם רצף אינסופי."
+    ],
+    "atf": "import \"std/iter\"\n\n// any type with  fn next(self) -> T?  works in a for loop\nstruct Fib { a: int, b: int }\nimpl Fib {\n    fn next(self) -> int? {\n        let x = self.a\n        self.a, self.b = self.b, self.a + self.b\n        return x\n    }\n}\n\nfn main() {\n    // nothing is computed until collect() asks for values\n    let squares = iter_count(1).map(|x| x * x).filter(|x| x % 2 == 1).take(4)\n    println(squares.collect())\n\n    for i, w in iter_of([\"red\", \"green\", \"blue\"]).skip(1) {\n        println(\"{i}: {w}\")\n    }\n\n    var fibs: [int] = []\n    for x in Fib(0, 1) {\n        if x > 50 { break }\n        fibs.push(x)\n    }\n    println(fibs)\n\n    println(iter_range(1, 6).fold(1, |acc, x| acc * x))\n    println(iter_lines(\"a=1\\nb=2\").map(|l| l.split(\"=\")[0]).join(\", \"))\n}\n",
+    "py": null,
+    "output": "[1, 9, 25, 49]\n0: green\n1: blue\n[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]\n120\na, b"
   }
 ];
 // LESSONS-END

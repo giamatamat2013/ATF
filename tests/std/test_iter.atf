@@ -1,0 +1,117 @@
+// tests for std/iter and for loops over iterators
+import "std/iter"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+// a hand-written iterator: any type with  fn next(self) -> T?  works in a for loop
+struct Countdown { n: int }
+impl Countdown {
+    fn next(self) -> int? {
+        if self.n == 0 { return nil }
+        self.n -= 1
+        return self.n + 1
+    }
+}
+
+interface Source { fn next(self) -> str? }
+
+fn main() -> int {
+    // making iterators
+    check("of", str(iter_of([1, 2, 3]).collect()), "[1, 2, 3]")
+    check("of empty", str(iter_of::<int>([]).collect()), "[]")
+    check("range", str(iter_range(2, 6).collect()), "[2, 3, 4, 5]")
+    check("count take", str(iter_count(10).take(3).collect()), "[10, 11, 12]")
+    check("repeat", str(iter_repeat("a").take(3).collect()), "[\"a\", \"a\", \"a\"]")
+    check("successors", str(iter_successors(1, |x| if x < 100 { x * 3 } else { nil }).collect()), "[1, 3, 9, 27, 81, 243]")
+    var k = 0
+    check("from", str(iter_from(fn() -> int? {
+        k += 1
+        if k > 3 { return nil }
+        return k * k
+    }).collect()), "[1, 4, 9]")
+    check("lines", str(iter_lines("one\r\ntwo\n\nfour").collect()), "[\"one\", \"two\", \"\", \"four\"]")
+
+    // lazy steps
+    check("map filter", str(iter_count(1).map(|x| x * x).filter(|x| x % 2 == 0).take(3).collect()), "[4, 16, 36]")
+    check("map type", str(iter_of([1, 22, 333]).map(|x| str(x).len()).collect()), "[1, 2, 3]")
+    check("filter_map", str(iter_of(["1", "x", "3"]).filter_map(|s| s.parse_int()).collect()), "[1, 3]")
+    check("skip", str(iter_range(0, 6).skip(4).collect()), "[4, 5]")
+    check("skip past end", str(iter_range(0, 3).skip(5).collect()), "[]")
+    check("take_while", str(iter_count(1).take_while(|x| x * x < 30).collect()), "[1, 2, 3, 4, 5]")
+    check("skip_while", str(iter_of([1, 2, 7, 1, 8]).skip_while(|x| x < 5).collect()), "[7, 1, 8]")
+    check("every", str(iter_range(0, 10).every(3).collect()), "[0, 3, 6, 9]")
+    check("enumerate", str(iter_of(["a", "b"]).enumerate().collect()), "[(0, \"a\"), (1, \"b\")]")
+    check("zip", str(iter_of([1, 2, 3]).zip(iter_of(["x", "y"])).collect()), "[(1, \"x\"), (2, \"y\")]")
+    check("chain", str(iter_range(0, 2).chain(iter_range(7, 9)).collect()), "[0, 1, 7, 8]")
+    var seen: [int] = []
+    let total = iter_of([5, 6]).inspect(|x| { seen.push(x) }).sum(0)
+    check("inspect", "{total} {seen}", "11 [5, 6]")
+
+    // laziness: only the values that are needed are made
+    var made = 0
+    let first_big = iter_count(1).inspect(|x| { made += 1 }).find(|x| x * x > 50)
+    check("lazy find", "{first_big!} after {made}", "8 after 8")
+
+    // running
+    check("count", str(iter_range(0, 7).filter(|x| x % 2 == 1).count()), "3")
+    check("fold", iter_of(["a", "b", "c"]).fold("", |acc, s| acc + s + s), "aabbcc")
+    check("sum float", str(iter_of([0.5, 1.5]).sum(0.0)), "2.0")
+    check("first", str(iter_count(4).first()!), "4")
+    check("first empty", str(iter_of::<int>([]).first() == nil), "true")
+    check("last", str(iter_range(0, 5).last()!), "4")
+    check("nth", str(iter_count(0).nth(10)!), "10")
+    check("any", str(iter_count(0).any(|x| x > 3)), "true")
+    check("all", str(iter_range(0, 4).all(|x| x < 4)), "true")
+    check("all false", str(iter_count(0).all(|x| x < 4)), "false")
+    check("min max", "{iter_of([4, 1, 9]).min()!} {iter_of([4, 1, 9]).max()!}", "1 9")
+    check("min empty", str(iter_of::<int>([]).min() == nil), "true")
+    check("join", iter_range(1, 4).map(|x| x * 10).join("-"), "10-20-30")
+    var acc: [int] = []
+    iter_range(0, 3).for_each(|x| { acc.push(x) })
+    check("for_each", str(acc), "[0, 1, 2]")
+
+    // used once: an iterator that has run to the end stays empty
+    let once = iter_of([1, 2])
+    check("used", "{once.count()} {once.count()}", "2 0")
+
+    // for loops
+    var got: [int] = []
+    for x in iter_count(1).map(|x| x * 2).take(4) { got.push(x) }
+    check("for", str(got), "[2, 4, 6, 8]")
+    var pairs: [str] = []
+    for i, s in iter_of(["p", "q"]) { pairs.push("{i}{s}") }
+    check("for index", str(pairs), "[\"0p\", \"1q\"]")
+    var cd: [int] = []
+    for n in Countdown(3) { cd.push(n) }
+    check("for struct", str(cd), "[3, 2, 1]")
+    var tup: [int] = []
+    for (a, b) in iter_of([1, 2]).zip(iter_of([10, 20])) { tup.push(a + b) }
+    check("for tuple", str(tup), "[11, 22]")
+    var brk: [int] = []
+    for x in iter_count(0) {
+        if x == 2 { continue }
+        if x > 4 { break }
+        brk.push(x)
+    }
+    check("for break continue", str(brk), "[0, 1, 3, 4]")
+    let src: Source = iter_lines("x\ny")
+    var ls: [str] = []
+    for l in src { ls.push(l) }
+    check("for interface", str(ls), "[\"x\", \"y\"]")
+
+    if failures > 0 {
+        println("{failures} failed")
+        return 1
+    }
+    println("all passed")
+    return 0
+}

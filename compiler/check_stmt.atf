@@ -899,7 +899,56 @@ impl Checker {
             out.push(tstmt(SK.While(cond, pre, [inc]), pos))
             return out
         }
-        fail(pos, "cannot loop over a value of type {ct.to_str()}", "you can loop over ranges (0..10), arrays, text and maps")
+        // ---- an iterator: any value with  fn next(self) -> T?  (the loop ends at nil)
+        let first_next = self.next_call(coll, pos)
+        if first_next != nil {
+            if names.len() > 2 { fail(pos, "for loops over an iterator take at most two variables:  for i, x in it") }
+            let first = first_next!
+            if not is_opt(first.ty) {
+                fail(pos, "{ct.to_str()}.next() returns {first.ty.to_str()}, but a for loop needs an optional (T?)",
+                    "return nil from next() when there are no more values")
+            }
+            let elem = opt_inner(first.ty)
+            let nv = self.new_tmp(first.ty, "$next")
+            out.push(tstmt(SK.Decl(nv, first), pos))
+            let nr = texpr(TK.VarRef(nv), first.ty, NOPOS)
+            let idx = self.new_tmp(TInt, "$i")
+            let idxr = texpr(TK.VarRef(idx), TInt, NOPOS)
+            if names.len() == 2 { out.push(tstmt(SK.Decl(idx, self.ci(0)), pos)) }
+            cx.push()
+            var iv: Var? = nil
+            if names.len() == 2 { iv = self.declare_var(names[0], TInt, false, pos) }
+            let xv = self.declare_var(names[names.len() - 1], elem, false, pos)
+            let body = self.loop_body(body_fn, label)
+            cx.pop()
+            var pre: [TStmt] = []
+            if iv != nil { pre.push(tstmt(SK.Decl(iv!, idxr), pos)) }
+            pre.push(tstmt(SK.Decl(xv, self.unwrap_opt(nr)), pos))
+            for x in body { pre.push(x) }
+            var inc: [TStmt] = [tstmt(SK.Set(nr, self.next_call(coll, pos)!), NOPOS)]
+            if iv != nil { inc.push(tstmt(SK.Set(idxr, texpr(TK.Bin("add", idxr, self.ci(1)), TInt, NOPOS)), NOPOS)) }
+            let cond = texpr(TK.Bin("ne", nr, c_nil(first.ty, NOPOS)), TBool, NOPOS)
+            out.push(tstmt(SK.While(cond, pre, inc), pos))
+            return out
+        }
+        fail(pos, "cannot loop over a value of type {ct.to_str()}", "you can loop over ranges (0..10), arrays, text, maps and iterators (a type with  fn next(self) -> T?)")
+    }
+
+    // coll.next() for a for loop over an iterator (a struct or an interface value), nil if there is no next()
+    fn next_call(self, coll: TExpr, pos: Pos) -> TExpr? {
+        match coll.ty {
+            Type.Iface(info) => {
+                for m in self.iface_methods(info) {
+                    if m.name == "next" and m.params.len() == 0 { return self.iface_call(coll, info, "next", [], pos) }
+                }
+                return nil
+            }
+            _ => {}
+        }
+        for h in self.find_methods(coll.ty, "next") {
+            if h.fi.has_self and h.fi.decl.params.len() == 1 { return self.try_method(coll, "next", [], pos) }
+        }
+        return nil
     }
 
     fn build_comprehension(self, elem_ast: Expr, names: [str], iter_ast: Expr, cond_ast: Expr?, hint: Type?, pos: Pos) -> TExpr {

@@ -676,7 +676,7 @@ fn main() {
 1 + 2 + ... + 100 = 5050
 ```
 
-You can also loop over arrays, text and maps. With two variables you get the index (or the key):
+You can also loop over arrays, text, maps and iterators (see `std/iter` in section 25). With two variables you get the index (or the key):
 
 <!-- id: for-collections -->
 ```atf
@@ -2556,6 +2556,61 @@ Things to remember:
 * `import "std/name"` loads `name.atf` from the `stdlib` folder of the installation (next to `bin`).
 * `include_str("file.txt")` puts the contents of a file into your program as a string when it is compiled (the path is
   relative to the source file). The program then does not need the file at run time.
+
+### Lazy iterators: `std/iter`
+
+A `for` loop also works on an **iterator**: any value with a method `fn next(self) -> T?`. The loop calls `next()`
+again and again and stops at the first `nil`, so the values are made one at a time, only when they are needed.
+`std/iter` gives you a ready-made iterator, `Iter<T>`. Make one with `iter_of(array)`, `iter_range(lo, hi)`,
+`iter_count(start)` (never ends), `iter_repeat(x)`, `iter_lines(text)`, `iter_successors(first, f)` or
+`iter_from(f)`. The steps `map`, `filter`, `filter_map`, `take`, `skip`, `take_while`, `skip_while`, `every`,
+`enumerate`, `zip`, `chain` and `inspect` build a new iterator and do no work yet; `collect`, `count`, `sum`,
+`fold`, `for_each`, `first`, `last`, `nth`, `find`, `any`, `all`, `min`, `max` and `join` run it. An iterator can
+be used only once, and one that never ends must be limited (with `take` or `take_while`, or a `break`) before you
+collect it.
+
+<!-- id: lazy-iterators -->
+```atf
+import "std/iter"
+
+// any type with  fn next(self) -> T?  works in a for loop
+struct Fib { a: int, b: int }
+impl Fib {
+    fn next(self) -> int? {
+        let x = self.a
+        self.a, self.b = self.b, self.a + self.b
+        return x
+    }
+}
+
+fn main() {
+    // nothing is computed until collect() asks for values
+    let squares = iter_count(1).map(|x| x * x).filter(|x| x % 2 == 1).take(4)
+    println(squares.collect())
+
+    for i, w in iter_of(["red", "green", "blue"]).skip(1) {
+        println("{i}: {w}")
+    }
+
+    var fibs: [int] = []
+    for x in Fib(0, 1) {
+        if x > 50 { break }
+        fibs.push(x)
+    }
+    println(fibs)
+
+    println(iter_range(1, 6).fold(1, |acc, x| acc * x))
+    println(iter_lines("a=1\nb=2").map(|l| l.split("=")[0]).join(", "))
+}
+```
+```output
+[1, 9, 25, 49]
+0: green
+1: blue
+[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+120
+a, b
+```
 
 ### More modules: text, files, programs, config, XML, web and tests
 

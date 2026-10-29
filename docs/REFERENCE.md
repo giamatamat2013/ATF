@@ -100,6 +100,7 @@ while c { }
 loop { break }
 for i in 0..5 { }                     // 0..=5 includes the end; 0..=20 step 5; 10..0 step -3
 for x in arr { }  for i, x in arr { }  for k, v in map { }  for ch in "text" { }
+for x in it { }                       // an iterator: any value with  fn next(self) -> T?  (ends at nil)
 outer: for a in xs { for b in ys { continue outer } }   // labels
 defer cleanup()                       // runs when the block ends, last in first out
 ```
@@ -189,7 +190,7 @@ method of that name uses it. Inside the default, `self` is the interface value.
 
 `import "other"` loads `other.atf` (the path is relative to the importing file, the ending may be left out).
 `import "std/json"` loads a library module: `algo`, `app`, `args`, `base64`, `bigint`, `bits`, `collections`, `crypto`, `csv`, `datetime`,
-`fs`, `glob`, `hash`, `hex`, `http`, `httpd`, `ini`, `json`, `log`, `math`, `net`, `path`, `process`, `random`, `regex`, `test`, `text`,
+`fs`, `glob`, `hash`, `hex`, `http`, `httpd`, `ini`, `iter`, `json`, `log`, `math`, `net`, `path`, `process`, `random`, `regex`, `test`, `text`,
 `toml`, `ui`, `url`, `websocket`, `xml` and `yaml` (all described in [STDLIB.md](STDLIB.md)). Everything in an imported file becomes part of the one global namespace. `include_str("f.txt")` embeds a
 file in the program at compile time.
 

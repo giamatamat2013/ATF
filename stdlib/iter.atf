@@ -1,0 +1,381 @@
+// std/iter - lazy iterators: values are made one at a time, only when they are needed.
+//
+//   import "std/iter"
+//
+//   let evens = iter_count(1).map(|x| x * x).filter(|x| x % 2 == 0).take(3)
+//   for x in evens { println(x) }                // 4 16 36
+//   println(iter_of([3, 1, 2]).map(|x| x * 10).collect())   // [30, 10, 20]
+//
+// An Iter<T> holds a function that returns the next value, or nil when there are no more. Methods like
+// map, filter, take and skip build a new iterator and do no work yet; methods like collect, count, sum,
+// fold and for_each run it. An iterator can be used once: after it has run to the end it stays empty.
+// A for loop works on any value with a method  fn next(self) -> T?  so it works on Iter<T> as well.
+// iter_count and iter_repeat never end: limit them with take or take_while before collecting them.
+
+struct Iter<T> {
+    pull: fn() -> T?
+}
+
+// ================================================================ making iterators
+
+// an iterator over the elements of an array
+fn iter_of<T>(a: [T]) -> Iter<T> {
+    var i = 0
+    return Iter(fn() -> T? {
+        if i >= a.len() { return nil }
+        i += 1
+        return a[i - 1]
+    })
+}
+
+// an iterator from a function that returns the next value, or nil at the end
+fn iter_from<T>(f: fn() -> T?) -> Iter<T> {
+    return Iter(f)
+}
+
+// the numbers lo, lo+1, ... up to hi (hi itself not included)
+fn iter_range(lo: int, hi: int) -> Iter<int> {
+    var i = lo
+    return Iter(fn() -> int? {
+        if i >= hi { return nil }
+        i += 1
+        return i - 1
+    })
+}
+
+// start, start+1, start+2, ... without end
+fn iter_count(start: int) -> Iter<int> {
+    var i = start
+    return Iter(fn() -> int? {
+        i += 1
+        return i - 1
+    })
+}
+
+// x, x, x, ... without end
+fn iter_repeat<T>(x: T) -> Iter<T> {
+    return Iter(fn() -> T? { return x })
+}
+
+// first, f(first), f(f(first)), ... until f returns nil
+fn iter_successors<T>(first: T, f: fn(T) -> T?) -> Iter<T> {
+    var cur: T? = first
+    return Iter(fn() -> T? {
+        let c = cur
+        if c == nil { return nil }
+        cur = f(c!)
+        return c
+    })
+}
+
+// the lines of a text, without the line endings
+fn iter_lines(text: str) -> Iter<str> {
+    var pos = 0
+    return Iter(fn() -> str? {
+        if pos >= text.len() { return nil }
+        var end = pos
+        while end < text.len() and text.byte_at(end) != '\n' { end += 1 }
+        var line = text[pos..end]
+        pos = end + 1
+        if line.ends_with("\r") { line = line[0..line.len() - 1] }
+        return line
+    })
+}
+
+impl<T> Iter<T> {
+    // the next value, or nil when there are no more
+    fn next(self) -> T? {
+        return self.pull()
+    }
+
+    // ============================================================ lazy: these build a new iterator
+
+    // f applied to every value
+    fn map<U>(self, f: fn(T) -> U) -> Iter<U> {
+        let src = self
+        return Iter(fn() -> U? {
+            let x = src.next()
+            if x == nil { return nil }
+            return f(x!)
+        })
+    }
+
+    // only the values for which keep returns true
+    fn filter(self, keep: fn(T) -> bool) -> Iter<T> {
+        let src = self
+        return Iter(fn() -> T? {
+            loop {
+                let x = src.next()
+                if x == nil { return nil }
+                if keep(x!) { return x }
+            }
+        })
+    }
+
+    // f applied to every value, leaving out the nil results
+    fn filter_map<U>(self, f: fn(T) -> U?) -> Iter<U> {
+        let src = self
+        return Iter(fn() -> U? {
+            loop {
+                let x = src.next()
+                if x == nil { return nil }
+                let y = f(x!)
+                if y != nil { return y }
+            }
+        })
+    }
+
+    // at most the first n values
+    fn take(self, n: int) -> Iter<T> {
+        let src = self
+        var left = n
+        return Iter(fn() -> T? {
+            if left <= 0 { return nil }
+            left -= 1
+            return src.next()
+        })
+    }
+
+    // all values except the first n
+    fn skip(self, n: int) -> Iter<T> {
+        let src = self
+        var todo = n
+        return Iter(fn() -> T? {
+            while todo > 0 {
+                todo -= 1
+                if src.next() == nil { return nil }
+            }
+            return src.next()
+        })
+    }
+
+    // values while ok returns true; stops at the first value for which it is false
+    fn take_while(self, ok: fn(T) -> bool) -> Iter<T> {
+        let src = self
+        var done = false
+        return Iter(fn() -> T? {
+            if done { return nil }
+            let x = src.next()
+            if x == nil or not ok(x!) {
+                done = true
+                return nil
+            }
+            return x
+        })
+    }
+
+    // leaves out values while skip_it returns true, then gives all the rest
+    fn skip_while(self, skip_it: fn(T) -> bool) -> Iter<T> {
+        let src = self
+        var started = false
+        return Iter(fn() -> T? {
+            loop {
+                let x = src.next()
+                if x == nil { return nil }
+                if started or not skip_it(x!) {
+                    started = true
+                    return x
+                }
+            }
+        })
+    }
+
+    // every n-th value, starting with the first
+    fn every(self, n: int) -> Iter<T> {
+        let src = self
+        var first = true
+        return Iter(fn() -> T? {
+            if not first {
+                for i in 0..n - 1 {
+                    if src.next() == nil { return nil }
+                }
+            }
+            first = false
+            return src.next()
+        })
+    }
+
+    // (index, value) pairs, the index counting from 0
+    fn enumerate(self) -> Iter<(int, T)> {
+        let src = self
+        var i = 0
+        return Iter(fn() -> (int, T)? {
+            let x = src.next()
+            if x == nil { return nil }
+            i += 1
+            return (i - 1, x!)
+        })
+    }
+
+    // pairs of one value from each iterator; ends when either one ends
+    fn zip<U>(self, other: Iter<U>) -> Iter<(T, U)> {
+        let src = self
+        return Iter(fn() -> (T, U)? {
+            let a = src.next()
+            if a == nil { return nil }
+            let b = other.next()
+            if b == nil { return nil }
+            return (a!, b!)
+        })
+    }
+
+    // the values of this iterator, then those of other
+    fn chain(self, other: Iter<T>) -> Iter<T> {
+        let src = self
+        var first_done = false
+        return Iter(fn() -> T? {
+            if not first_done {
+                let x = src.next()
+                if x != nil { return x }
+                first_done = true
+            }
+            return other.next()
+        })
+    }
+
+    // calls f with every value as it passes, without changing it
+    fn inspect(self, f: fn(T)) -> Iter<T> {
+        let src = self
+        return Iter(fn() -> T? {
+            let x = src.next()
+            if x != nil { f(x!) }
+            return x
+        })
+    }
+
+    // ============================================================ these run the iterator
+
+    // all remaining values as an array
+    fn collect(self) -> [T] {
+        var out: [T] = []
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            out.push(x!)
+        }
+        return out
+    }
+
+    // how many values are left (uses them up)
+    fn count(self) -> int {
+        var n = 0
+        while self.next() != nil { n += 1 }
+        return n
+    }
+
+    // calls f with every value
+    fn for_each(self, f: fn(T)) {
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            f(x!)
+        }
+    }
+
+    // combines the values from left to right: f(f(f(init, a), b), c)
+    fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A {
+        var acc = init
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            acc = f(acc, x!)
+        }
+        return acc
+    }
+
+    // the sum of the values (numbers); start is the value for an empty iterator, usually 0 or 0.0
+    fn sum(self, start: T) -> T {
+        var acc = start
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            acc = acc + x!
+        }
+        return acc
+    }
+
+    // the first value, or nil if there is none
+    fn first(self) -> T? {
+        return self.next()
+    }
+
+    // the last value, or nil if there is none (uses up the iterator)
+    fn last(self) -> T? {
+        var res: T? = nil
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            res = x
+        }
+        return res
+    }
+
+    // the value at position n (0 = the next one), or nil
+    fn nth(self, n: int) -> T? {
+        for i in 0..n {
+            if self.next() == nil { return nil }
+        }
+        return self.next()
+    }
+
+    // the first value for which ok returns true, or nil
+    fn find(self, ok: fn(T) -> bool) -> T? {
+        loop {
+            let x = self.next()
+            if x == nil { return nil }
+            if ok(x!) { return x }
+        }
+    }
+
+    // true if ok returns true for some value (stops at the first one)
+    fn any(self, ok: fn(T) -> bool) -> bool {
+        return self.find(ok) != nil
+    }
+
+    // true if ok returns true for every value (stops at the first that fails)
+    fn all(self, ok: fn(T) -> bool) -> bool {
+        loop {
+            let x = self.next()
+            if x == nil { return true }
+            if not ok(x!) { return false }
+        }
+    }
+
+    // the smallest value by <, or nil if there is none
+    fn min(self) -> T? {
+        var best = self.next()
+        if best == nil { return nil }
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            if x! < best! { best = x }
+        }
+        return best
+    }
+
+    // the largest value by <, or nil if there is none
+    fn max(self) -> T? {
+        var best = self.next()
+        if best == nil { return nil }
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            if best! < x! { best = x }
+        }
+        return best
+    }
+
+    // the values as text with sep between them
+    fn join(self, sep: str) -> str {
+        var sb = str_builder()
+        var first = true
+        loop {
+            let x = self.next()
+            if x == nil { break }
+            if not first { sb.add(sep) }
+            first = false
+            sb.add("{x!}")
+        }
+        return sb.finish()
+    }
+}

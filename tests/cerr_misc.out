@@ -33,7 +33,7 @@ error: cannot loop over a value of type float
   --> cerr_misc.atf:12:5
  12 |     for i in 3.5 { }
     |     ^
-  hint: you can loop over ranges (0..10), arrays, text and maps
+  hint: you can loop over ranges (0..10), arrays, text, maps and iterators (a type with  fn next(self) -> T?)
 
 error: 'break' can only be used inside a loop
   --> cerr_misc.atf:13:5

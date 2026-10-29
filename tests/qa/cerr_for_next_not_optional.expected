@@ -1,0 +1,6 @@
+COMPILE ERROR
+error: Ticker.next() returns int, but a for loop needs an optional (T?)
+  --> cerr_for_next_not_optional.atf:10:5
+ 10 |     for x in Ticker(0) { println(x) }
+    |     ^
+  hint: return nil from next() when there are no more values

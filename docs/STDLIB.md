@@ -41,6 +41,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/http](#stdhttp)
   - [std/httpd](#stdhttpd)
   - [std/ini](#stdini)
+  - [std/iter](#stditer)
   - [std/json](#stdjson)
   - [std/log](#stdlog)
   - [std/markdown](#stdmarkdown)
@@ -1714,6 +1715,73 @@ struct IniDoc {
 - `.remove(section: str, key: str)`
 - `.section_names() -> [str]` - the section names, in file order, without the unnamed first section
 - `.keys(section: str) -> [str]` - the keys of a section in file order (empty when the section does not exist)
+
+## std/iter
+
+Lazy iterators: values are made one at a time, only when they are needed.
+
+```text
+import "std/iter"
+
+let evens = iter_count(1).map(|x| x * x).filter(|x| x % 2 == 0).take(3)
+for x in evens { println(x) }                // 4 16 36
+println(iter_of([3, 1, 2]).map(|x| x * 10).collect())   // [30, 10, 20]
+```
+
+An Iter<T> holds a function that returns the next value, or nil when there are no more. Methods like
+map, filter, take and skip build a new iterator and do no work yet; methods like collect, count, sum,
+fold and for_each run it. An iterator can be used once: after it has run to the end it stays empty.
+A for loop works on any value with a method  fn next(self) -> T?  so it works on Iter<T> as well.
+iter_count and iter_repeat never end: limit them with take or take_while before collecting them.
+
+**Types**
+
+```text
+struct Iter<T> {
+    pull: fn() -> T?
+}
+```
+
+
+**Functions**
+
+- `fn iter_of<T>(a: [T]) -> Iter<T>` - an iterator over the elements of an array
+- `fn iter_from<T>(f: fn() -> T?) -> Iter<T>` - an iterator from a function that returns the next value, or nil at the end
+- `fn iter_range(lo: int, hi: int) -> Iter<int>` - the numbers lo, lo+1, ... up to hi (hi itself not included)
+- `fn iter_count(start: int) -> Iter<int>` - start, start+1, start+2, ... without end
+- `fn iter_repeat<T>(x: T) -> Iter<T>` - x, x, x, ... without end
+- `fn iter_successors<T>(first: T, f: fn(T) -> T?) -> Iter<T>` - first, f(first), f(f(first)), ... until f returns nil
+- `fn iter_lines(text: str) -> Iter<str>` - the lines of a text, without the line endings
+
+**Methods of `Iter<T>`**
+
+- `.next() -> T?` - the next value, or nil when there are no more
+- `.map<U>(f: fn(T) -> U) -> Iter<U>` - f applied to every value
+- `.filter(keep: fn(T) -> bool) -> Iter<T>` - only the values for which keep returns true
+- `.filter_map<U>(f: fn(T) -> U?) -> Iter<U>` - f applied to every value, leaving out the nil results
+- `.take(n: int) -> Iter<T>` - at most the first n values
+- `.skip(n: int) -> Iter<T>` - all values except the first n
+- `.take_while(ok: fn(T) -> bool) -> Iter<T>` - values while ok returns true; stops at the first value for which it is false
+- `.skip_while(skip_it: fn(T) -> bool) -> Iter<T>` - leaves out values while skip_it returns true, then gives all the rest
+- `.every(n: int) -> Iter<T>` - every n-th value, starting with the first
+- `.enumerate() -> Iter<(int, T)>` - (index, value) pairs, the index counting from 0
+- `.zip<U>(other: Iter<U>) -> Iter<(T, U)>` - pairs of one value from each iterator; ends when either one ends
+- `.chain(other: Iter<T>) -> Iter<T>` - the values of this iterator, then those of other
+- `.inspect(f: fn(T)) -> Iter<T>` - calls f with every value as it passes, without changing it
+- `.collect() -> [T]` - all remaining values as an array
+- `.count() -> int` - how many values are left (uses them up)
+- `.for_each(f: fn(T))` - calls f with every value
+- `.fold<A>(init: A, f: fn(A, T) -> A) -> A` - combines the values from left to right: f(f(f(init, a), b), c)
+- `.sum(start: T) -> T` - the sum of the values (numbers); start is the value for an empty iterator, usually 0 or 0.0
+- `.first() -> T?` - the first value, or nil if there is none
+- `.last() -> T?` - the last value, or nil if there is none (uses up the iterator)
+- `.nth(n: int) -> T?` - the value at position n (0 = the next one), or nil
+- `.find(ok: fn(T) -> bool) -> T?` - the first value for which ok returns true, or nil
+- `.any(ok: fn(T) -> bool) -> bool` - true if ok returns true for some value (stops at the first one)
+- `.all(ok: fn(T) -> bool) -> bool` - true if ok returns true for every value (stops at the first that fails)
+- `.min() -> T?` - the smallest value by <, or nil if there is none
+- `.max() -> T?` - the largest value by <, or nil if there is none
+- `.join(sep: str) -> str` - the values as text with sep between them
 
 ## std/json
 

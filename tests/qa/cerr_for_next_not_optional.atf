@@ -1,0 +1,11 @@
+struct Ticker { n: int }
+impl Ticker {
+    fn next(self) -> int {
+        self.n += 1
+        return self.n
+    }
+}
+
+fn main() {
+    for x in Ticker(0) { println(x) }
+}

@@ -60,7 +60,8 @@ total: 5.25
   `try`/`catch`, labeled loops, a garbage collector, readable crash reports with tracebacks, a REPL and a code formatter.
 - **Batteries included.** Strings, arrays, maps, sets, files, processes, time and random numbers are always
   available; modules add JSON, CSV, TOML, Base64, hex, hashes (MD5, SHA-1, SHA-256, CRC32), dates and times,
-  collections (deque, priority queue, sorted map and set, counter, linked list), program settings (`std/app`),
+  collections (deque, priority queue, sorted map and set, counter, linked list), lazy iterators (`std/iter`, and
+  `for` loops over any type with `next()`), program settings (`std/app`),
   regular expressions (`std/regex`), file paths and folders (`std/path`, `std/fs`), running programs (`std/process`),
   XML (`std/xml`), an HTTP/HTTPS client (`std/http`), TCP connections and servers and UDP messages (`std/net`), a small web server (`std/httpd`), HTML pages with CSS animations (`std/html`), window animations (`animate`, easing, `anim_loop` in `std/ui`), web addresses (`std/url`), INI files (`std/ini`), YAML files (`std/yaml`), whole numbers of any size (`std/bigint`), encryption, secure random bytes and keys from passwords (`std/crypto`), WebSocket clients and servers (`std/websocket`),
   file name patterns (`std/glob`), a test framework with property tests on random values (`std/test`),

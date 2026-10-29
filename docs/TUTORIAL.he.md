@@ -2414,6 +2414,7 @@ fn main() {
 
 * `std/json` - קריאה וכתיבה של JSON.
 * `std/collections` - מבני נתונים: מחסנית, תור, תור עדיפויות, מילון ממוין, מונה ועוד.
+* `std/iter` - איטרטורים עצלים: `map`, `filter`, `take` ועוד, בלי לבנות מערכים בדרך (ראו בהמשך הפרק).
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
@@ -2465,6 +2466,58 @@ fn main() {
 ```output
 [("the", 3), ("and", 2)]
 1 0 8
+```
+
+### איטרטורים עצלים: `std/iter`
+
+לולאת `for` עובדת גם על **איטרטור**: כל ערך שיש לו מתודה `fn next(self) -> T?`. הלולאה קוראת ל-`next()` שוב ושוב
+ועוצרת ב-`nil` הראשון, כך שהערכים נוצרים אחד-אחד, רק כשצריך אותם. `std/iter` נותן איטרטור מוכן, `Iter<T>`.
+יוצרים אותו עם `iter_of(array)`, `iter_range(lo, hi)`, `iter_count(start)` (לא נגמר), `iter_repeat(x)`,
+`iter_lines(text)`, `iter_successors(first, f)` או `iter_from(f)`. השלבים `map`, `filter`, `take`, `skip`,
+`take_while`, `enumerate`, `zip`, `chain` ועוד בונים איטרטור חדש ולא עושים עבודה עדיין; `collect`, `count`, `sum`,
+`fold`, `first`, `find`, `any`, `all`, `min`, `max` ו-`join` מריצים אותו. אפשר להשתמש באיטרטור פעם אחת בלבד, ואיטרטור
+שלא נגמר צריך להגביל (עם `take`, `take_while` או `break`) לפני שאוספים אותו.
+
+```atf
+import "std/iter"
+
+// any type with  fn next(self) -> T?  works in a for loop
+struct Fib { a: int, b: int }
+impl Fib {
+    fn next(self) -> int? {
+        let x = self.a
+        self.a, self.b = self.b, self.a + self.b
+        return x
+    }
+}
+
+fn main() {
+    // nothing is computed until collect() asks for values
+    let squares = iter_count(1).map(|x| x * x).filter(|x| x % 2 == 1).take(4)
+    println(squares.collect())
+
+    for i, w in iter_of(["red", "green", "blue"]).skip(1) {
+        println("{i}: {w}")
+    }
+
+    var fibs: [int] = []
+    for x in Fib(0, 1) {
+        if x > 50 { break }
+        fibs.push(x)
+    }
+    println(fibs)
+
+    println(iter_range(1, 6).fold(1, |acc, x| acc * x))
+    println(iter_lines("a=1\nb=2").map(|l| l.split("=")[0]).join(", "))
+}
+```
+```output
+[1, 9, 25, 49]
+0: green
+1: blue
+[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]
+120
+a, b
 ```
 
 ### תוכנית שורת פקודה שלמה
