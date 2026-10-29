@@ -1,6 +1,7 @@
 """Compiler driver: load source files, check, generate code, write the executable."""
 import hashlib
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -193,17 +194,61 @@ USAGE = """ATF %s - a small, fast, compiled programming language
 
 usage:
   atf run   file.atf [args...]     compile and run
+  atf shell                         interactive command line for ATF commands
+  atf interpret file.atf            interpret; use native backend when needed
   atf build file.atf [-o out.exe]  compile to a native executable
   atf check file.atf               check for errors only
   atf version
 """ % VERSION
 
 
+def shell():
+    native = os.path.join(os.path.dirname(HERE), "bin", "atf.exe")
+    if os.path.isfile(native):
+        try:
+            return subprocess.call(program_argv(native) + ["shell"])
+        except (OSError, RuntimeError):
+            pass
+    print("ATF %s command line. Enter an ATF command; type exit to quit." % VERSION)
+    while True:
+        try:
+            line = input("ATF> ").strip()
+        except EOFError:
+            break
+        if not line:
+            continue
+        if line in ("exit", "quit"):
+            break
+        if line in ("help", "--help", "-h"):
+            print(USAGE)
+            continue
+        if line.startswith("atf "):
+            line = line[4:].lstrip()
+        if line == "shell":
+            print("already in the ATF command line; type exit to quit")
+            continue
+        if not line:
+            print(USAGE)
+            continue
+        main(["atf"] + shlex.split(line))
+
 def main(argv):
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
         print(USAGE)
         return 0
     cmd = argv[1]
+    if cmd == "shell":
+        return shell() or 0
+    if cmd == "interpret":
+        native = os.path.join(os.path.dirname(HERE), "bin", "atf.exe")
+        if os.path.isfile(native):
+            try:
+                return subprocess.call(program_argv(native) + ["interpret"] + argv[2:])
+            except (OSError, RuntimeError) as e:
+                print("error: cannot start the ATF interpreter (%s)" % e, file=sys.stderr)
+                return 1
+        print("error: the interpreter requires the self-hosted compiler (bin/atf.exe)", file=sys.stderr)
+        return 1
     if cmd == "version":
         print("ATF " + VERSION)
         return 0

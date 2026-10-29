@@ -1,0 +1,4 @@
+fn main() {
+    let values = [20, 22]
+    println(values[0] + values[1])
+}

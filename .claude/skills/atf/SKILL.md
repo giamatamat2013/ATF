@@ -25,6 +25,8 @@ ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), st
    atf run f.atf [args...]    # compile + run (stdin works: atf run f.atf < in.txt)
    atf build f.atf -o f.exe   # stand-alone exe
    atf fmt f.atf [--check]    # fix indentation
+   atf shell                   # interactive prompt for ATF code and CLI commands; exit to quit
+   atf interpret file.atf      # use the ATF interpreter; native fallback when needed
    atf repl
    atf test [folder]          # runs test_*.atf / *_test.atf (pass = exit 0, and output == NAME.out if present)
    atf new name               # project: lib.atf + main.atf + test_lib.atf (a test has its own main: import lib, not main)
@@ -32,6 +34,7 @@ ATF is compiled (x86-64 machine code written directly into a Windows `.exe`), st
    atf watch f.atf            # rerun on every save of f.atf or its local imports
    ```
 3. Compiler errors are precise (message, `file:line:col`, a caret, often a `hint:`). Read the hint and fix; do not rewrite blindly.
+   `atf run` remains the normal compiled execution path. `atf interpret` selects the interpreter explicitly and uses native execution for constructs the interpreter does not support directly.
 4. When changing the language, compiler or library in the ATF repo, follow its `CLAUDE.md`: the same piece of work updates the tutorials (English and Hebrew), README, `docs/STDLIB.md`, this skill and the VS Code extension.
 5. When unsure about a library function, check `references/stdlib.md` (copy of the repo's docs/STDLIB.md) and, if a local repo exists, its `docs/TUTORIAL.md`, `atf/stdlib/prelude.atf` (the always-available library, in ATF), and `examples/` (45 tested programs). Prefer the repo copies if present: they are newer than this skill.
 

@@ -1,0 +1,355 @@
+﻿// TIR interpreter entry point. Values and execution live here so the REPL and
+// file runner can share the same execution backend.
+import "util"
+import "tir"
+
+// The interpreter starts by handling scalar TIR. Unsupported low-level TIR is
+// reported to the caller, which can use the native backend for compatibility.
+enum IValue {
+    IVoid,
+    IInt(int),
+    IFloat(float),
+    IBool(bool),
+    IStr(str),
+    INil
+}
+
+enum IFlow {
+    INormal,
+    IBreak(int),
+    IContinue(int),
+    IReturn(IValue)
+}
+
+struct IContext {
+    locals: {int: IValue},
+    globals: {int: IValue},
+    output: [str],
+    supported: bool
+}
+
+fn interp_builtin(name: str) -> bool {
+    return name == "__rt_init" or name == "__rt_exit" or name == "flush" or name == "print_str" or name == "eprint_str" or name == "str_concat" or name == "str_repeat" or name == "int_to_str" or name == "float_to_str"
+}
+
+fn interp_can_fn(f: FnInst, seen: {int: bool}) -> bool {
+    if interp_builtin(f.name) { return true }
+    if seen.get(f.uid, false) { return true }
+    seen[f.uid] = true
+    if f.body == nil { return false }
+    for s in f.body! { if not interp_can_stmt(s, seen) { return false } }
+    return true
+}
+
+fn interp_can_stmt(s: TStmt, seen: {int: bool}) -> bool {
+    return match s.k {
+        SK.Decl(v, init) => init == nil or interp_can_expr(init!, seen)
+        SK.Set(t, v) => interp_can_expr(t, seen) and interp_can_expr(v, seen)
+        SK.ExprS(e) => interp_can_expr(e, seen)
+        SK.If(c, a, b) => interp_can_expr(c, seen) and interp_can_stmts(a, seen) and interp_can_stmts(b, seen)
+        SK.While(c, a, b) => interp_can_expr(c, seen) and interp_can_stmts(a, seen) and interp_can_stmts(b, seen)
+        SK.Break => true
+        SK.Continue => true
+        SK.BreakN(n) => true
+        SK.ContinueN(n) => true
+        SK.Ret(e) => e == nil or interp_can_expr(e!, seen)
+        SK.Blk(a) => interp_can_stmts(a, seen)
+    }
+}
+
+fn interp_can_stmts(ss: [TStmt], seen: {int: bool}) -> bool {
+    for s in ss { if not interp_can_stmt(s, seen) { return false } }
+    return true
+}
+
+fn interp_can_expr(e: TExpr, seen: {int: bool}) -> bool {
+    return match e.k {
+        TK.Const(k, iv, fv, sv) => true
+        TK.VarRef(v) => true
+        TK.GlobalRef(g) => true
+        TK.FnRef(f) => false
+        TK.Un(op, x) => interp_can_expr(x, seen)
+        TK.Bin(op, a, b) => interp_can_expr(a, seen) and interp_can_expr(b, seen)
+        TK.And(a, b) => interp_can_expr(a, seen) and interp_can_expr(b, seen)
+        TK.Or(a, b) => interp_can_expr(a, seen) and interp_can_expr(b, seen)
+        TK.Cvt(k, x) => interp_can_expr(x, seen)
+        TK.Call(f, args) => interp_can_exprs(args, seen) and (interp_builtin(f.name) or interp_can_fn(f, seen))
+        TK.CallExt(x, args) => false
+        TK.CallInd(f, args) => false
+        TK.Load(a, i) => false
+        TK.PtrIdx(a, b, n) => false
+        TK.ArrIdx(a, b, n) => false
+        TK.NewObj(args) => false
+        TK.Intr(n, args) => (n == "sqrt" or n == "floor" or n == "ceil" or n == "trunc" or n == "fabs" or n == "popcnt" or n == "ctz" or n == "clz") and interp_can_exprs(args, seen)
+        TK.Cond(c, a, b) => interp_can_expr(c, seen) and interp_can_expr(a, seen) and interp_can_expr(b, seen)
+        TK.Seq(ss, x) => interp_can_stmts(ss, seen) and interp_can_expr(x, seen)
+        TK.MkClosure(f, caps) => false
+    }
+}
+
+fn interp_can_exprs(es: [TExpr], seen: {int: bool}) -> bool {
+    for e in es { if not interp_can_expr(e, seen) { return false } }
+    return true
+}
+
+fn interp_run(prog: Program) -> (bool, str) {
+    if prog.entry == nil { return (false, "") }
+    let seen: {int: bool} = {}
+    if not interp_can_fn(prog.entry!, seen) { return (false, "") }
+    let cx = IContext({}, {}, [], true)
+    interp_call(cx, prog.entry!, [])
+    return (cx.supported, "".join(cx.output))
+}
+
+fn interp_call(cx: IContext, f: FnInst, args: [IValue]) -> IValue {
+    if f.name == "__rt_init" or f.name == "__rt_exit" or f.name == "flush" { return IValue.IVoid }
+    if f.name == "print_str" or f.name == "eprint_str" {
+        if args.len() > 0 {
+            match args[0] {
+                IValue.IStr(s) => {
+                    if f.name == "eprint_str" { eprint(s) } else { cx.output.push(s) }
+                }
+                _ => cx.supported = false
+            }
+        }
+        return IValue.IVoid
+    }
+    if f.name == "str_concat" and args.len() == 2 {
+        if let (IValue.IStr(a), IValue.IStr(b)) = (args[0], args[1]) { return IValue.IStr(a + b) }
+        cx.supported = false
+        return IValue.IStr("")
+    }
+    if f.name == "str_repeat" and args.len() == 2 {
+        if let (IValue.IStr(s), IValue.IInt(n)) = (args[0], args[1]) {
+            var b = str_builder()
+            for _ in 0..max(n, 0) { b.add(s) }
+            return IValue.IStr(b.finish())
+        }
+        cx.supported = false
+        return IValue.IStr("")
+    }
+    if f.name == "int_to_str" and args.len() == 1 {
+        if let IValue.IInt(n) = args[0] { return IValue.IStr(str(n)) }
+        cx.supported = false
+        return IValue.IStr("")
+    }
+    if f.name == "float_to_str" and args.len() == 1 {
+        if let IValue.IFloat(n) = args[0] { return IValue.IStr(str(n)) }
+        cx.supported = false
+        return IValue.IStr("")
+    }
+    if f.body == nil or args.len() != f.params.len() { cx.supported = false; return IValue.IVoid }
+    let local = IContext({}, cx.globals, cx.output, cx.supported)
+    for i in 0..args.len() { local.locals[f.params[i].uid] = args[i] }
+    let flow = interp_stmts(local, f.body!)
+    cx.supported = local.supported
+    return match flow {
+        IFlow.IReturn(v) => v
+        _ => IValue.IVoid
+    }
+}
+
+fn interp_stmts(cx: IContext, ss: [TStmt]) -> IFlow {
+    for s in ss {
+        let r = interp_stmt(cx, s)
+        match r {
+            IFlow.INormal => {}
+            _ => return r
+        }
+    }
+    return IFlow.INormal
+}
+
+fn interp_stmt(cx: IContext, s: TStmt) -> IFlow {
+    match s.k {
+        SK.Decl(v, init) => {
+            if init != nil { cx.locals[v.uid] = interp_expr(cx, init!) }
+            else { cx.locals[v.uid] = interp_default(v.ty) }
+        }
+        SK.Set(t, x) => {
+            let value = interp_expr(cx, x)
+            match t.k {
+                TK.VarRef(v) => cx.locals[v.uid] = value
+                TK.GlobalRef(g) => cx.globals[g.uid] = value
+                _ => cx.supported = false
+            }
+        }
+        SK.ExprS(e) => { interp_expr(cx, e) }
+        SK.If(c, a, b) => {
+            if interp_truth(interp_expr(cx, c)) { return interp_stmts(cx, a) }
+            return interp_stmts(cx, b)
+        }
+        SK.While(c, a, step) => {
+            loop {
+                if not interp_truth(interp_expr(cx, c)) { break }
+                let r = interp_stmts(cx, a)
+                match r {
+                    IFlow.IReturn(v) => return r
+                    IFlow.IBreak(n) => { if n == 0 { break } else { return IFlow.IBreak(n - 1) } }
+                    IFlow.IContinue(n) => { if n > 0 { return IFlow.IContinue(n - 1) } }
+                    _ => {}
+                }
+                let sr = interp_stmts(cx, step)
+                if sr != IFlow.INormal { return sr }
+            }
+        }
+        SK.Break => return IFlow.IBreak(0)
+        SK.Continue => return IFlow.IContinue(0)
+        SK.BreakN(n) => return IFlow.IBreak(n)
+        SK.ContinueN(n) => return IFlow.IContinue(n)
+        SK.Ret(e) => {
+            if e != nil { return IFlow.IReturn(interp_expr(cx, e!)) }
+            return IFlow.IReturn(IValue.IVoid)
+        }
+        SK.Blk(ss) => return interp_stmts(cx, ss)
+    }
+    return IFlow.INormal
+}
+
+fn interp_truth(v: IValue) -> bool {
+    return match v {
+        IValue.IBool(b) => b
+        IValue.IInt(n) => n != 0
+        IValue.INil => false
+        _ => true
+    }
+}
+
+fn interp_default(t: Type) -> IValue {
+    return match t {
+        Type.Int => IValue.IInt(0)
+        Type.Byte => IValue.IInt(0)
+        Type.Float => IValue.IFloat(0.0)
+        Type.Bool => IValue.IBool(false)
+        Type.Str => IValue.IStr("")
+        Type.Nil => IValue.INil
+        Type.Opt(x) => IValue.INil
+        Type.Ptr(x) => IValue.IInt(0)
+        _ => IValue.IVoid
+    }
+}
+
+fn interp_expr(cx: IContext, e: TExpr) -> IValue {
+    return match e.k {
+        TK.Const(k, iv, fv, sv) => {
+            if k == CK.Float { IValue.IFloat(fv) }
+            else if k == CK.Str { IValue.IStr(sv) }
+            else if k == CK.Bool { IValue.IBool(iv != 0) }
+            else if k == CK.Nil { IValue.INil }
+            else { IValue.IInt(iv) }
+        }
+        TK.VarRef(v) => cx.locals.get(v.uid, interp_default(v.ty))
+        TK.GlobalRef(g) => cx.globals.get(g.uid, interp_default(g.ty))
+        TK.FnRef(f) => IValue.IVoid
+        TK.Un(op, x) => interp_un(op, interp_expr(cx, x))
+        TK.Bin(op, a, b) => interp_bin(op, interp_expr(cx, a), interp_expr(cx, b))
+        TK.And(a, b) => IValue.IBool(interp_truth(interp_expr(cx, a)) and interp_truth(interp_expr(cx, b)))
+        TK.Or(a, b) => IValue.IBool(interp_truth(interp_expr(cx, a)) or interp_truth(interp_expr(cx, b)))
+        TK.Cvt(k, x) => interp_cvt(k, interp_expr(cx, x))
+        TK.Call(f, args) => interp_call(cx, f, interp_exprs(cx, args))
+        TK.CallExt(x, args) => { cx.supported = false; IValue.IVoid }
+        TK.CallInd(f, args) => { cx.supported = false; IValue.IVoid }
+        TK.Load(a, i) => { cx.supported = false; IValue.IVoid }
+        TK.PtrIdx(a, b, n) => { cx.supported = false; IValue.IVoid }
+        TK.ArrIdx(a, b, n) => { cx.supported = false; IValue.IVoid }
+        TK.NewObj(args) => { cx.supported = false; IValue.IVoid }
+        TK.Intr(n, args) => interp_intr(cx, n, interp_exprs(cx, args))
+        TK.Cond(c, a, b) => if interp_truth(interp_expr(cx, c)) { interp_expr(cx, a) } else { interp_expr(cx, b) }
+        TK.Seq(ss, x) => { interp_stmts(cx, ss); interp_expr(cx, x) }
+        TK.MkClosure(f, caps) => { cx.supported = false; IValue.IVoid }
+    }
+}
+
+fn interp_exprs(cx: IContext, es: [TExpr]) -> [IValue] {
+    var out: [IValue] = []
+    for e in es { out.push(interp_expr(cx, e)) }
+    return out
+}
+
+fn interp_un(op: str, v: IValue) -> IValue {
+    return match (op, v) {
+        ("neg", IValue.IInt(n)) => IValue.IInt(-n)
+        ("fneg", IValue.IFloat(n)) => IValue.IFloat(-n)
+        ("not", IValue.IBool(b)) => IValue.IBool(not b)
+        ("bnot", IValue.IInt(n)) => IValue.IInt(~n)
+        _ => IValue.IVoid
+    }
+}
+
+fn interp_bin(op: str, a: IValue, b: IValue) -> IValue {
+    if let (IValue.IStr(x), IValue.IStr(y)) = (a, b) {
+        if op == "add" { return IValue.IStr(x + y) }
+        if op == "eq" { return IValue.IBool(x == y) }
+        if op == "ne" { return IValue.IBool(x != y) }
+        if op == "lt" { return IValue.IBool(x < y) }
+        if op == "le" { return IValue.IBool(x <= y) }
+        if op == "gt" { return IValue.IBool(x > y) }
+        if op == "ge" { return IValue.IBool(x >= y) }
+    }
+    if let (IValue.IInt(x), IValue.IInt(y)) = (a, b) {
+        if op == "add" { return IValue.IInt(x + y) }
+        if op == "sub" { return IValue.IInt(x - y) }
+        if op == "mul" { return IValue.IInt(x * y) }
+        if op == "div" and y != 0 { return IValue.IInt(x / y) }
+        if op == "mod" and y != 0 { return IValue.IInt(x % y) }
+        if op == "eq" { return IValue.IBool(x == y) }
+        if op == "ne" { return IValue.IBool(x != y) }
+        if op == "lt" { return IValue.IBool(x < y) }
+        if op == "le" { return IValue.IBool(x <= y) }
+        if op == "gt" { return IValue.IBool(x > y) }
+        if op == "ge" { return IValue.IBool(x >= y) }
+        if op == "and" { return IValue.IInt(x & y) }
+        if op == "or" { return IValue.IInt(x | y) }
+        if op == "xor" { return IValue.IInt(x ^ y) }
+        if op == "shl" { return IValue.IInt(x << y) }
+        if op == "shr" { return IValue.IInt(x >> y) }
+        if op == "ushr" { return IValue.IInt(x >>> y) }
+    }
+    if let (IValue.IBool(x), IValue.IBool(y)) = (a, b) {
+        if op == "eq" { return IValue.IBool(x == y) }
+        if op == "ne" { return IValue.IBool(x != y) }
+    }
+    if let (IValue.IFloat(x), IValue.IFloat(y)) = (a, b) {
+        if op == "fadd" { return IValue.IFloat(x + y) }
+        if op == "fsub" { return IValue.IFloat(x - y) }
+        if op == "fmul" { return IValue.IFloat(x * y) }
+        if op == "fdiv" { return IValue.IFloat(x / y) }
+        if op == "feq" { return IValue.IBool(x == y) }
+        if op == "fne" { return IValue.IBool(x != y) }
+        if op == "flt" { return IValue.IBool(x < y) }
+        if op == "fle" { return IValue.IBool(x <= y) }
+        if op == "fgt" { return IValue.IBool(x > y) }
+        if op == "fge" { return IValue.IBool(x >= y) }
+    }
+    return IValue.IVoid
+}
+
+fn interp_cvt(kind: str, v: IValue) -> IValue {
+    if kind == "nop" { return v }
+    if kind == "trunc8" { if let IValue.IInt(n) = v { return IValue.IInt(n & 255) }; return v }
+    if kind == "i2f" { if let IValue.IInt(n) = v { return IValue.IFloat(float(n)) } }
+    if kind == "f2i" { if let IValue.IFloat(n) = v { return IValue.IInt(int(n)) } }
+    return IValue.IVoid
+}
+
+fn interp_intr(cx: IContext, name: str, args: [IValue]) -> IValue {
+    if args.len() == 1 {
+        if let IValue.IFloat(n) = args[0] {
+            if name == "sqrt" { return IValue.IFloat(sqrt(n)) }
+            if name == "floor" { return IValue.IFloat(float(int(n))) }
+            if name == "ceil" { return IValue.IFloat(float(int(n))) }
+            if name == "trunc" { return IValue.IFloat(float(int(n))) }
+            if name == "fabs" { return IValue.IFloat(abs(n)) }
+        }
+        if let IValue.IInt(n) = args[0] {
+            if name == "popcnt" {
+                var x = n
+                var bits = 0
+                while x != 0 { bits += x & 1; x = x >>> 1 }
+                return IValue.IInt(bits)
+            }
+        }
+    }
+    cx.supported = false
+    return IValue.IVoid
+}

@@ -102,6 +102,19 @@ def run_one(name, build_dir):
     return name, actual, crash, time.time() - t0
 
 
+def run_shell_smoke():
+    env = dict(os.environ, ATF_PATH_STYLE="base")
+    try:
+        result = subprocess.run(program_argv(ATF) + ["shell"], input=b"print(\"raw\")\nprintln(\"test\")\nlet shell_value = 7\nshell_value + 1\natf interpret tests/qa/interpreter.atf\natf interpret tests/qa/interpreter_native_fallback.atf\natf version\nexit\n",
+                                capture_output=True, env=env, cwd=ROOT, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+    output = norm(result.stdout)
+    version = open(os.path.join(ROOT, "VERSION"), encoding="utf8").read().strip()
+    expected = "ATF> ATF " + version
+    return (result.returncode == 0 and "raw\nATF> " in output and "test" in output and "8" in output and "21" in output and "42" in output
+            and expected in output and output.endswith("ATF> ")), output
+
 def main():
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -172,6 +185,18 @@ def main():
                 print("    " + line)
             if len(diff) > 60:
                 print("    ... (%d more diff lines)" % (len(diff) - 60))
+    if not filters or any("shell" in f for f in filters):
+        shell_ok, shell_output = run_shell_smoke()
+        if shell_ok:
+            passed.append("shell")
+            print("ok     %-34s" % "shell")
+        else:
+            failed.append("shell")
+            with open(os.path.join(ACTUAL_DIR, "shell.actual"), "w", encoding="utf8", newline="\n") as f:
+                f.write(shell_output)
+            print("FAIL   %-34s" % "shell")
+            if verbose:
+                print("    " + shell_output.replace("\n", "\n    "))
     if keep:
         print("build directory:", build_dir)
     else:

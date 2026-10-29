@@ -99,6 +99,8 @@ Requirements: 64-bit Windows 10 or 11 (or Linux with Wine, see below). Nothing e
 atf run hello.atf              compile and run a program
 atf build hello.atf -o hello.exe
 atf check hello.atf            only look for errors
+atf shell                     open the interactive ATF command line
+atf interpret file.atf        run with the ATF interpreter (native fallback when needed)
 atf repl                       try things interactively
 atf fmt hello.atf              fix the indentation of a file (--check only reports)
 atf new myapp                  start a project folder: lib.atf, main.atf, test_lib.atf
@@ -106,6 +108,20 @@ atf test [folder]              run every test_*.atf and *_test.atf (and compare 
 atf doc lib.atf [-o lib.md]    Markdown documentation from the comments above functions and types
 atf watch hello.atf            run again every time the file or a file it imports is saved
 atf version
+```
+
+`atf shell` opens an interactive prompt for ATF commands. Type `run hello.atf` or `atf run hello.atf`, use `help` to list commands, and `exit` to leave. Press Ctrl+C to stop the current command and return to the prompt. For a Windows Terminal profile, use the full path to `bin\atf.exe` followed by `shell`.
+
+ATF remains a compiled language by default: `atf run` compiles to native code. `atf interpret file.atf` explicitly selects the interpreter; it uses native execution for features the interpreter cannot handle directly.
+
+It also evaluates ATF code and keeps values between lines:
+```text
+ATF> println("test")
+test
+ATF> let n = 4
+ATF> n * 2
+8
+ATF> exit
 ```
 
 `atf` is `bin\atf.exe` (or `atf.cmd` in the repository root). To install it for your user, run
@@ -257,7 +273,7 @@ your code were available too, and if you credited ATF and its original author, t
 ```text
 python tests/run_tests.py          language tests (tests/*.atf with expected output and errors)
 python tests/run_examples.py       every program in examples/
-python tests/qa/run_qa.py          more than 100 focused tests, including compiler error messages
+python tests/qa/run_qa.py          focused tests, including compiler errors and ATF shell startup
 python tests/std/run_std_tests.py  the standard library modules
 python tests/check_docs.py         every code sample in the documentation
 python tests/compare_stages.py     programs built by the bootstrap and by the native compiler behave the same

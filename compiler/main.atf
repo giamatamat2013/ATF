@@ -14,6 +14,7 @@ import "synth"
 import "x64"
 import "pe"
 import "codegen"
+import "interpreter"
 import "opt"
 import "repl"
 import "fmt"
@@ -27,6 +28,8 @@ const USAGE = """ATF {VERSION} - a small, fast, compiled programming language
 
 usage:
   atf run   file.atf [args...]     compile and run
+  atf shell                         interactive command line for ATF commands
+  atf interpret file.atf            interpret a program; use native backend when needed
   atf build file.atf [-o out.exe]  compile to a native executable
   atf check file.atf               check for errors only
   atf repl                         interactive mode
@@ -149,6 +152,93 @@ fn exe_path_for(path: str, out: str?) -> str {
     return base + ".exe"
 }
 
+fn run_compiled_bytes(path: str, exe: Bytes, args: [str]) -> int {
+    let dir = temp_dir() + "atf"
+    make_dir(dir)
+    var name = path
+    let slash = name.rfind("/")
+    let bslash = name.rfind("\\")
+    if bslash > slash { name = name[bslash + 1..] } else if slash >= 0 { name = name[slash + 1..] }
+    let tmp = "{dir}\\{name}-{int_to_hex(str_hash(path) & 0xFFFFFFFF)}.exe"
+    if not write_file(tmp, exe.to_str()) {
+        eprintln("error: cannot write {tmp}")
+        return 1
+    }
+    return run_process(tmp, args)
+}
+
+extern "kernel32" fn SetConsoleCtrlHandler(handler: int, add: i32) -> i32
+
+var shell_ctrl_c_pending: bool
+
+fn shell_ctrl_handler(code: int) -> int {
+    if code == 0 {
+        shell_ctrl_c_pending = true
+        return 1
+    }
+    return 0
+}
+
+fn shell_set_ctrl_handler(add: bool) {
+    let handler = shell_ctrl_handler
+    SetConsoleCtrlHandler((handler as ptr<int>)[0], if add { 1 } else { 0 })
+}
+
+fn shell_is_cli_command(command: str) -> bool {
+    for name in ["run", "build", "check", "repl", "interpret", "fmt", "test", "new", "doc", "watch", "version"] {
+        if command == name or command.starts_with(name + " ") { return true }
+    }
+    return false
+}
+
+fn run_shell() -> int {
+    println("ATF {VERSION} command line. Enter ATF code or a compiler command; type exit to quit.")
+    println("Commands include run, build, check, repl, interpret, fmt, test, new, doc, watch, and version.")
+    let repl = repl_new()
+    shell_ctrl_c_pending = false
+    shell_set_ctrl_handler(true)
+    loop {
+        print("ATF> ")
+        flush()
+        let line = read_line()
+        if shell_ctrl_c_pending {
+            shell_ctrl_c_pending = false
+            println("[Ctrl+C] stopped; ATF shell is ready")
+            continue
+        }
+        if line == nil { break }
+        var command = line!.trim()
+        if command == "" { continue }
+        if command == "exit" or command == "quit" { break }
+        if command == "help" or command == "--help" or command == "-h" {
+            print(USAGE)
+            continue
+        }
+        var explicit_cli = false
+        if command.starts_with("atf ") {
+            command = command[4..].trim_start()
+            explicit_cli = true
+        }
+        if command == "" { print(USAGE); continue }
+        if command == "shell" {
+            eprintln("already in the ATF command line; type exit to quit")
+            continue
+        }
+        if explicit_cli or shell_is_cli_command(command) {
+            run_command(quote_arg(exe_path()) + " " + command)
+        } else if repl_input(repl, command) {
+            break
+        }
+        if shell_ctrl_c_pending {
+            shell_ctrl_c_pending = false
+            println("[Ctrl+C] stopped; ATF shell is ready")
+        }
+    }
+    repl_cleanup(repl)
+    shell_set_ctrl_handler(false)
+    return 0
+}
+
 fn main(args: [str]) -> int {
     if getenv("ATF_PATH_STYLE") == "base" { path_style_base = true }
     if args.len() < 1 or args[0] == "-h" or args[0] == "--help" or args[0] == "help" {
@@ -156,12 +246,38 @@ fn main(args: [str]) -> int {
         return 0
     }
     let cmd = args[0]
+    if cmd == "shell" { return run_shell() }
     if cmd == "repl" { return run_repl() }
     if cmd == "fmt" { return run_fmt(args[1..]) }
     if cmd == "test" { return run_test_cmd(args[1..]) }
     if cmd == "new" { return run_new_cmd(args[1..]) }
     if cmd == "doc" { return run_doc_cmd(args[1..]) }
     if cmd == "watch" { return run_watch_cmd(args[1..]) }
+    if cmd == "interpret" {
+        if args.len() < 2 { eprintln("error: missing file name\n\n" + USAGE); return 2 }
+        let path = args[1]
+        if not file_exists(path) { eprintln("error: file not found: {path}"); return 2 }
+        var prog: Program? = nil
+        let ok = guarded(|| {
+            load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
+            load_module(path, false, nil, NOPOS)
+            warn_if_newer(path)
+            var ms: [([Item], bool)] = []
+            for m in modules { ms.push((m.items, m.prelude)) }
+            prog = check_program(ms)
+        })
+        if not ok or diags.len() > 0 { eprintln(render_diags()); return 1 }
+        if prog == nil { return 1 }
+        let result = interp_run(prog!)
+        if not result.0 {
+            eprintln("note: this program needs native ATF features; using the compiled backend")
+            let exe = compile_file(path, false)
+            if exe == nil { return 1 }
+            return run_compiled_bytes(path, exe!, args[2..])
+        }
+        print(result.1)
+        return 0
+    }
     if cmd == "version" {
         println("ATF {VERSION}")
         return 0
@@ -195,19 +311,7 @@ fn main(args: [str]) -> int {
             println("built {target}")
             return 0
         }
-        // run: write to the temp directory and execute
-        let dir = temp_dir() + "atf"
-        make_dir(dir)
-        var name = path
-        let slash = name.rfind("/")
-        let bslash = name.rfind("\\")
-        if bslash > slash { name = name[bslash + 1..] } else if slash >= 0 { name = name[slash + 1..] }
-        let tmp = "{dir}\\{name}-{int_to_hex(str_hash(path) & 0xFFFFFFFF)}.exe"
-        if not write_file(tmp, exe!.to_str()) {
-            eprintln("error: cannot write {tmp}")
-            return 1
-        }
-        return run_process(tmp, args[2..])
+        return run_compiled_bytes(path, exe!, args[2..])
     }
     eprintln("error: unknown command '{cmd}'\n\n" + USAGE)
     return 2

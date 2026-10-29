@@ -67,11 +67,27 @@ atf run hello.atf                  # compile and run (in PowerShell write  .\atf
 atf build hello.atf                # create hello.exe next to it
 atf build hello.atf -o greet.exe   # choose the name of the program
 atf check hello.atf                # only check for errors, prints "ok"
+atf shell                         # enter the interactive ATF command line
+atf interpret hello.atf           # run using the interpreter (native fallback when needed)
 atf repl                           # type code line by line and see the results at once
 atf fmt hello.atf                  # fix the indentation (atf fmt hello.atf --check only reports)
 atf watch hello.atf                # run it again every time you save it (Ctrl+C stops)
 atf new myapp                      # start a project folder (see "Tests" in section 25)
 atf version                        # which compiler is this?
+```
+
+`atf shell` accepts the same commands shown above. Type `run hello.atf` or `atf run hello.atf`; `help` lists commands and `exit` leaves the prompt. In Windows Terminal, set the profile command line to the full path of `bin\atf.exe` followed by `shell`.
+
+ATF is compiled by default: `atf run hello.atf` produces and runs native code. Choose `atf interpret hello.atf` to use the interpreter; programs that need native features fall back to the compiler.
+
+The prompt also evaluates ATF code, keeping values between lines:
+```text
+ATF> println("test")
+test
+ATF> let n = 4
+ATF> n * 2
+8
+ATF> exit
 ```
 
 In Git Bash, call the compiler directly: `bin/atf.exe run hello.atf`. The compiler is a single program with no

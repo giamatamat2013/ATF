@@ -1,12 +1,17 @@
 // atf repl - an interactive prompt.  Every input is added to a small program that is compiled and run again;
 // only the new output is shown.  Expressions print their value.
 import "util"
+extern "kernel32" fn GetCurrentProcessId() -> i32
+extern "kernel32" fn CreatePipe(read: ptr<int>, write: ptr<int>, attrs: int, size: int) -> i32
+extern "kernel32" fn SetHandleInformation(handle: int, mask: int, flags: int) -> i32
 
 struct Repl {
     items: [str],           // top-level declarations (fn, struct, enum, ...)
     body: [str],            // statements of main
     shown: int,             // how much of the program output was already printed
-    dir: str
+    dir: str,
+    id: str,
+    counter: int
 }
 
 fn repl_program(r: Repl, extra_items: [str], extra_body: [str]) -> str {
@@ -28,34 +33,102 @@ fn is_decl_start(line: str) -> bool {
     return false
 }
 
-// compiles and runs the candidate program; returns (compiled?, output)
-fn repl_try(r: Repl, src: str) -> (bool, str) {
-    let path = r.dir + "\\repl.atf"
-    let exe = r.dir + "\\repl.exe"
-    let out = r.dir + "\\repl.out"
+// Run the generated program with a pipe, streaming only output not shown by an earlier REPL turn.
+fn repl_run_captured(exe: str, skip: int) -> int {
+    let handles = __alloc(16) as ptr<int>
+    if CreatePipe(handles, handles + 1, 0, 0) == 0 { return -1 }
+    let rd = handles[0]
+    let wr = handles[1]
+    if SetHandleInformation(wr, 1, 1) == 0 {
+        CloseHandle(rd)
+        CloseHandle(wr)
+        return -1
+    }
+    let si = __alloc(104) as ptr<int>
+    let raw = si as ptr<byte>
+    for i in 0..104 { raw[i] = 0 }
+    si[0] = 104
+    raw[61] = 1                         // STARTF_USESTDHANDLES
+    si[10] = GetStdHandle(-10)          // stdin
+    si[11] = wr                         // stdout
+    si[12] = wr                         // stderr
+    let pi = __alloc(24) as ptr<int>
+    let cmd = quote_arg(exe)
+    if CreateProcessA(nil, str_data(cmd), 0, 0, 1, 0, 0, 0, si, pi) == 0 {
+        CloseHandle(rd)
+        CloseHandle(wr)
+        return -1
+    }
+    CloseHandle(wr)
+    let output = GetStdHandle(-11)
+    let buf = __alloc_atomic(4096) as ptr<byte>
+    let count = __alloc(8) as ptr<int>
+    var total = 0
+    var last: byte = 0
+    loop {
+        count[0] = 0
+        if ReadFile(rd, buf, 4096, count, 0) == 0 or count[0] <= 0 { break }
+        let n = count[0]
+        last = buf[n - 1]
+        if total + n > skip {
+            let offset = max(skip - total, 0)
+            write_all(output, buf + offset, n - offset)
+        }
+        total += n
+    }
+    CloseHandle(rd)
+    WaitForSingleObject(pi[0], -1)
+    CloseHandle(pi[0])
+    CloseHandle(pi[1])
+    if total > skip and last != '\n' { write_all(output, str_data("\n"), 1) }
+    return total
+}
+
+fn repl_try(r: Repl, src: str, run_program: bool, skip: int) -> (bool, str, int) {
+    let base = r.dir + "\\repl-" + r.id
+    let path = base + ".atf.tmp"
+    r.counter += 1
+    let exe = base + "-" + str(r.counter) + ".exe"
     write_file(path, src)
     loaded = {}
     modules = []
     diags = []
     sources = {}
     var bytes: Bytes? = nil
+    var interpreted: str? = nil
     let ok = guarded(|| {
         load_module(PRELUDE_NAME, true, PRELUDE_SRC, NOPOS)
         load_module(path, false, nil, NOPOS)
         var ms: [([Item], bool)] = []
         for m in modules { ms.push((m.items, m.prelude)) }
         let prog = check_program(ms)
-        if prog != nil {
-            optimize_program(prog!)
-            bytes = generate_exe(prog!)
+        if prog != nil and run_program {
+            let result = interp_run(prog!)
+            if result.0 {
+                interpreted = result.1
+            } else {
+                optimize_program(prog!)
+                bytes = generate_exe(prog!)
+            }
         }
     })
-    if not ok or diags.len() > 0 or bytes == nil { return (false, repl_errors(path)) }
-    write_file(exe, bytes!.to_str())
-    run_command("cmd /c \"\"" + exe + "\" > \"" + out + "\" 2>&1\"")
-    return (true, read_file(out) ?? "")
+    if not ok or diags.len() > 0 { return (false, repl_errors(path), skip) }
+    if not run_program { return (true, "", skip) }
+    if interpreted != nil {
+        var output = interpreted!
+        if output.len() > 0 and not output.ends_with("\n") { output += "\n" }
+        if output.len() > skip { print(output[max(skip, 0)..]); flush() }
+        return (true, "", output.len())
+    }
+    if bytes == nil { return (false, repl_errors(path), skip) }
+    if shell_ctrl_c_pending { return (false, "", skip) }
+    if not write_file(exe, bytes!.to_str()) { return (false, "error: cannot write the REPL program", skip) }
+    let total = repl_run_captured(exe, skip)
+    delete_file(exe)
+    if shell_ctrl_c_pending { return (false, "", total) }
+    if total < 0 { return (false, "error: cannot run the REPL program", skip) }
+    return (true, "", total)
 }
-
 // errors in what was typed are shown against the typed text (not the generated program around it)
 fn repl_errors(path: str) -> str {
     var out: [str] = []
@@ -87,82 +160,111 @@ fn repl_errors(path: str) -> str {
     return "\n".join(out)
 }
 
-fn repl_show(r: Repl, output: str) {
-    if output.len() > r.shown {
-        print(output[r.shown..])
-        flush()
+fn repl_new() -> Repl {
+    var dir = path_dir(exe_path()) + "\\repl"
+    if not cli_is_dir(dir) and not make_dir(dir) {
+        dir = temp_dir() + "atf"
+        make_dir(dir)
     }
-    r.shown = output.len()
+    let id = str(GetCurrentProcessId())
+    let probe = dir + "\\write-" + id + ".tmp"
+    if not write_file(probe, "") {
+        dir = temp_dir() + "atf"
+        make_dir(dir)
+    } else {
+        delete_file(probe)
+    }
+    return Repl([], [], 0, dir, id, 0)
 }
 
+fn repl_cleanup(r: Repl) {
+    let base = r.dir + "\\repl-" + r.id
+    delete_file(base + ".atf.tmp")
+}
+
+fn repl_should_run(line: str) -> bool {
+    let t = line.trim_start()
+    if (t.starts_with("let ") or t.starts_with("var ") or t.starts_with("const ")) and not t.contains("(") {
+        return false
+    }
+    return true
+}
+
+// Handle one code line; true asks the surrounding prompt to quit.
+fn repl_input(r: Repl, first: str) -> bool {
+    var line = first
+    if line.trim() == "" { return false }
+    if line.trim() == ":quit" or line.trim() == ":q" { return true }
+    if line.trim() == ":reset" {
+        r.items = []
+        r.body = []
+        r.shown = 0
+        return false
+    }
+    if line.trim() == ":show" {
+        print(repl_program(r, [], []))
+        return false
+    }
+    var depth = brace_depth(line)
+    while depth > 0 {
+        print(". ")
+        flush()
+        let more = read_line()
+        if more == nil { break }
+        line = line + "\n" + more!
+        depth += brace_depth(more!)
+    }
+    if is_decl_start(line) {
+        let res = repl_try(r, repl_program(r, [line], []), false, r.shown)
+        if shell_ctrl_c_pending { return false }
+        if res.0 {
+            r.items.push(line)
+            r.shown = res.2
+        } else {
+            eprintln(res.1)
+        }
+        return false
+    }
+    let as_print = repl_try(r, repl_program(r, [], ["println(" + line + ")"]), true, r.shown)
+    if shell_ctrl_c_pending { return false }
+    if as_print.0 {
+        if not line.contains("(") {
+            r.body.push(line)
+            return false
+        }
+        let silent = repl_try(r, repl_program(r, [], [line]), true, as_print.2)
+        if shell_ctrl_c_pending { return false }
+        if silent.0 {
+            r.body.push(line)
+            r.shown = silent.2
+        } else {
+            r.body.push("println(" + line + ")")
+            r.shown = as_print.2
+        }
+        return false
+    }
+    let as_stmt = repl_try(r, repl_program(r, [], [line]), repl_should_run(line), r.shown)
+    if shell_ctrl_c_pending { return false }
+    if as_stmt.0 {
+        r.body.push(line)
+        r.shown = as_stmt.2
+    } else {
+        eprintln(as_stmt.1)
+    }
+    return false
+}
 fn run_repl() -> int {
-    let dir = temp_dir() + "atf"
-    make_dir(dir)
-    let r = Repl([], [], 0, dir)
+    let r = repl_new()
     println("ATF {VERSION} interactive mode.  Type code; expressions show their value.")
     println("Commands:  :quit   :reset   :show (the program so far)")
     loop {
         print("> ")
         flush()
-        let l = read_line()
-        if l == nil { break }
-        var line = l!
-        if line.trim() == "" { continue }
-        if line.trim() == ":quit" or line.trim() == ":q" { break }
-        if line.trim() == ":reset" {
-            r.items = []
-            r.body = []
-            r.shown = 0
-            continue
-        }
-        if line.trim() == ":show" {
-            print(repl_program(r, [], []))
-            continue
-        }
-        // continue a block until the braces balance
-        var depth = brace_depth(line)
-        while depth > 0 {
-            print(". ")
-            flush()
-            let more = read_line()
-            if more == nil { break }
-            line = line + "\n" + more!
-            depth += brace_depth(more!)
-        }
-        if is_decl_start(line) {
-            let res = repl_try(r, repl_program(r, [line], []))
-            if res.0 {
-                r.items.push(line)
-                repl_show(r, res.1)
-            } else {
-                eprintln(res.1)
-            }
-            continue
-        }
-        // an expression: print its value (if it has one)
-        let as_print = repl_try(r, repl_program(r, [], ["println(" + line + ")"]))
-        if as_print.0 {
-            // keep the expression itself (not the print) so later inputs do not repeat it
-            let silent = repl_try(r, repl_program(r, [], [line]))
-            if silent.0 {
-                r.body.push(line)
-                print(as_print.1[min(r.shown, as_print.1.len())..])
-                flush()
-                r.shown = silent.1.len()
-            } else {
-                r.body.push("println(" + line + ")")
-                repl_show(r, as_print.1)
-            }
-            continue
-        }
-        let as_stmt = repl_try(r, repl_program(r, [], [line]))
-        if as_stmt.0 {
-            r.body.push(line)
-            repl_show(r, as_stmt.1)
-        } else {
-            eprintln(as_stmt.1)
-        }
+        let line = read_line()
+        if line == nil { break }
+        if repl_input(r, line!) { break }
     }
+    repl_cleanup(r)
     return 0
 }
 
