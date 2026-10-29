@@ -28,7 +28,7 @@ fn build_page() -> str {
 
 fn main(args: [str]) {
     let page = build_page()
-    println("page bytes > 2000:", page.len() > 2000)
+    println("page bytes > 20006:", page.len() > 2000)
     println("has hero:", page.contains("class=\"hero\""))
     println("has 3 cards:", page.count("class=\"card atf-reveal\"") == 3)
     if args.len() > 0 and args[0] == "serve" {
