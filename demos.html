@@ -360,6 +360,46 @@ const lessons = [
     "atf": "import \"std/text\"\n\nfn main() {\n    println(text_title(\"hello brave new world\"))\n    println(text_snake_case(\"Hello Brave World\"))\n    let rows = [[\"name\", \"qty\"], [\"apple\", \"6\"], [\"bread\", \"1\"]]\n    println(text_table(rows))\n}",
     "py": null,
     "output": "Hello Brave New World\nhello_brave_world\nname   qty\napple  6\nbread  1"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/url",
+    "text": [
+      "`std/url` מפרק כתובת לחלקים (סכמה, מארח, יציאה, נתיב ופרמטרים), ומקודד ומפענח טקסט לתוך כתובת. `url_parse` מחזיר `Result`, כי כתובת לא תקינה היא שגיאה צפויה."
+    ],
+    "atf": "import \"std/url\"\n\nfn main() {\n    match url_parse(\"https://ada@example.com:8443/docs/a%20b?q=ai&page=2#top\") {\n        Result.Ok(u) => {\n            println(u.scheme, u.host, u.port, u.path)\n            println(u.param(\"q\") ?? \"-\", u.param(\"missing\") ?? \"-\")\n            println(u.fragment)\n        }\n        Result.Err(e) => println(\"error:\", e)\n    }\n    println(url_encode(\"a b&c/d?é\"))\n    println(url_encode(\"a b\", plus: true))\n    match url_join(\"https://example.com/a/b/c\", \"../d?x=1\") {\n        Result.Ok(s) => println(s)\n        Result.Err(e) => println(\"error:\", e)\n    }\n}\n",
+    "py": null,
+    "output": "https example.com 8443 /docs/a%20b\nai -\ntop\na%20b%26c%2Fd%3F%C3%A9\na+b\nhttps://example.com/a/d?x=1"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/ini",
+    "text": [
+      "`std/ini` קורא וכותב קבצי הגדרות בסגנון `[section]` ו-`key = value`. הפונקציות `get_int`, `get_float` ו-`get_bool` מקבלות ערך ברירת מחדל, כך שאין צורך לבדוק `nil`. שורה לא תקינה מחזירה שגיאה עם מספר השורה."
+    ],
+    "atf": "import \"std/ini\"\n\nfn main() {\n    let text = \"; app settings\\n[server]\\nport = 8080\\ndebug = true\\n\\n[limits]\\nratio = 0.75\\n\"\n    match ini_parse(text) {\n        Result.Ok(d) => {\n            println(d.get_int(\"server\", \"port\", -1))\n            println(d.get_bool(\"server\", \"debug\", false))\n            println(d.get_float(\"limits\", \"ratio\", 0.0))\n            println(d.get_or(\"server\", \"host\", \"127.0.0.1\"))\n            println(d.section_names())\n        }\n        Result.Err(e) => println(\"error:\", e)\n    }\n    match ini_parse(\"[ok]\\nname = x\\nbroken line\\n\") {\n        Result.Ok(d) => println(\"parsed\")\n        Result.Err(e) => println(\"error:\", e)\n    }\n}\n",
+    "py": null,
+    "output": "8080\ntrue\n0.75\n127.0.0.1\n[\"server\", \"limits\"]\nerror: line 3: expected key = value"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/glob",
+    "text": [
+      "`std/glob` בודק אם שם קובץ מתאים לתבנית: `*` לכל רצף תווים, `?` לתו אחד, `[0-9]` לטווח, ו-`**` לכל תת-תיקייה. ההתאמה לא תלויה באותיות גדולות וקטנות."
+    ],
+    "atf": "import \"std/glob\"\n\nfn main() {\n    println(glob_match(\"*.atf\", \"hello.atf\"))\n    println(glob_match(\"file[0-9].txt\", \"file7.txt\"))\n    println(glob_match(\"file[!0-9].txt\", \"file7.txt\"))\n    println(glob_match(\"src/**/*.atf\", \"src/lib/deep/a.atf\"))\n    println(glob_match(\"*.ATF\", \"Main.atf\"))\n}\n",
+    "py": null,
+    "output": "true\ntrue\nfalse\ntrue\ntrue"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/httpd",
+    "text": [
+      "`std/httpd` בונה שרת HTTP קטן. כאן מפעילים רק את הנתב, בלי לפתוח פורט: כל בקשה מקבלת תשובה, ואפשר לראות את הסטטוסים. `server.serve(...)` מפעיל את השרת האמיתי."
+    ],
+    "atf": "import \"std/httpd\"\n\nfn main() {\n    var app = router_new()\n    app.get(\"/\", |req| http_html(\"<h1>Hello</h1>\"))\n    app.get(\"/users/:id\", |req| http_text(\"user \" + (req.params[\"id\"])))\n    app.post(\"/echo\", |req| http_text(req.body))\n\n    let reqs = [\n        HttpRequest{ method: \"GET\", target: \"/users/42\", path: \"/users/42\" },\n        HttpRequest{ method: \"POST\", target: \"/echo\", path: \"/echo\", body: \"ping\" },\n        HttpRequest{ method: \"GET\", target: \"/echo\", path: \"/echo\" },\n        HttpRequest{ method: \"GET\", target: \"/nope\", path: \"/nope\" },\n    ]\n    for req in reqs {\n        let reply = app.handle(req)\n        println(req.method, req.path, \"->\", reply.status, reply.body.trim())\n    }\n}\n",
+    "py": null,
+    "output": "GET /users/42 -> 200 user 42\nPOST /echo -> 200 ping\nGET /echo -> 405 405 Method Not Allowed\nGET /nope -> 404 404 Not Found"
   }
 ];
 // LESSONS-END
