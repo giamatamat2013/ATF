@@ -26,3 +26,7 @@ build_tmp/
 Thumbs.db
 Desktop.ini
 
+
+
+
+*.log
