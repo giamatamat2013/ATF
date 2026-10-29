@@ -27,6 +27,7 @@ See [TUTORIAL.md](TUTORIAL.md) to learn the language and [REFERENCE.md](REFERENC
   - [std/app](#stdapp)
   - [std/args](#stdargs)
   - [std/base64](#stdbase64)
+  - [std/bigint](#stdbigint)
   - [std/bits](#stdbits)
   - [std/collections](#stdcollections)
   - [std/csv](#stdcsv)
@@ -692,6 +693,65 @@ Whitespace (spaces, tabs, CR, LF) inside the input is ignored when decoding; pad
 - `fn b64_decode_url(s: str) -> Result<str, str>` - decodes URL-safe Base64 ('-' '_')
 - `fn b64_decode_bytes(s: str) -> Result<[byte], str>` - decodes standard Base64 into a byte array
 - `fn b64_is_valid(s: str) -> bool` - true if s is valid standard Base64
+
+## std/bigint
+
+Whole numbers of any size: + - * / % work as with int, but never overflow.
+
+```text
+import "std/bigint"
+let a = bigint_parse("123456789012345678901234567890").unwrap()
+let b = bigint(1000)
+println(a * b + bigint(7))              // 123456789012345678901234567890007
+println(bigint(2).pow(100))             // 1267650600228229401496703205376
+println(bigint_factorial(25))           // 15511210043330985984000000
+println(a > b, (a % b).to_int() ?? -1)  // true 890
+```
+
+Division truncates toward zero and % takes the sign of the left side, the same as int.
+Dividing by zero panics.
+
+**Constants**
+
+- `BIGINT_BASE = 1000000000      // each limb holds 9 decimal digits`
+
+**Types**
+
+```text
+struct BigInt {
+    neg: bool,
+    d: [int]                        // limbs, lowest first, no leading zero limbs; zero is []
+}
+```
+
+
+**Functions**
+
+- `fn bigint(n: int) -> BigInt` - a BigInt with the value of n
+- `fn bigint_parse(text: str) -> Result<BigInt, str>` - reads a whole number in decimal: an optional sign, then digits ("_" between digits is allowed)
+- `fn bigint_gcd(a: BigInt, b: BigInt) -> BigInt` - the greatest common divisor of a and b (never negative)
+- `fn bigint_factorial(n: int) -> BigInt` - 1 * 2 * ... * n
+- `fn bigint_make(neg: bool, d: [int]) -> BigInt` - drops leading zero limbs and keeps zero positive
+- `fn bigint_mag_cmp(a: [int], b: [int]) -> int`
+- `fn bigint_mag_add(a: [int], b: [int]) -> [int]`
+- `fn bigint_mag_sub(a: [int], b: [int]) -> [int]` - a - b where a >= b
+- `fn bigint_mag_mul(a: [int], b: [int]) -> [int]`
+- `fn bigint_mag_mul_small(a: [int], m: int) -> [int]` - a * m where 0 <= m < BIGINT_BASE
+- `fn bigint_mag_divmod(a: [int], b: [int]) -> ([int], [int])` - schoolbook long division, one limb of the quotient at a time; b is not zero
+
+**Methods of `BigInt`**
+
+- `.to_str() -> str`
+- `.cmp(other: BigInt) -> int` - negative, 0 or positive as self is smaller than, equal to, or bigger than other
+- `.eq(other: BigInt) -> bool`
+- `.divmod(other: BigInt) -> (BigInt, BigInt)` - the quotient (toward zero) and the remainder (with the sign of self) in one step
+- `.pow(e: int) -> BigInt` - self to the power e (e >= 0)
+- `.pow_mod(e: BigInt, m: BigInt) -> BigInt` - (self ** e) % m, without building the huge power; e >= 0, m > 0
+- `.abs() -> BigInt`
+- `.is_zero() -> bool`
+- `.sign() -> int` - -1, 0 or 1
+- `.to_int() -> int?` - the value as an int, or nil when it does not fit in 64 bits
+- `.digits() -> int` - the number of decimal digits, without the sign (0 has 1)
 
 ## std/bits
 

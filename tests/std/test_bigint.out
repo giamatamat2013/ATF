@@ -1,0 +1,42 @@
+ok   from int: 1234567890123
+ok   zero: 0
+ok   negative: -42
+ok   int min: -9223372036854775808
+ok   int max: 9223372036854775807
+ok   parse: 123456789012345678901234567890
+ok   parse sign and _: 1000000000000
+ok   parse -0: 0
+ok   parse leading zeros: 42
+ok   parse bad: true
+ok   parse empty: true
+ok   add: -864197532086419753208641975320
+ok   sub: 1111111110111111111011111111100
+ok   add carry: 1000000000000000000
+ok   sub borrow: 999999999999999999
+ok   sub to zero: 0
+ok   mul: -121932631137021795226185032733622923332237463801111263526900
+ok   mul zero: 0
+ok   neg: -123456789012345678901234567890
+ok   div: -8
+ok   mod: -9000000000900000000090
+ok   div big: 123456789012345678901234567890
+ok   div small: 17636684144620811271604938270
+ok   mod small: 0
+ok   div smaller: 0
+ok   int rules: -3 -1 1
+ok   div by zero: bigint division by zero
+ok   divmod: 123456789012345678 901234567890
+ok   pow: 1267650600228229401496703205376
+ok   pow 0: 1
+ok   pow negative base: -36472996377170786403
+ok   pow_mod: 445
+ok   pow_mod big: 959366170
+ok   gcd: 21
+ok   factorial: 265252859812191058636308480000000
+ok   compare: true true true true
+ok   sort: ["-10000000000000000000000", "0", "3"]
+ok   to_int: -9223372036854775808
+ok   to_int too big: true
+ok   abs sign: 987654321098765432109876543210 -1 0 1
+ok   digits: 30 1 10
+failures: 0

@@ -2504,6 +2504,27 @@ fn main() {
 0 hello
 ```
 
+* `std/bigint` holds whole numbers of any size. `+ - * / %`, comparisons and sorting work as with `int` (division truncates toward zero), but nothing overflows. Make one with `bigint(n)` or `bigint_parse(text)`; an `int` and a `BigInt` do not mix, so write `a + bigint(1)`. `to_int()` gives an `int?` that is nil when the value does not fit.
+
+<!-- id: bigint-basic -->
+```atf
+import "std/bigint"
+
+fn main() {
+    let a = bigint_parse("123456789012345678901234567890").unwrap()
+    println(a * bigint(1000) + bigint(7))
+    println(bigint(2).pow(100))
+    println(bigint_factorial(25))
+    println(a > bigint(INT_MAX), (a % bigint(1000)).to_int() ?? -1)
+}
+```
+```output
+123456789012345678901234567890007
+1267650600228229401496703205376
+15511210043330985984000000
+true 890
+```
+
 * `std/yaml` reads and writes YAML files, the common subset that configuration files use: block maps and lists, flow `[..]` and `{..}` on one line, quoted text and `|` / `>` blocks. The result is a `JsonValue`, so `query` and the rest of `std/json` work on it.
 
 <!-- id: yaml-basic -->

@@ -1,0 +1,76 @@
+// tests for std/bigint
+import "std/bigint"
+
+var failures = 0
+
+fn check(label: str, got: str, want: str) {
+    if got == want {
+        println("ok   {label}: {got}")
+    } else {
+        failures += 1
+        println("FAIL {label}: got {got}, want {want}")
+    }
+}
+
+fn b(s: str) -> BigInt => bigint_parse(s).unwrap()
+
+fn main() -> int {
+    let big = b("123456789012345678901234567890")
+    let other = b("-987654321098765432109876543210")
+
+    // making and printing
+    check("from int", str(bigint(1234567890123)), "1234567890123")
+    check("zero", str(bigint(0)), "0")
+    check("negative", str(bigint(-42)), "-42")
+    check("int min", str(bigint(INT_MIN)), "-9223372036854775808")
+    check("int max", str(bigint(INT_MAX)), "9223372036854775807")
+    check("parse", str(big), "123456789012345678901234567890")
+    check("parse sign and _", str(b(" +1_000_000_000_000 ")), "1000000000000")
+    check("parse -0", str(b("-0")), "0")
+    check("parse leading zeros", str(b("000000000000000000042")), "42")
+    check("parse bad", str(bigint_parse("12a").is_err()), "true")
+    check("parse empty", str(bigint_parse("-").is_err()), "true")
+
+    // arithmetic
+    check("add", str(big + other), "-864197532086419753208641975320")
+    check("sub", str(big - other), "1111111110111111111011111111100")
+    check("add carry", str(b("999999999999999999") + bigint(1)), "1000000000000000000")
+    check("sub borrow", str(b("1000000000000000000") - bigint(1)), "999999999999999999")
+    check("sub to zero", str(big - big), "0")
+    check("mul", str(big * other), "-121932631137021795226185032733622923332237463801111263526900")
+    check("mul zero", str(big * bigint(0)), "0")
+    check("neg", str(-big), "-123456789012345678901234567890")
+
+    // division follows int: toward zero, remainder takes the left sign
+    check("div", str(other / big), "-8")
+    check("mod", str(other % big), "-9000000000900000000090")
+    check("div big", str(b("-121932631137021795226185032733622923332237463801111263526900") / other), "123456789012345678901234567890")
+    check("div small", str(big / bigint(7)), "17636684144620811271604938270")
+    check("mod small", str(big % bigint(7)), "0")
+    check("div smaller", str(bigint(5) / big), "0")
+    check("int rules", "{bigint(-7) / bigint(2)} {bigint(-7) % bigint(2)} {bigint(7) % bigint(-2)}", "-3 -1 1")
+    check("div by zero", str(catch_panic(|| { let x = big / bigint(0) }) ?? "none"), "bigint division by zero")
+    let (q, r) = big.divmod(b("1000000000000"))
+    check("divmod", "{q} {r}", "123456789012345678 901234567890")
+
+    // powers, gcd, factorial
+    check("pow", str(bigint(2).pow(100)), "1267650600228229401496703205376")
+    check("pow 0", str(big.pow(0)), "1")
+    check("pow negative base", str(bigint(-3).pow(41)), "-36472996377170786403")
+    check("pow_mod", str(bigint(4).pow_mod(b("13"), bigint(497))), "445")
+    check("pow_mod big", str(bigint(2).pow_mod(b("1000000000000"), b("1000000007"))), "959366170")
+    check("gcd", str(bigint_gcd(b("1071"), b("-462"))), "21")
+    check("factorial", str(bigint_factorial(30)), "265252859812191058636308480000000")
+
+    // compare and convert
+    let same = b("123456789012345678901234567890")
+    check("compare", "{big > other} {other < bigint(0)} {big == same} {big != other}", "true true true true")
+    check("sort", str([bigint(3), b("-10000000000000000000000"), bigint(0)].sorted().map(|x| str(x))), "[\"-10000000000000000000000\", \"0\", \"3\"]")
+    check("to_int", str(b("-9223372036854775808").to_int() ?? 0), "-9223372036854775808")
+    check("to_int too big", str(b("9223372036854775808").to_int() == nil), "true")
+    check("abs sign", "{other.abs()} {other.sign()} {bigint(0).sign()} {big.sign()}", "987654321098765432109876543210 -1 0 1")
+    check("digits", "{big.digits()} {bigint(0).digits()} {bigint(-1000000000).digits()}", "30 1 10")
+
+    println("failures: {failures}")
+    return failures
+}

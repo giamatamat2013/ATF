@@ -410,6 +410,16 @@ const lessons = [
     "atf": "import \"std/yaml\"\n\nfn main() {\n    let text = \"name: app\\nserver:\\n  port: 8080\\n  hosts:\\n    - a\\n    - b\\n\"\n    match yaml_parse(text) {\n        Result.Ok(v) => {\n            println(v.query(\"server.port\"), v.query(\"server.hosts[1]\"))\n            print(yaml_stringify(v))\n        }\n        Result.Err(e) => println(\"bad yaml: \" + e)\n    }\n}\n",
     "py": null,
     "output": "8080 \"b\"\nname: app\nserver:\n  port: 8080\n  hosts:\n    - a\n    - b"
+  },
+  {
+    "chapter": "הספרייה הסטנדרטית",
+    "title": "std/bigint",
+    "text": [
+      "המודול `std/bigint` מחזיק מספרים שלמים בכל גודל, בלי גלישה. האופרטורים הרגילים עובדים, וגם השוואה ומיון. מספר רגיל הופכים ל-`BigInt` בעזרת `bigint(n)`. בפייתון זה מובנה ב-`int`."
+    ],
+    "atf": "import \"std/bigint\"\n\nfn main() {\n    let a = bigint_parse(\"123456789012345678901234567890\").unwrap()\n    println(a * bigint(1000) + bigint(7))\n    println(bigint(2).pow(100))\n    println(bigint_factorial(25))\n    println(a > bigint(INT_MAX), (a % bigint(1000)).to_int() ?? -1)\n}\n",
+    "py": null,
+    "output": "123456789012345678901234567890007\n1267650600228229401496703205376\n15511210043330985984000000\ntrue 890"
   }
 ];
 // LESSONS-END

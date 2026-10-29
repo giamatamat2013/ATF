@@ -2309,7 +2309,7 @@ fn main() {
 * `std/csv` - קובצי CSV (טבלאות).
 * `std/datetime` - תאריכים ושעות.
 * `std/base64`, `std/hex`, `std/hash` - קידודים ופונקציות גיבוב.
-* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/yaml`, `std/xml`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
+* `std/path`, `std/fs`, `std/process`, `std/regex`, `std/toml`, `std/yaml`, `std/xml`, `std/bigint`, `std/ini`, `std/http`, `std/httpd`, `std/net`, `std/url`, `std/glob`, `std/test` - נתיבים, קבצים, הרצת תוכניות, ביטויים רגולריים, TOML, XML, INI, HTTP, שרת אינטרנט, חיבורי TCP, כתובות, תבניות קבצים ובדיקות (ראו בהמשך הפרק).
 * `std/ui` - חלונות, כפתורים ועיצוב (ראו בהמשך הפרק).
 * `std/app` - תיקייה והגדרות לתוכנית שנשמרות בין הרצות (ראו בהמשך הפרק).
 
@@ -2515,6 +2515,27 @@ fn main() {
 ```output
 ["one", "two"]
 0 hello
+```
+
+* `std/bigint` מחזיק מספרים שלמים בכל גודל. `+ - * / %`, השוואות ומיון עובדים כמו ב-`int` (חילוק מעגל לכיוון אפס), אבל אין גלישה. יוצרים מספר עם `bigint(n)` או `bigint_parse(text)`. אי אפשר לערבב `int` עם `BigInt`, לכן כותבים `a + bigint(1)`. `to_int()` מחזיר `int?` שהוא nil כשהערך לא נכנס ב-64 ביט.
+
+<!-- id: bigint-basic -->
+```atf
+import "std/bigint"
+
+fn main() {
+    let a = bigint_parse("123456789012345678901234567890").unwrap()
+    println(a * bigint(1000) + bigint(7))
+    println(bigint(2).pow(100))
+    println(bigint_factorial(25))
+    println(a > bigint(INT_MAX), (a % bigint(1000)).to_int() ?? -1)
+}
+```
+```output
+123456789012345678901234567890007
+1267650600228229401496703205376
+15511210043330985984000000
+true 890
 ```
 
 * `std/yaml` קורא וכותב קובצי YAML (בתת-קבוצה שקבצי הגדרות משתמשים בה: מפות ורשימות בהזחה, מערכים וטבלאות בשורה אחת, מחרוזות במירכאות ובלוקים `|` ו-`>`). התוצאה היא `JsonValue`, ולכן `query` ושאר הפונקציות של `std/json` עובדות עליה.

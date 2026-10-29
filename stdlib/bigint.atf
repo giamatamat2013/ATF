@@ -1,0 +1,314 @@
+// std/bigint - whole numbers of any size: + - * / % work as with int, but never overflow.
+//
+//   import "std/bigint"
+//   let a = bigint_parse("123456789012345678901234567890").unwrap()
+//   let b = bigint(1000)
+//   println(a * b + bigint(7))              // 123456789012345678901234567890007
+//   println(bigint(2).pow(100))             // 1267650600228229401496703205376
+//   println(bigint_factorial(25))           // 15511210043330985984000000
+//   println(a > b, (a % b).to_int() ?? -1)  // true 890
+//
+// Division truncates toward zero and % takes the sign of the left side, the same as int.
+// Dividing by zero panics.
+
+const BIGINT_BASE = 1000000000      // each limb holds 9 decimal digits
+
+struct BigInt {
+    neg: bool,
+    d: [int]                        // limbs, lowest first, no leading zero limbs; zero is []
+}
+
+impl BigInt {
+    fn to_str(self) -> str {
+        if self.d.is_empty() { return "0" }
+        let sb = str_builder()
+        if self.neg { sb.add("-") }
+        var i = self.d.len() - 1
+        sb.add(str(self.d[i]))
+        while i > 0 {
+            i -= 1
+            sb.add("{self.d[i]:09}")
+        }
+        return sb.finish()
+    }
+
+    // negative, 0 or positive as self is smaller than, equal to, or bigger than other
+    fn cmp(self, other: BigInt) -> int {
+        if self.neg != other.neg { return if self.neg { -1 } else { 1 } }
+        let c = bigint_mag_cmp(self.d, other.d)
+        return if self.neg { -c } else { c }
+    }
+
+    fn eq(self, other: BigInt) -> bool => self.cmp(other) == 0
+
+    fn op_add(self, other: BigInt) -> BigInt {
+        if self.neg == other.neg { return bigint_make(self.neg, bigint_mag_add(self.d, other.d)) }
+        let c = bigint_mag_cmp(self.d, other.d)
+        if c == 0 { return BigInt(false, []) }
+        if c > 0 { return bigint_make(self.neg, bigint_mag_sub(self.d, other.d)) }
+        return bigint_make(other.neg, bigint_mag_sub(other.d, self.d))
+    }
+
+    fn op_neg(self) -> BigInt => bigint_make(not self.neg, self.d)
+
+    fn op_sub(self, other: BigInt) -> BigInt => self + (-other)
+
+    fn op_mul(self, other: BigInt) -> BigInt => bigint_make(self.neg != other.neg, bigint_mag_mul(self.d, other.d))
+
+    fn op_div(self, other: BigInt) -> BigInt => self.divmod(other).0
+
+    fn op_mod(self, other: BigInt) -> BigInt => self.divmod(other).1
+
+    // the quotient (toward zero) and the remainder (with the sign of self) in one step
+    fn divmod(self, other: BigInt) -> (BigInt, BigInt) {
+        if other.d.is_empty() { panic("bigint division by zero") }
+        let (q, r) = bigint_mag_divmod(self.d, other.d)
+        return (bigint_make(self.neg != other.neg, q), bigint_make(self.neg, r))
+    }
+
+    // self to the power e (e >= 0)
+    fn pow(self, e: int) -> BigInt {
+        if e < 0 { panic("bigint pow: negative exponent {e}") }
+        var result = bigint(1)
+        var base = self
+        var n = e
+        while n > 0 {
+            if n % 2 == 1 { result = result * base }
+            n = n / 2
+            if n > 0 { base = base * base }
+        }
+        return result
+    }
+
+    // (self ** e) % m, without building the huge power; e >= 0, m > 0
+    fn pow_mod(self, e: BigInt, m: BigInt) -> BigInt {
+        if e.neg { panic("bigint pow_mod: negative exponent") }
+        if m.d.is_empty() or m.neg { panic("bigint pow_mod: the modulus must be positive") }
+        var result = bigint(1) % m
+        var base = self % m
+        if base.neg { base = base + m }
+        let two = bigint(2)
+        var n = e
+        while not n.d.is_empty() {
+            let (half, bit) = n.divmod(two)
+            if not bit.d.is_empty() { result = result * base % m }
+            n = half
+            if not n.d.is_empty() { base = base * base % m }
+        }
+        return result
+    }
+
+    fn abs(self) -> BigInt => bigint_make(false, self.d)
+
+    fn is_zero(self) -> bool => self.d.is_empty()
+
+    // -1, 0 or 1
+    fn sign(self) -> int {
+        if self.d.is_empty() { return 0 }
+        return if self.neg { -1 } else { 1 }
+    }
+
+    // the value as an int, or nil when it does not fit in 64 bits
+    fn to_int(self) -> int? {
+        if self.d.len() > 3 { return nil }
+        if self > bigint(INT_MAX) or self < bigint(INT_MIN) { return nil }
+        var v = 0
+        var i = self.d.len()
+        while i > 0 {
+            i -= 1
+            v = v * BIGINT_BASE + self.d[i]      // INT_MIN wraps back to itself below
+        }
+        return if self.neg { -v } else { v }
+    }
+
+    // the number of decimal digits, without the sign (0 has 1)
+    fn digits(self) -> int {
+        if self.d.is_empty() { return 1 }
+        return (self.d.len() - 1) * 9 + str(self.d[self.d.len() - 1]).len()
+    }
+}
+
+// a BigInt with the value of n
+fn bigint(n: int) -> BigInt {
+    let d: [int] = []
+    var v = n
+    while v != 0 {
+        let limb = v % BIGINT_BASE           // negative or zero when v is negative
+        d.push(if limb < 0 { -limb } else { limb })
+        v = v / BIGINT_BASE
+    }
+    return BigInt(n < 0, d)
+}
+
+// reads a whole number in decimal: an optional sign, then digits ("_" between digits is allowed)
+fn bigint_parse(text: str) -> Result<BigInt, str> {
+    var s = text.trim()
+    var neg = false
+    if s.starts_with("-") or s.starts_with("+") {
+        neg = s.starts_with("-")
+        s = s[1..]
+    }
+    s = s.replace("_", "")
+    if s.len() == 0 { return Result.Err("not a number: '{text}'") }
+    for i in 0..s.len() {
+        let c = s.byte_at(i)
+        if c < '0' or c > '9' { return Result.Err("not a number: '{text}'") }
+    }
+    let d: [int] = []
+    var end = s.len()
+    while end > 0 {
+        let start = if end >= 9 { end - 9 } else { 0 }
+        d.push(s[start..end].to_int())
+        end = start
+    }
+    return Result.Ok(bigint_make(neg, d))
+}
+
+// the greatest common divisor of a and b (never negative)
+fn bigint_gcd(a: BigInt, b: BigInt) -> BigInt {
+    var x = a.abs()
+    var y = b.abs()
+    while not y.is_zero() {
+        let r = x % y
+        x = y
+        y = r
+    }
+    return x
+}
+
+// 1 * 2 * ... * n
+fn bigint_factorial(n: int) -> BigInt {
+    var r = bigint(1)
+    for i in 2..=n { r = r * bigint(i) }
+    return r
+}
+
+// drops leading zero limbs and keeps zero positive
+fn bigint_make(neg: bool, d: [int]) -> BigInt {
+    var n = d.len()
+    while n > 0 and d[n - 1] == 0 { n -= 1 }
+    let t = if n == d.len() { d } else { d[0..n] }
+    return BigInt(neg and n > 0, t)
+}
+
+fn bigint_mag_cmp(a: [int], b: [int]) -> int {
+    if a.len() != b.len() { return a.len() - b.len() }
+    var i = a.len()
+    while i > 0 {
+        i -= 1
+        if a[i] != b[i] { return a[i] - b[i] }
+    }
+    return 0
+}
+
+fn bigint_mag_add(a: [int], b: [int]) -> [int] {
+    let n = max(a.len(), b.len())
+    let r = array_with_cap::<int>(n + 1)
+    var carry = 0
+    for i in 0..n {
+        var s = carry
+        if i < a.len() { s += a[i] }
+        if i < b.len() { s += b[i] }
+        r.push(s % BIGINT_BASE)
+        carry = s / BIGINT_BASE
+    }
+    if carry > 0 { r.push(carry) }
+    return r
+}
+
+// a - b where a >= b
+fn bigint_mag_sub(a: [int], b: [int]) -> [int] {
+    let r = array_with_cap::<int>(a.len())
+    var borrow = 0
+    for i in 0..a.len() {
+        var s = a[i] - borrow
+        if i < b.len() { s -= b[i] }
+        if s < 0 {
+            s += BIGINT_BASE
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        r.push(s)
+    }
+    return bigint_make(false, r).d
+}
+
+fn bigint_mag_mul(a: [int], b: [int]) -> [int] {
+    if a.is_empty() or b.is_empty() { return [] }
+    let r = array_make::<int>(a.len() + b.len())
+    for i in 0..a.len() {
+        var carry = 0
+        let x = a[i]
+        if x == 0 { continue }
+        for j in 0..b.len() {
+            let cur = r[i + j] + x * b[j] + carry
+            r[i + j] = cur % BIGINT_BASE
+            carry = cur / BIGINT_BASE
+        }
+        var k = i + b.len()
+        while carry > 0 {
+            let cur = r[k] + carry
+            r[k] = cur % BIGINT_BASE
+            carry = cur / BIGINT_BASE
+            k += 1
+        }
+    }
+    return bigint_make(false, r).d
+}
+
+// a * m where 0 <= m < BIGINT_BASE
+fn bigint_mag_mul_small(a: [int], m: int) -> [int] {
+    if m == 0 or a.is_empty() { return [] }
+    let r = array_with_cap::<int>(a.len() + 1)
+    var carry = 0
+    for x in a {
+        let cur = x * m + carry
+        r.push(cur % BIGINT_BASE)
+        carry = cur / BIGINT_BASE
+    }
+    if carry > 0 { r.push(carry) }
+    return r
+}
+
+// schoolbook long division, one limb of the quotient at a time; b is not zero
+fn bigint_mag_divmod(a: [int], b: [int]) -> ([int], [int]) {
+    if bigint_mag_cmp(a, b) < 0 { return ([], copy(a)) }
+    let q = array_make::<int>(a.len())
+    if b.len() == 1 {
+        let m = b[0]
+        var rem = 0
+        var i = a.len()
+        while i > 0 {
+            i -= 1
+            let cur = rem * BIGINT_BASE + a[i]
+            q[i] = cur / m
+            rem = cur % m
+        }
+        let r: [int] = if rem == 0 { [] } else { [rem] }
+        return (bigint_make(false, q).d, r)
+    }
+    var r: [int] = []
+    var i = a.len()
+    while i > 0 {
+        i -= 1
+        r.insert(0, a[i])
+        r = bigint_make(false, r).d
+        if bigint_mag_cmp(r, b) < 0 { continue }
+        // the quotient limb lies between the estimates from the top limbs; narrow it down by halving
+        var lo = 0
+        var hi = BIGINT_BASE - 1
+        if r.len() == b.len() {
+            hi = min(hi, r[r.len() - 1] / b[b.len() - 1])
+        } else {
+            hi = min(hi, (r[r.len() - 1] * BIGINT_BASE + r[r.len() - 2]) / b[b.len() - 1])
+        }
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if bigint_mag_cmp(bigint_mag_mul_small(b, mid), r) <= 0 { lo = mid } else { hi = mid - 1 }
+        }
+        q[i] = lo
+        r = bigint_mag_sub(r, bigint_mag_mul_small(b, lo))
+    }
+    return (bigint_make(false, q).d, r)
+}
