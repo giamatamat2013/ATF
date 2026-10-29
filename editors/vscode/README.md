@@ -2,7 +2,7 @@
 
 Language support for [ATF](https://github.com/giamatamat2013/ATF) (*Accessible Typed Fast*), a small compiled programming language (`.atf` files).
 
-Created by **TAMAT2013**.
+Created by **giamatamat2013**.
 
 ## Features
 
@@ -39,7 +39,7 @@ Opening the ATF repository as the workspace is enough; running `install.cmd` fro
 
 ## Install from source
 
-Copy this folder to `%USERPROFILE%\.vscode\extensions\tamat2013.atf-0.4.0` and reload VS Code, or package it with `npx @vscode/vsce package` and install the `.vsix`.
+Copy this folder to `%USERPROFILE%\.vscode\extensions\giamatamat2013.atf-0.4.0` and reload VS Code, or package it with `npx @vscode/vsce package` and install the `.vsix`.
 
 ## License
 

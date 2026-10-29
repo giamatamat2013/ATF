@@ -269,7 +269,7 @@ It is **not** open source as defined by the OSI, because commercial use is restr
 The software is provided as is, without warranty.
 
 **Request (not required):** if you publish changes or a project built with ATF, we would appreciate it if
-your code were available too, and if you credited ATF and its original author, tamat2013.
+your code were available too, and if you credited ATF and its original author, giamatamat2013.
 
 ## Tests
 

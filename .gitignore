@@ -30,3 +30,6 @@ Desktop.ini
 
 
 *.log
+
+# Generated output of the QA runs (the expected files stay tracked)
+tests/qa/_actual/

@@ -2,10 +2,10 @@
   "name": "atf",
   "displayName": "ATF",
   "description": "Syntax highlighting, snippets, compiler diagnostics, run/build commands and outline for ATF (Accessible Typed Fast), a small compiled programming language (.atf files).",
-  "version": "1.3.1",
-  "publisher": "tamat2013",
+  "version": "1.4.0",
+  "publisher": "giamatamat2013",
   "author": {
-    "name": "TAMAT2013"
+    "name": "giamatamat2013"
   },
   "icon": "icon.png",
   "license": "PolyForm-Noncommercial-1.0.0",
