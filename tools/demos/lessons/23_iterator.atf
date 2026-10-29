@@ -1,0 +1,17 @@
+struct Countdown { n: int }
+
+impl Countdown {
+    fn next(self) -> int? {
+        if self.n == 0 { return nil }
+        self.n -= 1
+        return self.n + 1
+    }
+}
+
+fn main() {
+    let c = Countdown{ n: 3 }
+    for x in c {
+        println(x)
+    }
+    println("liftoff")
+}

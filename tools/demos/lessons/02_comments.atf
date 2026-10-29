@@ -1,0 +1,10 @@
+// A line comment runs to the end of the line.
+fn main() {
+    let total = 1 + 2 +
+        3 + 4
+    println(total)
+    let words = "a b c"
+        .split(" ")
+    println(words.len())
+    println("semicolons are optional; total is {total}")
+}

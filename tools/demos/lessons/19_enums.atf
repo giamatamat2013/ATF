@@ -1,0 +1,23 @@
+enum Shape { Circle(float), Rect(float, float), Point }
+
+fn area(s: Shape) -> float {
+    return match s {
+        Shape.Circle(r) => 3.0 * r * r
+        Shape.Rect(w, h) => w * h
+        Shape.Point => 0.0
+    }
+}
+
+enum Level { Low = 1, High = 10 }
+
+fn main() {
+    println(area(Shape.Circle(2.0)))
+    println(area(Shape.Rect(2.0, 3.5)))
+    println(area(Shape.Point))
+    println(int(Level.High))
+    let s = Shape.Rect(1.0, 1.0)
+    match s {
+        Shape.Rect(w, h) => println("a rectangle {w} x {h}")
+        _ => println("something else")
+    }
+}

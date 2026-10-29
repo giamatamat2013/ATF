@@ -1,0 +1,19 @@
+struct Point { x: int, y: int = 0 }
+
+impl Point {
+    fn new(x: int) -> Point { return Point(x, 0) }
+    fn shift(self, dx: int) -> Point { return Point(self.x + dx, self.y) }
+    fn to_str(self) -> str { return "({self.x}, {self.y})" }
+}
+
+fn main() {
+    let a = Point(3, 4)
+    let b = Point{ x: 1 }
+    let c = Point.new(9)
+    println(a)
+    println(b.shift(10))
+    println(c)
+    var moved = a
+    moved.x = 100
+    println(a.x)
+}

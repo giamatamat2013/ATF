@@ -1,0 +1,12 @@
+fn main() {
+    let path = path_join(temp_dir(), "atf_tutorial_demo.txt")
+    let saved = write_file(path, "first line\nsecond line")
+    println("saved: {saved}")
+    println("exists: {file_exists(path)}")
+    let text = read_file(path) ?? ""
+    for line in text.lines() {
+        println("> {line}")
+    }
+    delete_file(path)
+    println("exists: {file_exists(path)}")
+}

@@ -1,0 +1,16 @@
+fn main() {
+    var nums: [int] = [5, 3, 8]
+    nums.push(1)
+    println(nums)
+    println("length {nums.len()}, first {nums[0]}, last {nums[nums.len() - 1]}")
+    nums.sort()
+    println(nums)
+    println(nums.contains(8))
+    println(nums[1..3])
+    println(nums.sum())
+    let popped = nums.pop()
+    println("popped {popped}, left {nums}")
+    var empty: [str] = []
+    println(empty.is_empty())
+    println([1, 2] + [3])
+}

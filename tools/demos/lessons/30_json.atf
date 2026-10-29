@@ -1,0 +1,17 @@
+import "std/json"
+
+fn main() {
+    let text = "\{\"name\": \"Ada\", \"langs\": [\"en\", \"fr\"], \"age\": 36}"
+    match json_parse(text) {
+        Result.Ok(v) => {
+            println(v.get_str("name", "?"))
+            println(v.get_int("age", 0) + 1)
+        }
+        Result.Err(e) => println("bad json: {e}")
+    }
+    let doc = json_object()
+    doc.set("ok", JsonValue.Bool(true))
+    doc.set("items", json_array_of([JsonValue.Int(1), JsonValue.Int(2)]))
+    println(json_stringify(doc))
+    println(json_stringify(doc, 2))
+}

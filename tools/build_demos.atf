@@ -1,0 +1,770 @@
+// build_demos.atf: writes demos.html, the ATF tutorial page (the GitHub Pages site).
+//
+// Run from the repository root:
+//     bin\atf.exe run tools\build_demos.atf
+//
+// The lessons are the programs in tools\demos\lessons\. This program compiles and runs each
+// one, so every output on the page is what the compiler really printed. To change a lesson,
+// edit its .atf file or its text below, then run this program again.
+
+import "std/html"
+import "std/base64"
+import "std/process"
+
+struct Chapter {
+    title: str
+    title_he: str
+}
+
+struct Lesson {
+    file: str
+    chapter: int
+    title: str
+    title_he: str
+    body: str                // paragraphs are separated by a blank line
+    body_he: str
+    extra: str = ""         // a second file that the lesson imports, shown after the first
+    window: bool = false    // opens a window: shown as a picture instead of text output
+}
+
+let TUT_CHAPTERS: [Chapter] = [
+    Chapter{ title: "Getting started", title_he: "היכרות" },
+    Chapter{ title: "Values and text", title_he: "ערכים וטקסט" },
+    Chapter{ title: "Control flow", title_he: "בקרת זרימה" },
+    Chapter{ title: "Functions", title_he: "פונקציות" },
+    Chapter{ title: "Collections", title_he: "אוספים" },
+    Chapter{ title: "Your own types", title_he: "טיפוסים משלכם" },
+    Chapter{ title: "Generics, interfaces and iterators", title_he: "גנריות, ממשקים ואיטרטורים" },
+    Chapter{ title: "Optionals and errors", title_he: "אופציונלים ושגיאות" },
+    Chapter{ title: "Programs and the outside world", title_he: "תוכניות והעולם החיצון" },
+    Chapter{ title: "Windows", title_he: "חלונות" },
+    Chapter{ title: "Testing and performance", title_he: "בדיקות וביצועים" },
+]
+
+let TUT_LESSONS: [Lesson] = [
+    Lesson{ file: "01_hello.atf", chapter: 0,
+        title: "Your first program", title_he: "התוכנית הראשונה שלכם",
+        body: "Every program starts in `fn main()`. `println` prints a line, and `print` prints without starting a new line.\n\nText in quotes can hold a value: `\{expression\}` is computed and its value is put into the text. This is called interpolation.\n\nSave the code in a file that ends in `.atf`, then run it with `atf run`. The compiler checks the program first, then runs it.",
+        body_he: "כל תוכנית מתחילה ב-`fn main()`. `println` מדפיס שורה, ו-`print` מדפיס בלי לעבור לשורה חדשה.\n\nטקסט במירכאות יכול להכיל ערך: `\{ביטוי\}` מחושב, והערך שלו נכנס לטקסט. זה נקרא אינטרפולציה.\n\nשומרים את הקוד בקובץ שמסתיים ב-`.atf` ומריצים אותו עם `atf run`. הקומפיילר בודק את התוכנית קודם, ואז מריץ אותה.",
+    },
+    Lesson{ file: "02_comments.atf", chapter: 0,
+        title: "Comments and line breaks", title_he: "הערות ושבירת שורות",
+        body: "`//` starts a comment that runs to the end of the line. A statement can continue on the next line when the line ends with an operator, or when the next line starts with a dot. Semicolons are optional.",
+        body_he: "`//` פותח הערה שנמשכת עד סוף השורה. פקודה יכולה להמשיך לשורה הבאה כששורה נגמרת באופרטור, או כששורה הבאה מתחילה בנקודה. נקודה-פסיק היא אופציונלית.",
+    },
+    Lesson{ file: "03_variables.atf", chapter: 1,
+        title: "Variables: let, var and const", title_he: "משתנים: let, var ו-const",
+        body: "`let` creates a name that cannot be given a new value, and `var` creates one that can. `const` is a global constant. A second `let` with the same name hides the first one. `a, b = b, a` swaps two values in one line.",
+        body_he: "`let` יוצר שם שאי אפשר לתת לו ערך חדש, ו-`var` יוצר שם שאפשר. `const` הוא קבוע גלובלי. `let` שני עם אותו שם מסתיר את הראשון. השורה `a, b = b, a` מחליפה בין שני ערכים בשורה אחת.",
+    },
+    Lesson{ file: "04_types.atf", chapter: 1,
+        title: "Basic types and conversions", title_he: "טיפוסים בסיסיים והמרות",
+        body: "`int` is a 64-bit whole number, `float` a decimal number, `bool` true or false, `str` a text and `byte` a single byte such as 'A'. Conversions are written out: `float(n)`, `int(x)`, `str(n)` and `to_int()` on text.\n\nThe length of a text counts bytes, not letters. The letter é takes two bytes, so `\"héllo\".len()` is 6.",
+        body_he: "`int` הוא מספר שלם של 64 סיביות, `float` מספר עשרוני, `bool` אמת או שקר, `str` טקסט, ו-`byte` בית אחד כמו 'A'. ההמרות כתובות במפורש: `float(n)`, `int(x)`, `str(n)`, ו-`to_int()` על טקסט.\n\nאורך טקסט נמדד בבתים ולא באותיות. האות é תופסת שני בתים, ולכן `\"héllo\".len()` הוא 6.",
+    },
+    Lesson{ file: "05_operators.atf", chapter: 1,
+        title: "Operators", title_he: "אופרטורים",
+        body: "Integer `/` rounds toward zero, and `%` takes the sign of its left side. `**` is the power operator, and it binds tighter than the minus sign in front of a number. Integers and floats mix in arithmetic, but a float never turns into an integer by itself. `??` gives a default when a value is nil.",
+        body_he: "חילוק של מספרים שלמים `/` מעגל לכיוון אפס, ו-`%` לוקח את הסימן של האגף השמאלי. `**` היא חזקה, וקושרת חזק יותר מהמינוס שלפני מספר. מספרים שלמים ועשרוניים מתערבבים בחשבון, אבל עשרוני לעולם לא הופך לשלם מעצמו. `??` נותן ערך ברירת מחדל כשהערך הוא nil.",
+    },
+    Lesson{ file: "06_strings.atf", chapter: 1,
+        title: "Strings and formatting", title_he: "מחרוזות ועיצוב",
+        body: "Text has methods such as `trim`, `upper`, `split` and `repeat`, and slices such as `word[1..4]`. Inside the braces of a text you can add a format: `:.2f` for two decimals, `:5` for a width, `:<5` and `:>5` to align, and `:X` or `:08b` for hexadecimal and binary.\n\nThree quotes make a text over several lines. A raw text, written `r\"...\"`, ignores backslashes.",
+        body_he: "לטקסט יש מתודות כמו `trim`, `upper`, `split` ו-`repeat`, וחתיכות כמו `word[1..4]`. בתוך הסוגריים המסולסלים של טקסט אפשר להוסיף עיצוב: `:.2f` לשתי ספרות אחרי הנקודה, `:5` לרוחב, `:<5` ו-`:>5` ליישור, ו-`:X` או `:08b` להקסדצימלי ולבינארי.\n\nשלוש מירכאות יוצרות טקסט בכמה שורות. טקסט גולמי, שנכתב `r\"...\"`, מתעלם מהלוכסנים האחוריים.",
+    },
+    Lesson{ file: "07_if.atf", chapter: 2,
+        title: "if and else", title_he: "if ו-else",
+        body: "A condition must be a `bool`: a number is not true or false. `if` can also be an expression that gives a value, so it needs an `else`.",
+        body_he: "תנאי חייב להיות `bool`: מספר אינו אמת או שקר. `if` יכול להיות גם ביטוי שמחזיר ערך, ולכן הוא צריך `else`.",
+    },
+    Lesson{ file: "08_loops.atf", chapter: 2,
+        title: "while and loop", title_he: "while ו-loop",
+        body: "`while` repeats as long as its condition holds. `loop` repeats until a `break` stops it. `continue` skips to the next round.",
+        body_he: "`while` חוזר כל עוד התנאי מתקיים. `loop` חוזר עד ש-`break` עוצר אותו. `continue` מדלג לסיבוב הבא.",
+    },
+    Lesson{ file: "09_for.atf", chapter: 2,
+        title: "for and ranges", title_he: "for וטווחים",
+        body: "`0..3` gives 0, 1 and 2, and `0..=3` includes the last number. `step` sets the jump, and the jump can be negative. `for i, x in items` gives the index and the value. A label such as `outer:` lets `break outer` leave a loop that is nested inside another one.",
+        body_he: "`0..3` נותן 0, 1 ו-2, ו-`0..=3` כולל גם את המספר האחרון. `step` קובע את הקפיצה, והיא יכולה להיות שלילית. `for i, x in items` נותן את האינדקס ואת הערך. תווית כמו `outer:` מאפשרת ל-`break outer` לצאת מלולאה שנמצאת בתוך לולאה אחרת.",
+    },
+    Lesson{ file: "10_functions.atf", chapter: 3,
+        title: "Functions", title_he: "פונקציות",
+        body: "Parameters can have default values, and a call can name its arguments. A function with a return type must return a value on every path. The short form `=> expression` returns one expression.",
+        body_he: "לפרמטרים אפשר לתת ערך ברירת מחדל, ובקריאה אפשר לציין את שמות הארגומנטים. פונקציה עם טיפוס החזרה חייבת להחזיר ערך בכל מסלול. הצורה הקצרה `=> ביטוי` מחזירה ביטוי אחד.",
+    },
+    Lesson{ file: "11_tuples.atf", chapter: 3,
+        title: "Tuples: several results", title_he: "טאפלים: כמה תוצאות",
+        body: "A function can return several values as a tuple, and `let (lo, hi) = ...` takes them apart. Write `_` for a value you do not need. The parts of a tuple are read with `.0`, `.1` and so on.",
+        body_he: "פונקציה יכולה להחזיר כמה ערכים כטאפל, ו-`let (lo, hi) = ...` מפרק אותם. כותבים `_` לערך שלא צריך. החלקים של טאפל נקראים עם `.0`, `.1` וכן הלאה.",
+    },
+    Lesson{ file: "12_closures.atf", chapter: 3,
+        title: "Closures and functions as values", title_he: "סגורים: פונקציות כערכים",
+        body: "`|x| x * 2` is a closure, a small function without a name. It can read and change the variables around it. A function can take another function as an argument, and arrays have `map`, `filter` and `reduce`.",
+        body_he: "`|x| x * 2` הוא סגור: פונקציה קטנה בלי שם. הוא יכול לקרוא ולשנות את המשתנים שסביבו. פונקציה יכולה לקבל פונקציה אחרת כארגומנט, ולמערכים יש `map`, `filter` ו-`reduce`.",
+    },
+    Lesson{ file: "13_arrays.atf", chapter: 4,
+        title: "Arrays", title_he: "מערכים",
+        body: "`[int]` is an array of whole numbers. `push` adds at the end, `sort` sorts the array in place, and `nums[1..3]` takes a slice. An empty array needs a type, as in `var empty: [str] = []`.",
+        body_he: "`[int]` הוא מערך של מספרים שלמים. `push` מוסיף בסוף, `sort` ממיין את המערך במקום, ו-`nums[1..3]` לוקח חתיכה ממנו. מערך ריק צריך טיפוס, כמו ב-`var empty: [str] = []`.",
+    },
+    Lesson{ file: "14_comprehensions.atf", chapter: 4,
+        title: "List comprehensions", title_he: "הבנות רשימה",
+        body: "A comprehension builds an array from a loop in one expression. An `if` at the end keeps only some of the items, and comprehensions can be nested to build a grid.",
+        body_he: "הבנת רשימה בונה מערך מתוך לולאה בביטוי אחד. `if` בסוף משאיר רק חלק מהפריטים, ואפשר לקנן הבנות כדי לבנות טבלה.",
+    },
+    Lesson{ file: "15_maps.atf", chapter: 4,
+        title: "Maps", title_he: "מפות",
+        body: "A map such as `\{str: int\}` stores values under keys, and it keeps the keys in the order they were added. `get(key, default)` returns the default when the key is missing, `in` checks for a key, and `for k, v in map` visits every pair.",
+        body_he: "מפה כמו `\{str: int\}` שומרת ערכים לפי מפתחות, ושומרת את המפתחות לפי סדר ההוספה. `get(key, default)` מחזיר את ברירת המחדל כשהמפתח חסר, `in` בודק אם מפתח קיים, ו-`for k, v in map` עובר על כל הזוגות.",
+    },
+    Lesson{ file: "16_sets.atf", chapter: 4,
+        title: "Sets", title_he: "קבוצות",
+        body: "A set keeps each value only once. Create one with `set_new::<int>()`, check membership with `in` or `has`, and go over the items with `items()`.",
+        body_he: "קבוצה שומרת כל ערך רק פעם אחת. יוצרים אותה עם `set_new::<int>()`, בודקים אם ערך נמצא בה עם `in` או `has`, ועוברים על הפריטים עם `items()`.",
+    },
+    Lesson{ file: "17_structs.atf", chapter: 5,
+        title: "Structs and methods", title_he: "מבנים ומתודות",
+        body: "A struct groups named fields. `impl` adds methods: a method takes `self`, and a function without `self` is called on the type, as in `Point.new(9)`. A method named `to_str` is used by `println` and by text interpolation.\n\nStructs are references: `var moved = a` gives a second name for the same point, so changing `moved` also changes `a`.",
+        body_he: "מבנה מאגד שדות בעלי שם. `impl` מוסיף מתודות: מתודה מקבלת `self`, ופונקציה בלי `self` נקראת על הטיפוס עצמו, כמו `Point.new(9)`. מתודה בשם `to_str` נקראת על ידי `println` ועל ידי הכנסת ערך לטקסט.\n\nמבנים הם הפניות: `var moved = a` נותן שם שני לאותה נקודה, ולכן שינוי של `moved` משנה גם את `a`.",
+    },
+    Lesson{ file: "18_operators.atf", chapter: 5,
+        title: "Operators on your own types", title_he: "אופרטורים על הטיפוסים שלכם",
+        body: "Methods named `op_add`, `op_mul`, `eq` and `cmp` make `+`, `*`, `==` and `<` work on your type. `cmp` returns a negative number, zero or a positive number, and `sort` uses it to order the items.",
+        body_he: "מתודות בשם `op_add`, `op_mul`, `eq` ו-`cmp` גורמות ל-`+`, `*`, `==` ו-`<` לעבוד על הטיפוס שלכם. `cmp` מחזיר מספר שלילי, אפס או חיובי, ו-`sort` משתמש בו כדי לסדר את הפריטים.",
+    },
+    Lesson{ file: "19_enums.atf", chapter: 5,
+        title: "Enums and match", title_he: "Enum ו-match",
+        body: "An enum lists the possible cases, and a case can carry data. `match` runs the arm that fits the value, and it must cover every case or end with `_`. A numbered case gives an integer through `int(...)`.",
+        body_he: "Enum מונה את המקרים האפשריים, ולמקרה יכול להיות מידע צמוד. `match` מפעיל את הזרוע שמתאימה לערך, וחייב לכסות את כל המקרים, או להסתיים ב-`_`. למקרה עם מספר נותנים ערך שלם בעזרת `int(...)`.",
+    },
+    Lesson{ file: "20_patterns.atf", chapter: 5,
+        title: "Patterns", title_he: "תבניות",
+        body: "A pattern can match a value, a range such as `4..=9`, or several values separated by `|`. A guard with `if` adds a condition. Structs, tuples and arrays can be matched too: `[first, ..rest]` takes the first item and the rest of the array.",
+        body_he: "תבנית יכולה להתאים לערך, לטווח כמו `4..=9`, או לכמה ערכים שמופרדים ב-`|`. שמירה עם `if` מוסיפה תנאי. אפשר להתאים גם מבנים, טאפלים ומערכים: `[first, ..rest]` לוקח את הפריט הראשון ואת שאר המערך.",
+    },
+    Lesson{ file: "21_interfaces.atf", chapter: 6,
+        title: "Interfaces", title_he: "ממשקים",
+        body: "An interface lists methods. Any type that has those methods fits, without declaring that it does, so one `[Shape]` array can hold circles and squares. A method in an interface can also have a default body that types use when they do not write their own.",
+        body_he: "ממשק מפרט מתודות. כל טיפוס שיש לו את המתודות האלה מתאים, בלי הצהרה מיוחדת, ולכן מערך `[Shape]` אחד יכול להחזיק עיגולים וריבועים. למתודה בממשק יכול להיות גם גוף ברירת מחדל, שבו הטיפוסים משתמשים כשאינם כותבים מתודה משלהם.",
+    },
+    Lesson{ file: "22_generics.atf", chapter: 6,
+        title: "Generics", title_he: "גנריות",
+        body: "`<T>` after the name of a function or a struct makes it work for any type. The compiler checks each use with the real type, so you do not write bounds.",
+        body_he: "`<T>` אחרי שם של פונקציה או מבנה הופך אותם לעובדים על כל טיפוס. הקומפיילר בודק כל שימוש עם הטיפוס האמיתי, ולכן לא כותבים הגבלות על הטיפוס.",
+    },
+    Lesson{ file: "23_iterator.atf", chapter: 6,
+        title: "Your own iterators", title_he: "איטרטורים משלכם",
+        body: "Any type with a method `next(self) -> T?` can be used in a `for` loop. The loop stops when `next` returns nil.",
+        body_he: "כל טיפוס שיש לו מתודה `next(self) -> T?` יכול לשמש בלולאת `for`. הלולאה נעצרת כש-`next` מחזיר nil.",
+    },
+    Lesson{ file: "24_optionals.atf", chapter: 7,
+        title: "Optionals: values that may be nil", title_he: "אופציונלים: ערכים שעשויים להיות nil",
+        body: "`int?` is an integer or nil. It cannot be used as a plain integer until you open it: `!` opens it and panics on nil, `??` gives a default, and `if let` runs only when there is a value.",
+        body_he: "`int?` הוא מספר שלם או nil. אי אפשר להשתמש בו כמספר רגיל לפני שפותחים אותו: `!` פותח ונופל על nil, `??` נותן ברירת מחדל, ו-`if let` רץ רק כשיש ערך.",
+    },
+    Lesson{ file: "25_result.atf", chapter: 7,
+        title: "Result and the ? operator", title_he: "Result ואופרטור ה-?",
+        body: "`Result<T, E>` is either `Result.Ok(value)` or `Result.Err(error)`. A `?` after a call returns the error from the current function when there is one, and otherwise gives the value.",
+        body_he: "`Result<T, E>` הוא `Result.Ok(ערך)` או `Result.Err(שגיאה)`. `?` אחרי קריאה מחזיר את השגיאה מהפונקציה הנוכחית כשיש שגיאה, ואחרת נותן את הערך.",
+    },
+    Lesson{ file: "26_errors.atf", chapter: 7,
+        title: "panic, catch_panic, try and defer", title_he: "panic, catch_panic, try ו-defer",
+        body: "`panic` stops the program with a message and a traceback. `catch_panic` runs a function and returns the message instead of stopping, and `try ... catch` does the same for a block. `defer` runs its line when the enclosing block ends, and several defers run in reverse order.",
+        body_he: "`panic` עוצר את התוכנית עם הודעה ו-traceback. `catch_panic` מריץ פונקציה ומחזיר את ההודעה במקום לעצור, ו-`try ... catch` עושה את אותו דבר לבלוק. `defer` מריץ את השורה שלו כשהבלוק שמכיל אותו מסתיים, וכמה defer-ים רצים בסדר הפוך.",
+    },
+    Lesson{ file: "27_files.atf", chapter: 8,
+        title: "Files", title_he: "קבצים",
+        body: "`read_file` returns the text of a file, or nil when the file cannot be opened. `write_file` returns true on success, and `path_join` joins a folder and a file name with the right separator. This program writes a file to the temporary folder, reads it back and deletes it.",
+        body_he: "`read_file` מחזיר את הטקסט של קובץ, או nil כשאי אפשר לפתוח אותו. `write_file` מחזיר true בהצלחה, ו-`path_join` מחבר תיקייה ושם קובץ עם המפריד הנכון. התוכנית הזו כותבת קובץ לתיקייה הזמנית, קוראת אותו ומוחקת אותו.",
+    },
+    Lesson{ file: "28_args.atf", chapter: 8,
+        title: "Command-line arguments", title_he: "ארגומנטים משורת הפקודה",
+        body: "`fn main(args: [str])` receives what is written after the program name. The number that `main` returns becomes the exit code. Pass arguments after the file name, as in `atf run 28_args.atf hello world`. The output below was made without arguments.",
+        body_he: "`fn main(args: [str])` מקבלת את מה שכתוב אחרי שם התוכנית. המספר ש-`main` מחזיר הופך לקוד היציאה. מעבירים ארגומנטים אחרי שם הקובץ, כמו ב-`atf run 28_args.atf hello world`. הפלט שלמטה נוצר בלי ארגומנטים.",
+    },
+    Lesson{ file: "29_modules.atf", chapter: 8, extra: "shapes.atf",
+        title: "Modules: your own files", title_he: "מודולים: קבצים משלכם",
+        body: "`import \"shapes\"` loads `shapes.atf` from the same folder, and everything in it becomes available: functions, types and constants. All files share one global namespace, so every global name must be unique. The standard library needs no import line: a name such as `json_parse` loads its module by itself.",
+        body_he: "`import \"shapes\"` טוען את `shapes.atf` מאותה תיקייה, וכל מה שבו נעשה זמין: פונקציות, טיפוסים וקבועים. כל הקבצים חולקים מרחב שמות גלובלי אחד, ולכן כל שם גלובלי חייב להיות ייחודי. לספרייה הסטנדרטית לא צריך שורת import: שם כמו `json_parse` טוען את המודול שלו בעצמו.",
+    },
+    Lesson{ file: "30_json.atf", chapter: 8,
+        title: "Standard library: JSON", title_he: "ספרייה סטנדרטית: JSON",
+        body: "`std/json` reads and writes JSON. `json_parse` returns a `Result`, so a broken document is an error that you can handle. `json_stringify` writes the text, and its second argument sets the indentation.",
+        body_he: "`std/json` קורא וכותב JSON. `json_parse` מחזיר `Result`, ולכן מסמך שבור הוא שגיאה שאפשר לטפל בה. `json_stringify` כותב את הטקסט, והארגומנט השני שלו קובע את ההזחה.",
+    },
+    Lesson{ file: "31_stdlib.atf", chapter: 8,
+        title: "Standard library: math, text and lazy iterators", title_he: "ספרייה סטנדרטית: מתמטיקה, טקסט ואיטרטורים עצלים",
+        body: "`sqrt` and `abs` are always there. Functions such as `math_is_prime`, `text_title` and `algo_prefix_sums` come from modules, and the compiler loads the right module by itself. `iter_range` is lazy: it makes the numbers one at a time, and `collect` gathers them into an array.",
+        body_he: "`sqrt` ו-`abs` זמינות תמיד. פונקציות כמו `math_is_prime`, `text_title` ו-`algo_prefix_sums` באות ממודולים, והקומפיילר טוען את המודול המתאים בעצמו. `iter_range` עצלני: הוא מייצר את המספרים אחד אחד, ו-`collect` אוסף אותם למערך.",
+    },
+    Lesson{ file: "32_extern.atf", chapter: 8,
+        title: "Calling Windows functions", title_he: "קריאה לפונקציות של Windows",
+        body: "`extern \"dll\" fn` declares a function that lives in a Windows DLL, and `as` gives the name of the function inside that DLL. This program asks Windows for the id of the running process.",
+        body_he: "`extern \"dll\" fn` מכריז על פונקציה שנמצאת ב-DLL של Windows, ו-`as` נותן את השם של הפונקציה בתוך ה-DLL. התוכנית הזו שואלת את Windows מה המזהה של התהליך שרץ.",
+    },
+    Lesson{ file: "33_window.atf", chapter: 9, window: true,
+        title: "A window", title_he: "חלון",
+        body: "`ui_run` opens a window. The view is a function that returns a tree of elements, and it is rebuilt after every click, so a button handler only has to change data. A style is a value such as `CARD` or `PRIMARY`, built with methods like `bg`, `radius` and `padding`.\n\nThe same program runs in a browser when you set `ATF_UI_WEB=8080` before `atf run`.",
+        body_he: "`ui_run` פותח חלון. התצוגה היא פונקציה שמחזירה עץ של רכיבים, והיא נבנית מחדש אחרי כל לחיצה, ולכן מטפל לחיצה צריך רק לשנות נתונים. סגנון הוא ערך כמו `CARD` או `PRIMARY`, שנבנה בעזרת מתודות כמו `bg`, `radius` ו-`padding`.\n\nאותה תוכנית רצה בדפדפן כששמים `ATF_UI_WEB=8080` לפני `atf run`.",
+    },
+    Lesson{ file: "34_test.atf", chapter: 10,
+        title: "Tests with std/test", title_he: "בדיקות עם std/test",
+        body: "`test` runs a named group of checks. `expect_eq` and `expect` record a failure and let the rest run, and `expect_panics` passes only when the code panics. `atf test` runs every test file in a folder.",
+        body_he: "`test` מריץ קבוצה של בדיקות בעלת שם. `expect_eq` ו-`expect` רושמים כישלון ומאפשרים לשאר הבדיקות לרוץ, ו-`expect_panics` עובר רק כשהקוד נופל. `atf test` מריץ כל קובץ בדיקה בתיקייה.",
+    },
+    Lesson{ file: "35_traps.atf", chapter: 10,
+        title: "Traps to avoid", title_he: "מלכודות לשים לב אליהן",
+        body: "Assigning an array, a map or a struct gives a second name for the same value, so use `copy` when you need an independent copy. Integers wrap around without a warning when they go past their largest value.",
+        body_he: "השמה של מערך, מפה או מבנה נותנת שם שני לאותו ערך, ולכן משתמשים ב-`copy` כשצריך עותק עצמאי. מספר שלם מתגלגל בלי אזהרה כשהוא חורג מהערך הגדול ביותר שלו.",
+    },
+    Lesson{ file: "36_performance.atf", chapter: 10,
+        title: "Building text fast", title_he: "בניית טקסט מהירה",
+        body: "Joining pieces with `+` inside a loop copies the text again and again. A `str_builder` collects the pieces, and `finish` returns the result once. `array_make::<int>(n)` makes an array of a set size in one step.",
+        body_he: "חיבור חלקי טקסט עם `+` בתוך לולאה מעתיק את הטקסט שוב ושוב. `str_builder` אוסף את החלקים, ו-`finish` מחזיר את התוצאה פעם אחת. `array_make::<int>(n)` יוצר מערך בגודל נתון בצעד אחד.",
+    },
+]
+
+// The lesson programs are read from this folder, relative to the repository root.
+fn tut_lesson_path(file: str) -> str {
+    return "tools\\demos\\lessons\\" + file
+}
+
+fn tut_read_code(file: str) -> str {
+    let text = read_file(tut_lesson_path(file))
+    if text == nil {
+        panic("cannot read {tut_lesson_path(file)}")
+    }
+    return text!.replace("\r", "").rstrip()
+}
+
+// Compiles and runs one lesson program. Its output is what the page shows.
+fn tut_run(file: str) -> str {
+    let r = proc_output("bin\\atf.exe run " + tut_lesson_path(file))
+    if r.0 != 0 {
+        panic("{file} exited with code {r.0}:\n{r.1}")
+    }
+    return r.1.replace("\r", "").rstrip()
+}
+
+// Runs a window program with the screenshot variable set, and returns the picture as base64.
+fn tut_window_picture(file: str) -> str {
+    let bmp = temp_dir() + "atf_tutorial_window.bmp"
+    let r = proc_output("cmd /c set ATF_UI_SCREENSHOT=" + bmp + "&& bin\\atf.exe run " + tut_lesson_path(file))
+    if r.0 != 0 {
+        panic("{file} exited with code {r.0}:\n{r.1}")
+    }
+    let picture = read_file(bmp)
+    if picture == nil {
+        panic("no screenshot was written for {file}")
+    }
+    return b64_encode(picture!)
+}
+
+let TUT_WORD_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+let TUT_DIGITS = "0123456789"
+let TUT_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+let TUT_KEYWORDS: [str] = ["fn", "let", "var", "const", "if", "else", "while", "loop", "for", "in", "break", "continue", "return", "struct", "enum", "impl", "match", "import", "extern", "as", "defer", "try", "catch", "true", "false", "nil", "and", "or", "not", "step", "interface", "unsafe", "pub", "type"]
+let TUT_TYPES: [str] = ["int", "float", "bool", "str", "byte", "self", "Result", "Option"]
+
+fn tut_span(cls: str, piece: str) -> str {
+    return "<span class='" + cls + "'>" + html_escape(piece) + "</span>"
+}
+
+// Colours the code for the page: comments, strings, numbers, keywords, types and function names.
+fn tut_highlight(code: str) -> str {
+    let out = str_builder()
+    let n = code.len()
+    var i = 0
+    var after_fn = false
+    while i < n {
+        let c = code[i..i + 1]
+        var end = i + 1
+        var cls = ""
+        if c == "/" and i + 1 < n and code[i..i + 2] == "//" {
+            while end < n and code[end..end + 1] != "\n" { end += 1 }
+            cls = "tk-c"
+        } else if c == "\"" and i + 3 <= n and code[i..i + 3] == "\"\"\"" {
+            end = i + 3
+            while end + 3 <= n and code[end..end + 3] != "\"\"\"" { end += 1 }
+            end = min(end + 3, n)
+            cls = "tk-s"
+        } else if c == "\"" {
+            while end < n and code[end..end + 1] != "\"" {
+                if code[end..end + 1] == "\\" { end += 1 }
+                end += 1
+            }
+            end = min(end + 1, n)
+            cls = "tk-s"
+        } else if c == "'" {
+            while end < n and code[end..end + 1] != "'" { end += 1 }
+            end = min(end + 1, n)
+            cls = "tk-s"
+        } else if TUT_DIGITS.contains(c) {
+            while end < n and (TUT_DIGITS + ".").contains(code[end..end + 1]) { end += 1 }
+            cls = "tk-n"
+        } else if TUT_WORD_CHARS.contains(c) {
+            while end < n and TUT_WORD_CHARS.contains(code[end..end + 1]) { end += 1 }
+            let word = code[i..end]
+            if TUT_KEYWORDS.contains(word) {
+                cls = "tk-k"
+            } else if TUT_TYPES.contains(word) or TUT_UPPER.contains(c) {
+                cls = "tk-t"
+            } else if after_fn {
+                cls = "tk-f"
+            }
+            after_fn = word == "fn"
+        }
+        let piece = code[i..end]
+        if cls == "" {
+            out.add(html_escape(piece))
+        } else {
+            out.add(tut_span(cls, piece))
+        }
+        i = end
+    }
+    return out.finish()
+}
+
+// Adds the English and the Hebrew version of a short text. The page shows one of them.
+fn tut_bi(parent: HtmlNode, en: str, he: str) {
+    parent.add(h("span").cls("en").text(en))
+    parent.add(h("span").cls("he").attr("dir", "rtl").text(he))
+}
+
+// Escapes a paragraph and turns each `code` span into a <code> element.
+fn tut_inline(text: str) -> str {
+    let out = str_builder()
+    var in_code = false
+    for part in text.split("`") {
+        if in_code {
+            out.add("<code>" + html_escape(part) + "</code>")
+        } else {
+            out.add(html_escape(part))
+        }
+        in_code = not in_code
+    }
+    return out.finish()
+}
+
+fn tut_paragraphs(cls: str, text: str) -> HtmlNode {
+    let box = h("div").cls(cls)
+    for p in text.split("\n\n") {
+        box.add(h("p").raw(tut_inline(p)))
+    }
+    return box
+}
+
+fn tut_code_figure(file: str, code: str) -> HtmlNode {
+    let fig = h("figure").cls("code")
+    let cap = h("figcaption")
+    cap.add(h("span").cls("file").text(file))
+    let copy = h("button").cls("copy").attr("type", "button")
+    tut_bi(copy, "Copy", "העתקה")
+    cap.add(copy)
+    fig.add(cap)
+    let pre = h("pre")
+    pre.add(h("code").raw(tut_highlight(code)))
+    fig.add(pre)
+    return fig
+}
+
+fn tut_lesson(number: int, l: Lesson) -> HtmlNode {
+    let id = "{number:02}"
+    let card = h("article").cls("lesson").id("l-" + id)
+        .attr("data-id", id)
+        .attr("data-search", l.title + " " + l.title_he)
+
+    let head = h("div").cls("lesson-head")
+    head.add(h("span").cls("num").text(id))
+    let title = h("h3")
+    tut_bi(title, l.title, l.title_he)
+    head.add(title)
+    let done = h("label").cls("done")
+    done.add(h("input").cls("done-box").attr("type", "checkbox").attr("data-id", id))
+    tut_bi(done, "Done", "סיימתי")
+    head.add(done)
+    card.add(head)
+
+    let prose = h("div").cls("prose")
+    prose.add(tut_paragraphs("en", l.body))
+    prose.add(tut_paragraphs("he", l.body_he).attr("dir", "rtl"))
+    card.add(prose)
+
+    card.add(h("p").cls("run").add(h("code").text("atf run " + l.file)))
+    card.add(tut_code_figure(l.file, tut_read_code(l.file)))
+    if l.extra != "" {
+        card.add(tut_code_figure(l.extra, tut_read_code(l.extra)))
+    }
+
+    if l.window {
+        let shot = h("figure").cls("picture")
+        shot.add(h("img").attr("src", "data:image/bmp;base64," + tut_window_picture(l.file)).attr("alt", "The window this program opens"))
+        let cap = h("figcaption")
+        tut_bi(cap, "The window this program opens.", "החלון שהתוכנית הזו פותחת.")
+        shot.add(cap)
+        card.add(shot)
+    } else {
+        let out = h("figure").cls("out")
+        let cap = h("figcaption")
+        tut_bi(cap, "Output", "פלט")
+        out.add(cap)
+        out.add(h("pre").text(tut_run(l.file)))
+        card.add(out)
+    }
+    return card
+}
+
+fn tut_chapter_head(ci: int) -> HtmlNode {
+    let head = h("h2").cls("chapter-title")
+    head.add(h("span").cls("chapter-no").text("{ci + 1}"))
+    tut_bi(head, TUT_CHAPTERS[ci].title, TUT_CHAPTERS[ci].title_he)
+    return head
+}
+
+fn tut_step(en: str, he: str, cmd: str) -> HtmlNode {
+    let step = h("div").cls("step")
+    let label = h("div").cls("step-title")
+    tut_bi(label, en, he)
+    step.add(label)
+    step.add(h("code").text(cmd))
+    return step
+}
+
+fn tut_hero() -> HtmlNode {
+    let hero = h("section").cls("hero")
+    let title = h("h2").cls("hero-title")
+    tut_bi(title, "Learn ATF, one program at a time", "לומדים את ATF, תוכנית אחת בכל פעם")
+    hero.add(title)
+    let lede = h("p").cls("hero-lede")
+    tut_bi(lede, "{TUT_LESSONS.len()} short lessons, from the first program to windows and tests. Every output on this page is what the program really printed when the page was built.", "{TUT_LESSONS.len()} שיעורים קצרים, מהתוכנית הראשונה ועד חלונות ובדיקות. כל פלט בדף הוא מה שהתוכנית באמת הדפיסה כשנבנה הדף.")
+    hero.add(lede)
+    let steps = h("div").cls("steps")
+    steps.add(tut_step("Check", "בדיקה", "atf check hello.atf"))
+    steps.add(tut_step("Run", "הרצה", "atf run hello.atf"))
+    steps.add(tut_step("Build an .exe", "בנייה לקובץ exe", "atf build hello.atf -o hello.exe"))
+    hero.add(steps)
+    return hero
+}
+
+fn tut_toc() -> HtmlNode {
+    let nav = h("nav").cls("toc")
+    for ci in 0..TUT_CHAPTERS.len() {
+        let block = h("div").cls("toc-chapter")
+        let label = h("div").cls("toc-title")
+        tut_bi(label, TUT_CHAPTERS[ci].title, TUT_CHAPTERS[ci].title_he)
+        block.add(label)
+        for k, l in TUT_LESSONS {
+            if l.chapter == ci {
+                let id = "{k + 1:02}"
+                let link = h("a").cls("toc-link").attr("href", "#l-" + id).attr("data-id", id)
+                link.add(h("span").cls("check"))
+                link.add(h("span").cls("toc-num").text(id))
+                tut_bi(link, l.title, l.title_he)
+                block.add(link)
+            }
+        }
+        nav.add(block)
+    }
+    return nav
+}
+
+fn tut_sidebar() -> HtmlNode {
+    let side = h("aside").cls("side")
+    side.add(h("input").cls("search").id("search").attr("type", "search").attr("placeholder", "Search / חיפוש"))
+    let track = h("div").cls("progress-track")
+    track.add(h("div").id("fill"))
+    side.add(track)
+    let count = h("div").cls("progress-count")
+    count.add(h("span").id("count-num").text("0"))
+    count.add(h("span").text(" / {TUT_LESSONS.len()} "))
+    tut_bi(count, "lessons done", "שיעורים הושלמו")
+    side.add(count)
+    side.add(tut_toc())
+    return side
+}
+
+fn tut_topbar() -> HtmlNode {
+    let bar = h("header").cls("topbar")
+    let brand = h("div").cls("brand")
+    brand.add(h("button").cls("btn menu-btn").id("menu").attr("type", "button").attr("aria-label", "Lessons").text("☰"))
+    brand.add(h("span").cls("logo").text("ATF"))
+    let name = h("h1")
+    tut_bi(name, "ATF tutorial", "מדריך ATF")
+    brand.add(name)
+    bar.add(brand)
+    let controls = h("div").cls("controls")
+    let seg = h("div").cls("seg")
+    seg.add(h("button").cls("btn lang-btn").attr("type", "button").attr("data-lang", "en").attr("aria-pressed", "false").text("English"))
+    seg.add(h("button").cls("btn lang-btn").attr("type", "button").attr("data-lang", "he").attr("aria-pressed", "false").text("עברית"))
+    controls.add(seg)
+    controls.add(h("button").cls("btn").id("theme").attr("type", "button").attr("aria-label", "Theme").text("◐"))
+    bar.add(controls)
+    return bar
+}
+
+fn tut_content() -> HtmlNode {
+    let content = h("main").cls("content")
+    content.add(tut_hero())
+    for ci in 0..TUT_CHAPTERS.len() {
+        let section = h("section").cls("chapter").id("chapter-{ci + 1}")
+        section.add(tut_chapter_head(ci))
+        for k, l in TUT_LESSONS {
+            if l.chapter == ci {
+                section.add(tut_lesson(k + 1, l))
+            }
+        }
+        content.add(section)
+    }
+    let footer = h("footer").cls("footer")
+    let p1 = h("p")
+    tut_bi(p1, "Full reference: docs/TUTORIAL.md and docs/STDLIB.md in the repository. This page is built by tools/build_demos.atf.", "המדריך המלא: docs/TUTORIAL.he.md ו-docs/STDLIB.md במאגר. הדף הזה נבנה על ידי tools/build_demos.atf.")
+    footer.add(p1)
+    footer.add(h("p").add(h("a").attr("href", "https://github.com/giamatamat2013/ATF").text("github.com/giamatamat2013/ATF")))
+    content.add(footer)
+    return content
+}
+
+// Colour tokens. The light values are the default; the dark ones apply by system setting or by the theme button.
+let TUT_LIGHT = "--bg: #f6f7fb; --panel: #ffffff; --ink: #14142b; --muted: #5b6075; --line: #e3e6f0; --chip: #eef0f8; --accent: #4f46e5; --accent-2: #7c3aed; --accent-soft: #e9e7ff; --ok: #059669"
+let TUT_DARK = "--bg: #0b1020; --panel: #121a2e; --ink: #e6e9f5; --muted: #9aa3bd; --line: #26304a; --chip: #1a2440; --accent: #8b8cf8; --accent-2: #a78bfa; --accent-soft: #232a4d; --ok: #34d399"
+
+fn tut_media(query: str, rules: str) -> str {
+    return "@media " + query + " \{\n" + rules + "\n\}"
+}
+
+fn tut_css() -> str {
+    return "\n".join([
+        css_rule(":root", TUT_LIGHT),
+        css_rule(":root[data-theme='dark']", TUT_DARK),
+        tut_media("(prefers-color-scheme: dark)", css_rule(":root:not([data-theme='light'])", TUT_DARK)),
+        css_rule("*, *::before, *::after", "box-sizing: border-box"),
+        css_rule("html", "scroll-behavior: smooth; scroll-padding-top: 84px"),
+        css_rule("body", "margin: 0; background: var(--bg); color: var(--ink); font-family: 'Heebo', 'Segoe UI', system-ui, sans-serif; font-size: 16px; line-height: 1.65; -webkit-font-smoothing: antialiased"),
+        css_rule("h1, h2, h3", "margin: 0; line-height: 1.25; letter-spacing: -0.01em"),
+        css_rule("p", "margin: 0.6em 0"),
+        css_rule("a", "color: var(--accent)"),
+        css_rule(":focus-visible", "outline: 2px solid var(--accent); outline-offset: 2px"),
+        css_rule("html:not([data-lang='he']) .he", "display: none"),
+        css_rule("html[data-lang='he'] .en", "display: none"),
+        css_rule(".hidden", "display: none !important"),
+        css_rule(".topbar", "position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line)"),
+        css_rule(".brand", "display: flex; align-items: center; gap: 12px; min-width: 0"),
+        css_rule(".brand h1", "font-size: 18px; font-weight: 800; white-space: nowrap"),
+        css_rule(".logo", "display: inline-grid; place-items: center; min-width: 46px; height: 34px; padding: 0 10px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 800; letter-spacing: 0.02em"),
+        css_rule(".controls", "display: flex; align-items: center; gap: 8px"),
+        css_rule(".btn", "font: inherit; font-size: 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; cursor: pointer"),
+        css_rule(".btn:hover", "border-color: var(--accent)"),
+        css_rule(".seg", "display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--chip)"),
+        css_rule(".seg .btn", "border: 0; background: transparent; padding: 5px 12px"),
+        css_rule(".seg .btn[aria-pressed='true']", "background: var(--panel); color: var(--accent); font-weight: 700; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08)"),
+        css_rule(".menu-btn", "display: none"),
+        css_rule(".progress-line", "position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 40; pointer-events: none"),
+        css_rule(".progress-line > div", "height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.4s ease"),
+        css_rule(".layout", "display: grid; grid-template-columns: 290px minmax(0, 1fr); max-width: 1280px; margin: 0 auto"),
+        css_rule(".side", "position: sticky; top: 61px; height: calc(100vh - 61px); overflow: auto; padding: 22px 16px 40px; border-right: 1px solid var(--line); background: var(--panel)"),
+        css_rule(".search", "width: 100%; font: inherit; font-size: 14px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; outline: none"),
+        css_rule(".search:focus", "border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft)"),
+        css_rule(".progress-track", "height: 8px; margin-top: 14px; border-radius: 999px; background: var(--chip); overflow: hidden"),
+        css_rule(".progress-track > div", "height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width 0.4s ease"),
+        css_rule(".progress-count", "margin: 8px 0 0; font-size: 13px; color: var(--muted)"),
+        css_rule(".toc-chapter", "margin-top: 18px"),
+        css_rule(".toc-title", "font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px"),
+        css_rule(".toc-link", "display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: 14px"),
+        css_rule(".toc-link:hover", "background: var(--chip)"),
+        css_rule(".toc-link.active", "background: var(--accent-soft); color: var(--accent); font-weight: 600"),
+        css_rule(".toc-num", "font-size: 12px; color: var(--muted); min-width: 1.6em"),
+        css_rule(".check", "flex: none; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line)"),
+        css_rule(".toc-link.is-done .check", "background: var(--ok); border-color: var(--ok)"),
+        css_rule(".content", "min-width: 0; padding: 28px 36px 80px"),
+        css_rule(".hero", "padding: 26px 28px; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(135deg, var(--panel), var(--accent-soft))"),
+        css_rule(".hero-title", "font-size: 30px; font-weight: 800"),
+        css_rule(".hero-lede", "color: var(--muted); max-width: 60ch"),
+        css_rule(".steps", "display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 18px"),
+        css_rule(".step", "display: grid; gap: 8px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px"),
+        css_rule(".step-title", "font-size: 14px; font-weight: 700"),
+        css_rule(".step code", "font-size: 13px; background: var(--chip); padding: 6px 8px; border-radius: 8px; overflow-x: auto; white-space: nowrap"),
+        css_rule(".chapter", "scroll-margin-top: 80px"),
+        css_rule(".chapter-title", "display: flex; align-items: center; gap: 12px; margin: 48px 0 14px; font-size: 22px"),
+        css_rule(".chapter-no", "display: inline-grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: 15px; font-weight: 800"),
+        css_rule(".lesson", "scroll-margin-top: 84px; padding: 22px 22px 18px; margin: 0 0 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04)"),
+        css_rule(".lesson.is-done", "border-color: var(--ok)"),
+        css_rule(".lesson-head", "display: flex; align-items: center; flex-wrap: wrap; gap: 12px"),
+        css_rule(".num", "display: inline-grid; place-items: center; min-width: 40px; height: 26px; padding: 0 8px; border-radius: 8px; background: var(--chip); color: var(--muted); font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; font-weight: 700"),
+        css_rule(".lesson.is-done .num", "background: var(--ok); color: #fff"),
+        css_rule(".lesson h3", "flex: 1 1 auto; min-width: 0; font-size: 19px; font-weight: 700"),
+        css_rule(".done", "display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none"),
+        css_rule(".done input", "width: 16px; height: 16px; margin: 0; accent-color: var(--ok)"),
+        css_rule(".prose", "margin-top: 10px; font-size: 16px"),
+        css_rule(".prose p", "margin: 0 0 10px"),
+        css_rule(".prose code", "font-family: 'JetBrains Mono', Consolas, monospace; font-size: 0.9em; background: var(--chip); padding: 1px 6px; border-radius: 6px"),
+        css_rule(".prose [dir='rtl']", "text-align: right"),
+        css_rule(".run", "margin: 14px 0 0"),
+        css_rule(".run code", "display: inline-block; font-size: 13px; background: var(--chip); padding: 4px 10px; border-radius: 8px"),
+        css_rule("figure", "margin: 14px 0 0"),
+        css_rule("figure.code, figure.out", "border-radius: 14px; overflow: hidden; border: 1px solid #1e293b; background: #0f172a"),
+        css_rule("figure figcaption", "display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #1e293b; color: #94a3b8; font-size: 12px; font-weight: 600"),
+        css_rule(".copy", "font: inherit; font-size: 12px; color: #cbd5e1; background: transparent; border: 1px solid #334155; border-radius: 8px; padding: 3px 10px; cursor: pointer"),
+        css_rule(".copy.copied", "color: #34d399; border-color: #34d399"),
+        css_rule("figure.code pre, figure.out pre", "margin: 0; padding: 14px 16px; overflow-x: auto; color: #e2e8f0; font-family: 'JetBrains Mono', Consolas, 'Cascadia Mono', monospace; font-size: 13.5px; line-height: 1.6; direction: ltr; text-align: left"),
+        css_rule("figure.out pre", "color: #d1fae5"),
+        css_rule(".tk-k", "color: #c4b5fd; font-weight: 600"),
+        css_rule(".tk-t", "color: #67e8f9"),
+        css_rule(".tk-f", "color: #93c5fd"),
+        css_rule(".tk-s", "color: #86efac"),
+        css_rule(".tk-n", "color: #fdba74"),
+        css_rule(".tk-c", "color: #64748b; font-style: italic"),
+        css_rule("figure.picture", "margin: 14px 0 0"),
+        css_rule("figure.picture img", "display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 12px"),
+        css_rule("figure.picture figcaption", "padding: 8px 2px 0; color: var(--muted); font-size: 13px; font-weight: 400"),
+        css_rule(".footer", "margin-top: 56px; padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; color: var(--muted); font-size: 14px"),
+        tut_media("(max-width: 900px)", "\n".join([
+            css_rule(".layout", "grid-template-columns: 1fr"),
+            css_rule(".side", "position: fixed; top: 61px; bottom: 0; left: 0; z-index: 25; width: min(86vw, 320px); height: auto; transform: translateX(-105%); transition: transform 0.25s ease; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25)"),
+            css_rule("body.menu-open .side", "transform: none"),
+            css_rule(".menu-btn", "display: inline-flex"),
+            css_rule(".topbar", "padding: 10px 16px"),
+            css_rule(".brand h1", "font-size: 16px"),
+            css_rule(".content", "padding: 20px 16px 64px"),
+            css_rule(".hero", "padding: 20px"),
+            css_rule(".hero-title", "font-size: 24px"),
+            css_rule(".lesson", "padding: 18px 14px 14px"),
+            css_rule(".chapter-title", "font-size: 19px"),
+        ])),
+        tut_media("(prefers-reduced-motion: reduce)", css_rule("*", "transition: none !important; scroll-behavior: auto !important")),
+    ])
+}
+
+fn tut_js() -> str {
+    return """
+(function () \{
+  var root = document.documentElement;
+  var doneKey = 'atf-tutorial-done';
+
+  function all(selector) \{
+    return Array.prototype.slice.call(document.querySelectorAll(selector));
+  \}
+  function read(key) \{
+    try \{ return localStorage.getItem(key); \} catch (e) \{ return null; \}
+  \}
+  function write(key, value) \{
+    try \{ localStorage.setItem(key, value); \} catch (e) \{ \}
+  \}
+  function doneList() \{
+    try \{ return JSON.parse(read(doneKey) || '[]'); \} catch (e) \{ return []; \}
+  \}
+  function setLang(lang) \{
+    root.setAttribute('data-lang', lang);
+    root.lang = lang;
+    all('.lang-btn').forEach(function (b) \{
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-lang') === lang));
+    \});
+    write('atf-tutorial-lang', lang);
+  \}
+  function setTheme(theme) \{
+    root.setAttribute('data-theme', theme);
+    write('atf-tutorial-theme', theme);
+  \}
+  function refresh() \{
+    var done = doneList();
+    var cards = all('.lesson');
+    var count = 0;
+    cards.forEach(function (card) \{
+      var id = card.getAttribute('data-id');
+      var on = done.indexOf(id) >= 0;
+      if (on) \{ count += 1; \}
+      card.classList.toggle('is-done', on);
+      card.querySelector('.done-box').checked = on;
+    \});
+    all('.toc-link').forEach(function (link) \{
+      link.classList.toggle('is-done', done.indexOf(link.getAttribute('data-id')) >= 0);
+    \});
+    var percent = cards.length ? Math.round(100 * count / cards.length) : 0;
+    document.getElementById('count-num').textContent = String(count);
+    document.getElementById('bar').style.width = percent + '%';
+    document.getElementById('fill').style.width = percent + '%';
+  \}
+  function filter(q) \{
+    all('.lesson').forEach(function (card) \{
+      var hit = card.getAttribute('data-search').toLowerCase().indexOf(q) >= 0;
+      card.classList.toggle('hidden', !hit);
+      var link = document.querySelector('.toc-link[data-id="' + card.getAttribute('data-id') + '"]');
+      if (link) \{ link.classList.toggle('hidden', !hit); \}
+    \});
+    all('.chapter').forEach(function (section) \{
+      section.classList.toggle('hidden', section.querySelectorAll('.lesson:not(.hidden)').length === 0);
+    \});
+    all('.toc-chapter').forEach(function (block) \{
+      block.classList.toggle('hidden', block.querySelectorAll('.toc-link:not(.hidden)').length === 0);
+    \});
+  \}
+
+  document.addEventListener('DOMContentLoaded', function () \{
+    var lang = read('atf-tutorial-lang');
+    if (!lang) \{ lang = (navigator.language || '').indexOf('he') === 0 ? 'he' : 'en'; \}
+    setLang(lang);
+    var theme = read('atf-tutorial-theme');
+    if (theme === 'dark' || theme === 'light') \{ root.setAttribute('data-theme', theme); \}
+
+    all('.lang-btn').forEach(function (b) \{
+      b.addEventListener('click', function () \{ setLang(b.getAttribute('data-lang')); \});
+    \});
+    document.getElementById('theme').addEventListener('click', function () \{
+      var current = root.getAttribute('data-theme');
+      var dark = current ? current === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      setTheme(dark ? 'light' : 'dark');
+    \});
+    all('.done-box').forEach(function (box) \{
+      box.addEventListener('change', function () \{
+        var id = box.getAttribute('data-id');
+        var done = doneList().filter(function (x) \{ return x !== id; \});
+        if (box.checked) \{ done.push(id); \}
+        write(doneKey, JSON.stringify(done));
+        refresh();
+      \});
+    \});
+    all('.copy').forEach(function (btn) \{
+      btn.addEventListener('click', function () \{
+        var text = btn.closest('figure').querySelector('pre').textContent;
+        if (navigator.clipboard) \{ navigator.clipboard.writeText(text); \}
+        btn.classList.add('copied');
+        setTimeout(function () \{ btn.classList.remove('copied'); \}, 1200);
+      \});
+    \});
+    var search = document.getElementById('search');
+    search.addEventListener('input', function () \{ filter(search.value.trim().toLowerCase()); \});
+    document.getElementById('menu').addEventListener('click', function () \{
+      document.body.classList.toggle('menu-open');
+    \});
+    all('.toc-link').forEach(function (a) \{
+      a.addEventListener('click', function () \{ document.body.classList.remove('menu-open'); \});
+    \});
+    if ('IntersectionObserver' in window) \{
+      var spy = new IntersectionObserver(function (entries) \{
+        entries.forEach(function (e) \{
+          if (!e.isIntersecting) \{ return; \}
+          var id = e.target.getAttribute('data-id');
+          all('.toc-link').forEach(function (a) \{
+            a.classList.toggle('active', a.getAttribute('data-id') === id);
+          \});
+        \});
+      \}, \{ rootMargin: '-35% 0px -55% 0px' \});
+      all('.lesson').forEach(function (card) \{ spy.observe(card); \});
+    \}
+    refresh();
+  \});
+\})();
+"""
+}
+
+fn main() {
+    let layout = h("div").cls("layout")
+    layout.add(tut_sidebar())
+    layout.add(tut_content())
+    let top = h("div").cls("progress-line")
+    top.add(h("div").id("bar"))
+    let page = html_page("ATF tutorial", [tut_topbar(), top, layout], tut_css(), tut_js(), "en", "ltr")
+    if not write_file("demos.html", page) {
+        panic("cannot write demos.html")
+    }
+    println("wrote demos.html: {TUT_LESSONS.len()} lessons, {page.len()} bytes")
+}

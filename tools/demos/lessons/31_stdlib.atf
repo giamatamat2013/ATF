@@ -1,0 +1,11 @@
+fn main() {
+    println(sqrt(16.0))
+    println(abs(-7))
+    println(math_is_prime(97))
+    println(math_factorial(5))
+    println(text_title("hello big world"))
+    println(text_snake_case("HelloBigWorld"))
+    println(algo_prefix_sums([1, 2, 3]))
+    println(iter_range(1, 5).map(|x| x * x).collect())
+    println(iter_of(["a", "b", "c"]).join("-"))
+}

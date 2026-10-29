@@ -1,0 +1,14 @@
+const LIMIT = 3
+
+fn main() {
+    let name = "Ada"
+    var count = 0
+    count += 1
+    count = count + LIMIT
+    var a = 1
+    var b = 2
+    a, b = b, a
+    println("{name} {count} {a} {b}")
+    let name = "Grace"
+    println(name)
+}

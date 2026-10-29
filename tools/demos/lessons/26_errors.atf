@@ -1,0 +1,24 @@
+fn divide(a: int, b: int) -> int {
+    if b == 0 { panic("cannot divide {a} by zero") }
+    return a / b
+}
+
+fn work() {
+    defer println("cleanup runs last")
+    println("working")
+}
+
+fn main() {
+    println(divide(10, 2))
+    if let msg = catch_panic(|| { println(divide(1, 0)) }) {
+        println("caught: {msg}")
+    }
+    try {
+        assert(1 + 1 == 2, "math still works")
+        assert(false, "this one fails")
+        println("not reached")
+    } catch err {
+        println("try caught: {err}")
+    }
+    work()
+}

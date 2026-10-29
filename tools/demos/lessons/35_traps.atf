@@ -1,0 +1,12 @@
+fn main() {
+    let a = [1, 2, 3]
+    var b = a
+    b.push(4)
+    println(a.len())
+    var c = copy(a)
+    c.push(5)
+    println(a.len())
+    println(c.len())
+    let big = 9223372036854775807
+    println(big + 1)
+}

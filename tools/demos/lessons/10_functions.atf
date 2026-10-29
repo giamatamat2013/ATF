@@ -1,0 +1,18 @@
+fn add(a: int, b: int = 1) -> int {
+    return a + b
+}
+
+fn square(x: int) -> int => x * x
+
+fn factorial(n: int) -> int {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+fn main() {
+    println(add(2, 3))
+    println(add(10))
+    println(add(b: 5, a: 1))
+    println(square(9))
+    println(factorial(10))
+}

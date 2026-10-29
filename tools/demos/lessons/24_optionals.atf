@@ -1,0 +1,16 @@
+fn find(values: [int], wanted: int) -> int? {
+    for i, v in values {
+        if v == wanted { return i }
+    }
+    return nil
+}
+
+fn main() {
+    let nums = [10, 20, 30]
+    println(find(nums, 20) ?? -1)
+    println(find(nums, 99) ?? -1)
+    if let i = find(nums, 30) {
+        println("30 is at index {i}")
+    }
+    println(find(nums, 10)!)
+}

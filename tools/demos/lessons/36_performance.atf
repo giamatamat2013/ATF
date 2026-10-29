@@ -1,0 +1,10 @@
+fn main() {
+    let sb = str_builder()
+    for i in 1..=5 {
+        sb.add("{i},")
+    }
+    println(sb.finish())
+    let counts = array_make::<int>(3)
+    counts[1] = 7
+    println(counts)
+}

@@ -1,0 +1,14 @@
+fn main() {
+    let whole: int = 42
+    let ratio: float = 3.5
+    let ok: bool = true
+    let text: str = "ATF"
+    let letter: byte = 'A'
+    println("{whole} {ratio} {ok} {text}")
+    println(float(whole) / 4.0)
+    println(int(3.9))
+    println("12".to_int() + 1)
+    println(str(7) + "7")
+    println(letter == 'A')
+    println("héllo".len())
+}

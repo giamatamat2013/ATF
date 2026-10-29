@@ -1,0 +1,7 @@
+fn main(args: [str]) -> int {
+    println("arguments given: {args.len()}")
+    for i, a in args {
+        println("{i}: {a}")
+    }
+    return 0
+}

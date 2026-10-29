@@ -1,0 +1,14 @@
+fn main() {
+    var ages: {str: int} = {}
+    ages["ada"] = 36
+    ages["grace"] = 85
+    println(ages.get("ada", 0))
+    println(ages.get("linus", -1))
+    println("grace" in ages)
+    println(ages.len())
+    for name, age in ages {
+        println("{name} is {age}")
+    }
+    ages.remove("grace")
+    println(ages.keys())
+}

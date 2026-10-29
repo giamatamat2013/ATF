@@ -1,0 +1,22 @@
+fn parse_age(s: str) -> Result<int, str> {
+    let n = s.parse_int()
+    if n == nil { return Result.Err("not a number: {s}") }
+    let age = n!
+    if age < 0 { return Result.Err("negative age") }
+    return Result.Ok(age)
+}
+
+fn next_year(s: str) -> Result<int, str> {
+    let age = parse_age(s)?
+    return Result.Ok(age + 1)
+}
+
+fn main() {
+    for s in ["36", "abc", "-4"] {
+        match next_year(s) {
+            Result.Ok(a) => println("{s} -> next year {a}")
+            Result.Err(e) => println("{s} -> error: {e}")
+        }
+    }
+    println(parse_age("7").unwrap_or(0))
+}

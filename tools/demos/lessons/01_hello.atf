@@ -1,0 +1,8 @@
+fn main() {
+    println("Hello, ATF!")
+    print("no new line, ")
+    println("then a new line")
+    let name = "world"
+    println("Hello, {name}!")
+    println("2 + 3 = {2 + 3}")
+}

@@ -1,0 +1,14 @@
+// shapes.atf: a small module, imported by 29_modules.atf
+const SHAPES_VERSION = "1.0"
+
+struct Circle {
+    r: float
+}
+
+impl Circle {
+    fn area(self) -> float { return PI * self.r * self.r }
+}
+
+fn shapes_total_area(cs: [Circle]) -> float {
+    return cs.map(|c| c.area()).sum()
+}

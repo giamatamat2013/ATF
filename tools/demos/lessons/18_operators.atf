@@ -1,0 +1,21 @@
+struct Money { cents: int }
+
+impl Money {
+    fn op_add(self, other: Money) -> Money { return Money(self.cents + other.cents) }
+    fn op_mul(self, k: int) -> Money { return Money(self.cents * k) }
+    fn eq(self, other: Money) -> bool { return self.cents == other.cents }
+    fn cmp(self, other: Money) -> int { return self.cents - other.cents }
+    fn to_str(self) -> str { return "{self.cents} cents" }
+}
+
+fn main() {
+    let a = Money(250)
+    let b = Money(175)
+    println(a + b)
+    println(a * 2)
+    println(a == Money(250))
+    println(b < a)
+    var wallet = [a, b]
+    wallet.sort()
+    println(wallet[0])
+}

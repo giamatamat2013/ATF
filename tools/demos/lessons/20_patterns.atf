@@ -1,0 +1,32 @@
+struct Pos { x: int, y: int }
+
+fn describe(n: int) -> str {
+    return match n {
+        0 => "zero"
+        1 | 2 | 3 => "small"
+        4..=9 => "medium"
+        x if x < 0 => "negative"
+        _ => "large"
+    }
+}
+
+fn main() {
+    for n in [0, 2, 7, -5, 100] {
+        println(describe(n))
+    }
+    let p = Pos(0, 5)
+    match p {
+        Pos{ x: 0, y } => println("on the y axis at {y}")
+        _ => println("elsewhere")
+    }
+    let nums = [1, 2, 3, 4]
+    match nums {
+        [] => println("empty")
+        [first, ..rest] => println("first {first}, rest {rest}")
+    }
+    let pair = (3, "x")
+    match pair {
+        (0, _) => println("zero")
+        (n, s) => println("{n}{s}")
+    }
+}

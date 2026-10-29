@@ -1,0 +1,12 @@
+fn main() {
+    let n = 7
+    if n % 2 == 0 {
+        println("{n} is even")
+    } else if n > 5 {
+        println("{n} is odd and bigger than 5")
+    } else {
+        println("{n} is odd")
+    }
+    let size = if n > 10 { "big" } else { "small" }
+    println(size)
+}

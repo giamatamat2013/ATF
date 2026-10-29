@@ -1,0 +1,21 @@
+fn first_or<T>(items: [T], fallback: T) -> T {
+    if items.len() == 0 { return fallback }
+    return items[0]
+}
+
+struct Box<T> { value: T }
+
+impl<T> Box<T> {
+    fn get(self) -> T { return self.value }
+}
+
+fn main() {
+    println(first_or([3, 4], 0))
+    println(first_or(["a"], "none"))
+    let none: [str] = []
+    println(first_or(none, "none"))
+    let b: Box<float> = Box{ value: 2.5 }
+    println(b.get() * 2.0)
+    let names: Box<str> = Box{ value: "hi" }
+    println(names.get())
+}

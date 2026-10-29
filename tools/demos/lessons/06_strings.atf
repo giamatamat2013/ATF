@@ -1,0 +1,16 @@
+fn main() {
+    let s = "  Hello, World  "
+    println(s.trim().upper())
+    println(s.trim().len())
+    println("ATF".repeat(3))
+    println(", ".join(["a", "b", "c"]))
+    let word = "hello"
+    println(word[1..4])
+    println("{3.14159:.2f} [{42:5}] [{42:<5}] [{42:05}] {255:X} {5:08b}")
+    println("tab:\t| quote:\" | brace:\{ | smile:\u{263A}")
+    let poem = """Roses are red,
+violets are blue."""
+    println(poem)
+    println(r"no \n escapes here")
+    println("a,b,,c".split(",").len())
+}

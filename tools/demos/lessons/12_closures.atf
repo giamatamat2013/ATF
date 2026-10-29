@@ -1,0 +1,17 @@
+fn apply_twice(f: fn(int) -> int, x: int) -> int {
+    return f(f(x))
+}
+
+fn main() {
+    let k = 10
+    let add_k = |x: int| x + k
+    println(apply_twice(add_k, 1))
+    var total = 0
+    let add_to_total = |x: int| { total += x }
+    add_to_total(5)
+    add_to_total(7)
+    println(total)
+    println([1, 2, 3].map(|x| x * 2))
+    println([1, 2, 3, 4].filter(|x| x % 2 == 0))
+    println([1, 2, 3, 4].reduce(0, |acc, x| acc + x))
+}

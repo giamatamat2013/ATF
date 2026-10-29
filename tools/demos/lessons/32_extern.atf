@@ -1,0 +1,7 @@
+extern "kernel32" fn GetCurrentProcessId() -> i32 as "GetCurrentProcessId"
+
+fn main() {
+    let pid = GetCurrentProcessId()
+    let looks_valid = pid > 0
+    println("this process has a positive id: {looks_valid}")
+}

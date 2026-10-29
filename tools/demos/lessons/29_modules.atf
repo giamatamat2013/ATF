@@ -1,0 +1,7 @@
+import "shapes"
+
+fn main() {
+    let cs = [Circle(1.0), Circle(2.0)]
+    println("shapes version {SHAPES_VERSION}")
+    println("{shapes_total_area(cs):.3f}")
+}

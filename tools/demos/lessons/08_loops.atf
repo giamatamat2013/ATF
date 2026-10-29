@@ -1,0 +1,14 @@
+fn main() {
+    var i = 0
+    while i < 3 {
+        println("while {i}")
+        i += 1
+    }
+    var tries = 0
+    loop {
+        tries += 1
+        if tries == 2 { continue }
+        if tries == 4 { break }
+        println("loop {tries}")
+    }
+}
