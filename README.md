@@ -214,7 +214,7 @@ error: 'abc' is not a number
 - [docs/REFERENCE.md](docs/REFERENCE.md) - the exact rules of the language
 - [docs/STDLIB.md](docs/STDLIB.md) - every library function, method and module
 - [examples/](examples/) - 46 example programs, from `fizzbuzz` to a `bigint` calculator and a text adventure
-- [examples/ui/](examples/ui/) - window programs: a counter, a task list, an analytics dashboard and a complete notes editor (menus, files, shortcuts, saved settings), and look-alikes of familiar programs: a calculator, Minesweeper, Snake, a Paint-style drawing program, Tetris, a spreadsheet with a formula engine and a Wolfenstein-style 3D shooter, and `animations.atf` (easing, tweened values, loops); [examples/web_animations.atf](examples/web_animations.atf) builds and serves an animated web page with `std/html`
+- [examples/ui/](examples/ui/) - window programs: a counter, a task list, an analytics dashboard and a complete notes editor (menus, files, shortcuts, saved settings), and look-alikes of familiar programs: a calculator, Minesweeper, Snake, a Paint-style drawing program, Tetris, a spreadsheet with a formula engine and a Wolfenstein-style 3D shooter, `zombie_tag/` (a multi-file survivors-versus-zombies game with A* bots, fog of war and sound), and `animations.atf` (easing, tweened values, loops); [examples/web_animations.atf](examples/web_animations.atf) builds and serves an animated web page with `std/html`
 
 Every code sample in these documents is compiled and run by `python tests/check_docs.py`.
 

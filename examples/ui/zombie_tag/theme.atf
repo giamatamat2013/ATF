@@ -1,0 +1,137 @@
+// theme.atf - the "Arcade Pop" look of Zombie Tag: colours, the round Character drawing and chunky buttons.
+
+import "std/ui"
+import "engine"
+
+fn zc_bg() -> int => hex("#1a0f3d")
+fn zc_bg_alt() -> int => hex("#120a2b")
+fn zc_panel() -> int => hex("#2a1a5e")
+fn zc_panel_light() -> int => hex("#3a2480")
+fn zc_border() -> int => hex("#4b3399")
+fn zc_ink() -> int => hex("#0d0a1f")
+fn zc_text_dim() -> int => hex("#cbb8ff")
+fn zc_text_muted() -> int => hex("#9d8bd6")
+fn zc_toxic() -> int => hex("#c6ff3d")
+fn zc_toxic_dark() -> int => hex("#7bd11a")
+fn zc_blood() -> int => hex("#ff4fa3")
+fn zc_gold() -> int => hex("#ffd23f")
+fn zc_blue() -> int => hex("#3fa9ff")
+fn zc_purple() -> int => hex("#b07cff")
+fn zc_zombie() -> int => hex("#7bd11a")
+fn zc_rim() -> int => rgba(255, 255, 255, 0.12)
+
+fn zt_chan(c: int, shift: int) -> int {
+    return (c >> shift) & 255
+}
+
+// blend colour a toward colour b by t (0..1); both are opaque
+fn zt_mix(a: int, b: int, t: float) -> int {
+    let r = int(float(zt_chan(a, 16)) * (1.0 - t) + float(zt_chan(b, 16)) * t)
+    let g = int(float(zt_chan(a, 8)) * (1.0 - t) + float(zt_chan(b, 8)) * t)
+    let bl = int(float(zt_chan(a, 0)) * (1.0 - t) + float(zt_chan(b, 0)) * t)
+    return rgb(r, g, bl)
+}
+
+// same colour with another opacity
+fn zt_alpha(c: int, a: float) -> int {
+    return rgba(zt_chan(c, 16), zt_chan(c, 8), zt_chan(c, 0), a)
+}
+
+// A rounded panel with the chunky dark underside used by every card and button.
+fn zt_panel_node(kids: [Node], fill: int) -> Node {
+    return column(kids).bg(fill).radius(14).border(2, zc_rim()).padding(12).shadow(0, 5, 0, zc_ink())
+}
+
+// The chunky button: ink underside, bright face, dark text.
+fn zt_button(label: str, fill: int, w: int, h: int, f: fn()) -> Node {
+    return button(label, f).size(w, h).bg(fill).color(zc_ink()).bold().radius(16).border(2, zc_rim()).shadow(0, 4, 0, zc_ink())
+}
+
+fn zt_title(s: str, size: int) -> Node {
+    return text(s).bold().font_size(size).color(zc_toxic())
+}
+
+// One Character: a round body with an accent border, a pattern, eyes that look where it faces.
+// size is the diameter in pixels. zombie tints it green and gives it the glowing eyes and stitched mouth.
+fn draw_character(c: Canvas, cx: float, cy: float, size: float, sk: Skin, zombie: bool, facing: float, alpha: float) {
+    var body = sk.body
+    var accent = sk.accent
+    if zombie {
+        body = zt_mix(body, hex("#6b8f3a"), 0.55)
+        accent = zt_mix(accent, hex("#2d3b16"), 0.5)
+    }
+    let r = size / 2.0
+    let bw = max(1.5, size * 0.07)
+    c.fcircle(cx, cy, r, zt_alpha(accent, alpha))
+    c.fcircle(cx, cy, r - bw, zt_alpha(body, alpha))
+    let pat = zt_alpha(accent, alpha * 0.9)
+    if sk.pattern == 1 {
+        // stripes at 62% and 80% of the height
+        for k in 0..2 {
+            let yy = cy - r + size * (if k == 0 { 0.62 } else { 0.8 })
+            let half = sqrt(max(0.0, r * r - (yy - cy) * (yy - cy))) - bw
+            c.frect(cx - half, yy - size * 0.04, half * 2.0, size * 0.08, pat)
+        }
+    }
+    if sk.pattern == 2 {
+        c.fcircle(cx - size * 0.22, cy + size * 0.2, size * 0.07, pat)
+        c.fcircle(cx + size * 0.2, cy + size * 0.12, size * 0.06, pat)
+        c.fcircle(cx + size * 0.02, cy + size * 0.3, size * 0.05, pat)
+    }
+    if sk.pattern == 3 {
+        // the right half in the accent colour
+        var pts: [(float, float)] = []
+        for k in 0..=16 {
+            let a = -PI / 2.0 + PI * float(k) / 16.0
+            pts.push((cx + cos(a) * (r - bw), cy + sin(a) * (r - bw)))
+        }
+        c.polygon(pts, zt_alpha(accent, alpha * 0.55))
+    }
+    if sk.pattern == 4 {
+        c.ring(int(cx), int(cy), int(r * 0.62), max(2, int(size * 0.07)), zt_alpha(accent, alpha * 0.7))
+    }
+    // eyes
+    let lx = cos(facing) * size * 0.06
+    let ly = sin(facing) * size * 0.06
+    var es = size * 0.2
+    var ey = cy - r + size * 0.3 + es / 2.0
+    if sk.eyes == 3 {
+        es = es * 1.4
+        drawn_eye(c, cx, ey, es, lx, ly, alpha, zombie)
+    } else {
+        if sk.eyes == 2 { ey = cy - r + size * 0.55 + es / 2.0 }
+        drawn_eye(c, cx - size * 0.2, ey, es, lx, ly, alpha, zombie)
+        drawn_eye(c, cx + size * 0.2, ey, es, lx, ly, alpha, zombie)
+        if sk.eyes == 1 {
+            c.fline(cx - size * 0.32, ey - es * 0.9, cx - size * 0.08, ey - es * 0.45, 2.0, zt_alpha(zc_ink(), alpha))
+            c.fline(cx + size * 0.32, ey - es * 0.9, cx + size * 0.08, ey - es * 0.45, 2.0, zt_alpha(zc_ink(), alpha))
+        }
+        if sk.eyes == 2 {
+            c.frect(cx - size * 0.32, ey - es * 0.9, size * 0.24, es * 0.8, zt_alpha(body, alpha))
+            c.frect(cx + size * 0.08, ey - es * 0.9, size * 0.24, es * 0.8, zt_alpha(body, alpha))
+        }
+    }
+    if zombie {
+        let my = cy + size * 0.26
+        c.frect(cx - size * 0.2, my, size * 0.4, max(2.0, size * 0.06), zt_alpha(hex("#3a1010"), alpha))
+        for k in 0..4 {
+            let sx = cx - size * 0.15 + size * 0.1 * float(k)
+            c.fline(sx, my - size * 0.04, sx, my + size * 0.1, 1.0, zt_alpha(hex("#3a1010"), alpha))
+        }
+    }
+}
+
+fn drawn_eye(c: Canvas, ex: float, ey: float, es: float, lx: float, ly: float, alpha: float, zombie: bool) {
+    let white = if zombie { hex("#d4ff3a") } else { WHITE }
+    let pupil = if zombie { hex("#ff2a2a") } else { zc_ink() }
+    c.fcircle(ex, ey, es * 0.62, zt_alpha(zc_ink(), alpha))
+    c.fcircle(ex, ey, es * 0.5, zt_alpha(white, alpha))
+    c.fcircle(ex + lx, ey + ly, es * 0.5 * 0.45, zt_alpha(pupil, alpha))
+}
+
+// A Character as a node (menus, role reveal, results).
+fn character_node(sk: Skin, size: int, zombie: bool) -> Node {
+    return canvas(|c| {
+        draw_character(c, float(size) / 2.0, float(size) / 2.0, float(size) - 4.0, sk, zombie, 0.0, 1.0)
+    }).size(size, size)
+}
