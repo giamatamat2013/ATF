@@ -124,35 +124,76 @@ fn effect_for(ab: int) -> int {
 }
 
 struct Skin {
+    id: str
     name: str
     body: int
     accent: int
     eyes: int        // 0 round, 1 angry, 2 sleepy, 3 cyclops
     pattern: int     // 0 none, 1 stripes, 2 spots, 3 split, 4 ring
+    accessory: str   // an emoji drawn on the head ("" for none)
     power: str
     info: str
+    price: int
+    medal_price: int
+    rarity: int      // 0 common, 1 rare, 2 epic, 3 legendary, 4 exclusive
 }
 
+// every skin of the original game, in its order
 fn skins() -> [Skin] {
     return [
-        Skin{ name: "Rookie", body: 0xFF4F8EF7, accent: 0xFF1F3F7A, eyes: 0, pattern: 0, power: "", info: "No power" },
-        Skin{ name: "Camper", body: 0xFFF4A259, accent: 0xFF8C4A12, eyes: 0, pattern: 1, power: "", info: "No power" },
-        Skin{ name: "Mint", body: 0xFF5ED6A4, accent: 0xFF1E6B4D, eyes: 2, pattern: 2, power: "", info: "No power" },
-        Skin{ name: "Cherry", body: 0xFFE8475F, accent: 0xFF7A1525, eyes: 0, pattern: 4, power: "", info: "No power" },
-        Skin{ name: "Ninja", body: 0xFF2B2D42, accent: 0xFFEF233C, eyes: 1, pattern: 3, power: "swift", info: "+8% movement speed" },
-        Skin{ name: "Dr. Bandage", body: 0xFFF1F5F9, accent: 0xFFE11D48, eyes: 0, pattern: 4, power: "healer", info: "Medic and Bubble cooldown 30% shorter" },
-        Skin{ name: "Tank", body: 0xFF556B2F, accent: 0xFF2F3B1A, eyes: 1, pattern: 1, power: "tank", info: "Blocks the first infection of the match" },
-        Skin{ name: "Ghost", body: 0xFFD7E3FC, accent: 0xFF8EA8D8, eyes: 2, pattern: 0, power: "ghost", info: "Zombies spot you from 30% closer" },
-        Skin{ name: "Ranger", body: 0xFFC9A227, accent: 0xFF6B5208, eyes: 0, pattern: 2, power: "scout", info: "+15% vision range" },
-        Skin{ name: "Alpha Zombie", body: 0xFF7D8C3A, accent: 0xFF3D1A1A, eyes: 1, pattern: 3, power: "alpha", info: "Dash, Rage and Lunge cooldown 30% shorter" },
-        Skin{ name: "Night Hunter", body: 0xFF5B2A86, accent: 0xFF1D0B2E, eyes: 3, pattern: 4, power: "hunter", info: "+15% infection range" },
-        Skin{ name: "Robot", body: 0xFF9CA3AF, accent: 0xFF00B4D8, eyes: 3, pattern: 4, power: "engineer", info: "Tasks 25% faster" },
-        Skin{ name: "Dragon", body: 0xFF14B8A6, accent: 0xFF064E3B, eyes: 1, pattern: 1, power: "master", info: "All abilities recharge 15% faster" },
-        Skin{ name: "Lava", body: 0xFFEF233C, accent: 0xFFF97316, eyes: 1, pattern: 2, power: "brute", info: "+8% speed as a zombie" },
-        Skin{ name: "Pumpkin", body: 0xFFF77F00, accent: 0xFF5A2E00, eyes: 1, pattern: 1, power: "", info: "No power" },
-        Skin{ name: "Iceberg", body: 0xFFA8E6FF, accent: 0xFF1D6FA3, eyes: 2, pattern: 2, power: "", info: "No power" },
+        Skin{ id: "rookie", name: "Rookie", body: 0xFF4F8EF7, accent: 0xFF1F3F7A, eyes: 0, pattern: 0, accessory: "", power: "", info: "No power", price: 0, medal_price: 0, rarity: 0 },
+        Skin{ id: "camper", name: "Camper", body: 0xFFF4A259, accent: 0xFF8C4A12, eyes: 0, pattern: 1, accessory: "", power: "", info: "No power", price: 0, medal_price: 0, rarity: 0 },
+        Skin{ id: "mint", name: "Mint", body: 0xFF5ED6A4, accent: 0xFF1E6B4D, eyes: 2, pattern: 2, accessory: "", power: "", info: "No power", price: 150, medal_price: 0, rarity: 0 },
+        Skin{ id: "cherry", name: "Cherry", body: 0xFFE8475F, accent: 0xFF7A1525, eyes: 0, pattern: 4, accessory: "", power: "", info: "No power", price: 150, medal_price: 0, rarity: 0 },
+        Skin{ id: "ninja", name: "Ninja", body: 0xFF2B2D42, accent: 0xFFEF233C, eyes: 1, pattern: 3, accessory: "\u{1F977}", power: "swift", info: "+8% movement speed", price: 900, medal_price: 0, rarity: 2 },
+        Skin{ id: "doc", name: "Dr. Bandage", body: 0xFFF1F5F9, accent: 0xFFE11D48, eyes: 0, pattern: 4, accessory: "\u{1FA7A}", power: "healer", info: "Doctor ability cooldown 30% shorter", price: 700, medal_price: 0, rarity: 1 },
+        Skin{ id: "tank", name: "Tank", body: 0xFF556B2F, accent: 0xFF2F3B1A, eyes: 1, pattern: 1, accessory: "\u{1FA96}", power: "tank", info: "Blocks the first infection of the match", price: 1200, medal_price: 0, rarity: 2 },
+        Skin{ id: "ghost", name: "Ghost", body: 0xFFD7E3FC, accent: 0xFF8EA8D8, eyes: 2, pattern: 0, accessory: "\u{1F47B}", power: "ghost", info: "Zombies spot you from 30% closer", price: 1500, medal_price: 0, rarity: 3 },
+        Skin{ id: "scout", name: "Ranger", body: 0xFFC9A227, accent: 0xFF6B5208, eyes: 0, pattern: 2, accessory: "\u{1F52D}", power: "scout", info: "+15% vision range", price: 800, medal_price: 0, rarity: 1 },
+        Skin{ id: "alpha", name: "Alpha Zombie", body: 0xFF7D8C3A, accent: 0xFF3D1A1A, eyes: 1, pattern: 3, accessory: "\u{1F9B4}", power: "alpha", info: "Zombie dash cooldown 30% shorter", price: 1400, medal_price: 0, rarity: 3 },
+        Skin{ id: "hunter", name: "Night Hunter", body: 0xFF5B2A86, accent: 0xFF1D0B2E, eyes: 3, pattern: 4, accessory: "\u{1F5E1}\u{FE0F}", power: "hunter", info: "+15% infection range", price: 1100, medal_price: 0, rarity: 2 },
+        Skin{ id: "pumpkin", name: "Pumpkin", body: 0xFFF77F00, accent: 0xFF5A2E00, eyes: 1, pattern: 1, accessory: "\u{1F383}", power: "", info: "No power", price: 250, medal_price: 0, rarity: 0 },
+        Skin{ id: "ice", name: "Iceberg", body: 0xFFA8E6FF, accent: 0xFF1D6FA3, eyes: 2, pattern: 2, accessory: "\u{2744}\u{FE0F}", power: "", info: "No power", price: 300, medal_price: 0, rarity: 0 },
+        Skin{ id: "pirate", name: "Pirate", body: 0xFF8D5524, accent: 0xFF111827, eyes: 3, pattern: 1, accessory: "\u{1F3F4}\u{200D}\u{2620}\u{FE0F}", power: "", info: "No power", price: 450, medal_price: 0, rarity: 1 },
+        Skin{ id: "rainbow", name: "Rainbow", body: 0xFFFF7EB6, accent: 0xFF6366F1, eyes: 0, pattern: 3, accessory: "\u{1F308}", power: "", info: "No power", price: 500, medal_price: 0, rarity: 1 },
+        Skin{ id: "robot", name: "Robot", body: 0xFF9CA3AF, accent: 0xFF00B4D8, eyes: 3, pattern: 4, accessory: "\u{1F916}", power: "engineer", info: "Tasks 25% faster", price: 950, medal_price: 0, rarity: 2 },
+        Skin{ id: "astronaut", name: "Astronaut", body: 0xFFE5E7EB, accent: 0xFF1E3A8A, eyes: 0, pattern: 4, accessory: "\u{1F680}", power: "swift", info: "+8% movement speed", price: 1000, medal_price: 0, rarity: 2 },
+        Skin{ id: "lava", name: "Lava", body: 0xFFEF233C, accent: 0xFFF97316, eyes: 1, pattern: 2, accessory: "\u{1F30B}", power: "brute", info: "+8% speed as a zombie", price: 1300, medal_price: 0, rarity: 2 },
+        Skin{ id: "dragon", name: "Dragon", body: 0xFF14B8A6, accent: 0xFF064E3B, eyes: 1, pattern: 1, accessory: "\u{1F409}", power: "master", info: "All abilities recharge 15% faster", price: 2200, medal_price: 0, rarity: 3 },
+        Skin{ id: "banana", name: "Banana", body: 0xFFFFE14D, accent: 0xFF7A5C00, eyes: 0, pattern: 0, accessory: "\u{1F34C}", power: "", info: "No power", price: 180, medal_price: 0, rarity: 0 },
+        Skin{ id: "grape", name: "Grape", body: 0xFF7B3FBF, accent: 0xFF2E0F52, eyes: 2, pattern: 2, accessory: "\u{1F347}", power: "", info: "No power", price: 200, medal_price: 0, rarity: 0 },
+        Skin{ id: "sky", name: "Sky", body: 0xFF7CC6FE, accent: 0xFF25507A, eyes: 0, pattern: 1, accessory: "\u{2601}\u{FE0F}", power: "", info: "No power", price: 220, medal_price: 0, rarity: 0 },
+        Skin{ id: "coal", name: "Coal", body: 0xFF3A3A3A, accent: 0xFFFF7B00, eyes: 1, pattern: 2, accessory: "", power: "", info: "No power", price: 260, medal_price: 0, rarity: 0 },
+        Skin{ id: "peach", name: "Peach", body: 0xFFFFB38A, accent: 0xFFA34A1C, eyes: 2, pattern: 4, accessory: "\u{1F351}", power: "", info: "No power", price: 240, medal_price: 0, rarity: 0 },
+        Skin{ id: "cactus", name: "Prickly", body: 0xFF4CAF50, accent: 0xFF1B5E20, eyes: 1, pattern: 1, accessory: "\u{1F335}", power: "", info: "No power", price: 350, medal_price: 0, rarity: 0 },
+        Skin{ id: "chef", name: "Chef", body: 0xFFFAFAFA, accent: 0xFFD32F2F, eyes: 0, pattern: 3, accessory: "\u{1F468}\u{200D}\u{1F373}", power: "engineer", info: "Tasks 25% faster", price: 650, medal_price: 0, rarity: 1 },
+        Skin{ id: "firefighter", name: "Firefighter", body: 0xFFD62828, accent: 0xFFFCBF49, eyes: 0, pattern: 1, accessory: "\u{1F9EF}", power: "tank", info: "Blocks the first infection of the match", price: 850, medal_price: 0, rarity: 1 },
+        Skin{ id: "mechanic", name: "Mechanic", body: 0xFF3D5A80, accent: 0xFFEE6C4D, eyes: 2, pattern: 3, accessory: "\u{1F527}", power: "engineer", info: "Tasks 25% faster", price: 750, medal_price: 0, rarity: 1 },
+        Skin{ id: "detective", name: "Detective", body: 0xFFA1795A, accent: 0xFF3B2A1A, eyes: 3, pattern: 0, accessory: "\u{1F50D}", power: "scout", info: "+15% vision range", price: 780, medal_price: 0, rarity: 1 },
+        Skin{ id: "runner", name: "Marathoner", body: 0xFF00C2A8, accent: 0xFF00453B, eyes: 0, pattern: 1, accessory: "\u{1F3C3}", power: "swift", info: "+8% movement speed", price: 820, medal_price: 0, rarity: 1 },
+        Skin{ id: "nurse", name: "Nurse", body: 0xFFFFD6E0, accent: 0xFFC9184A, eyes: 0, pattern: 4, accessory: "\u{1F489}", power: "healer", info: "Doctor ability cooldown 30% shorter", price: 720, medal_price: 0, rarity: 1 },
+        Skin{ id: "werewolf", name: "Werewolf", body: 0xFF6D4C41, accent: 0xFF1B120F, eyes: 1, pattern: 2, accessory: "\u{1F43A}", power: "brute", info: "+8% speed as a zombie", price: 1150, medal_price: 0, rarity: 2 },
+        Skin{ id: "vampire", name: "Vampire", body: 0xFF2B0A12, accent: 0xFFE63946, eyes: 1, pattern: 3, accessory: "\u{1F9DB}", power: "hunter", info: "+15% infection range", price: 1250, medal_price: 0, rarity: 2 },
+        Skin{ id: "mummy", name: "Mummy", body: 0xFFE9DCC0, accent: 0xFF7A6A4F, eyes: 3, pattern: 1, accessory: "\u{1F9FB}", power: "alpha", info: "Zombie dash cooldown 30% shorter", price: 1100, medal_price: 0, rarity: 2 },
+        Skin{ id: "wizard", name: "Wizard", body: 0xFF3A0CA3, accent: 0xFFF9C74F, eyes: 2, pattern: 2, accessory: "\u{1F9D9}", power: "master", info: "All abilities recharge 15% faster", price: 1350, medal_price: 0, rarity: 2 },
+        Skin{ id: "shadow", name: "Shadow", body: 0xFF141414, accent: 0xFF5A5A5A, eyes: 2, pattern: 0, accessory: "\u{1F311}", power: "ghost", info: "Zombies spot you from 30% closer", price: 1450, medal_price: 0, rarity: 2 },
+        Skin{ id: "cyborg", name: "Cyborg", body: 0xFF6C757D, accent: 0xFFFF006E, eyes: 3, pattern: 3, accessory: "\u{1F9BE}", power: "swift", info: "+8% movement speed", price: 1700, medal_price: 0, rarity: 3 },
+        Skin{ id: "reaper", name: "Reaper", body: 0xFF1A1A2E, accent: 0xFFC0C0C0, eyes: 1, pattern: 4, accessory: "\u{26B0}\u{FE0F}", power: "hunter", info: "+15% infection range", price: 1900, medal_price: 0, rarity: 3 },
+        Skin{ id: "phoenix", name: "Phoenix", body: 0xFFFF5400, accent: 0xFFFFBD00, eyes: 1, pattern: 1, accessory: "\u{1F525}", power: "healer", info: "Doctor ability cooldown 30% shorter", price: 2000, medal_price: 0, rarity: 3 },
+        Skin{ id: "kraken", name: "Kraken", body: 0xFF0B6E4F, accent: 0xFF08415C, eyes: 3, pattern: 2, accessory: "\u{1F419}", power: "brute", info: "+8% speed as a zombie", price: 2100, medal_price: 0, rarity: 3 },
+        Skin{ id: "champion", name: "Tournament Champion", body: 0xFFFFD166, accent: 0xFFB8860B, eyes: 1, pattern: 4, accessory: "\u{1F451}", power: "swift", info: "+8% movement speed", price: 0, medal_price: 0, rarity: 4 },
+        Skin{ id: "medalist", name: "Medalist", body: 0xFFFBBF24, accent: 0xFF92400E, eyes: 0, pattern: 4, accessory: "\u{1F3C5}", power: "scout", info: "+15% vision range", price: 0, medal_price: 12, rarity: 2 },
+        Skin{ id: "phantom", name: "Phantom", body: 0xFF312E81, accent: 0xFFA5B4FC, eyes: 2, pattern: 3, accessory: "\u{1F3AD}", power: "ghost", info: "Zombies spot you from 30% closer", price: 0, medal_price: 25, rarity: 3 },
+        Skin{ id: "overlord", name: "Overlord", body: 0xFF7F1D1D, accent: 0xFFFCA5A5, eyes: 1, pattern: 1, accessory: "\u{1F608}", power: "master", info: "All abilities recharge 15% faster", price: 0, medal_price: 40, rarity: 3 },
+        Skin{ id: "veteran", name: "Veteran", body: 0xFF5C6B3A, accent: 0xFFD4A017, eyes: 1, pattern: 1, accessory: "\u{1F396}\u{FE0F}", power: "tank", info: "Blocks the first infection of the match", price: 0, medal_price: 15, rarity: 2 },
+        Skin{ id: "sentinel", name: "Sentinel", body: 0xFFE0E7FF, accent: 0xFF1D4ED8, eyes: 3, pattern: 4, accessory: "\u{1F6E1}\u{FE0F}", power: "engineer", info: "Tasks 25% faster", price: 0, medal_price: 20, rarity: 2 },
+        Skin{ id: "plaguedoc", name: "Plague Doctor", body: 0xFF1F1F1F, accent: 0xFF94D84A, eyes: 3, pattern: 0, accessory: "\u{1F426}\u{200D}\u{2B1B}", power: "healer", info: "Doctor ability cooldown 30% shorter", price: 0, medal_price: 30, rarity: 3 },
+        Skin{ id: "patientzero", name: "Patient Zero", body: 0xFF94D84A, accent: 0xFFEE4A3B, eyes: 1, pattern: 2, accessory: "\u{2623}\u{FE0F}", power: "alpha", info: "Zombie dash cooldown 30% shorter", price: 0, medal_price: 50, rarity: 3 },
     ]
 }
+
+fn rarity_color(r: int) -> int { return match r { 0 => 0xFF9CA3AF, 1 => 0xFF3B82F6, 2 => 0xFFA855F7, 3 => 0xFFF59E0B, _ => 0xFFEF4444 } }
+fn rarity_name(r: int) -> str { return match r { 0 => "common", 1 => "rare", 2 => "epic", 3 => "legendary", _ => "exclusive" } }
 
 let SKINS = skins()
 
@@ -218,6 +259,7 @@ struct P {
     stuck_x: float = 0.0
     stuck_y: float = 0.0
     stuck_at: float = 0.0
+    ab_at: float = 0.0
     ix: float = 0.0              // movement intent for this frame
     iy: float = 0.0
 }
@@ -247,7 +289,7 @@ fn level_speed(l: int) -> float { return match l { 0 => 0.0, 1 => 0.78, 2 => 0.9
 fn level_vision(l: int) -> float { return match l { 0 => 0.0, 1 => 0.7, 2 => 0.9, _ => 1.0 } }
 fn level_think(l: int) -> float { return match l { 0 => 1.0, 1 => 0.8, 2 => 0.45, _ => 0.25 } }
 fn level_ability(l: int) -> float { return match l { 0 => 0.0, 1 => 0.25, 2 => 0.6, _ => 0.95 } }
-fn level_panic(l: int) -> float { return match l { 0 => 0.0, 1 => 160.0, 2 => 220.0, _ => 300.0 } }
+fn level_panic(l: int) -> float { return match l { 0 => 0.0, 1 => 200.0, 2 => 280.0, _ => 340.0 } }
 
 fn new_player(id: int, name: str, bot: bool, human: bool, role: int, skin: int, x: float, y: float) -> P {
     let p = P{ id: id, name: name, bot: bot, human: human, role: role, start_role: role, x: x, y: y, skin: skin,

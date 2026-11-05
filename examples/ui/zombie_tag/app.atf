@@ -1,0 +1,73 @@
+// app.atf - the state of the whole Zombie Tag window, shared by the screens.
+
+import "std/ui"
+import "std/sound"
+import "engine"
+import "tasks"
+import "profile"
+
+const SCR_MENU = 0
+const SCR_GAME = 1
+const SCR_END = 2
+const SCR_REVEAL = 3
+
+// a clickable area of the game canvas
+struct Hit { x: float, y: float, w: float, h: float, id: str }
+
+// one line of the event feed (top right)
+struct Feed { text: str, color: int, until: float }
+
+struct App {
+    screen: int = SCR_MENU
+    maps: [GMap] = []
+    map_i: int = 0
+    skin_i: int = 0
+    bots: int = 9
+    level: int = 2
+    g: Game
+    has_game: bool = false
+    last: float = 0.0
+    task: Task
+    task_open: bool = false
+    task_station: int = -1
+    prev_keys: {str: bool} = {}
+    sounds: {str: str} = {}
+    end_wait: float = 0.0
+    reveal_left: float = 0.0
+    muted: bool = false
+    confirm_exit: bool = false
+    show_minimap: bool = true
+    step_d: float = 0.0
+    step_alt: bool = false
+    next_heart: float = 0.0
+    next_groan: float = 0.0
+    last_tick: int = -1
+    hits: [Hit] = []
+    feed: [Feed] = []
+    flash_col: int = 0
+    flash_until: float = 0.0
+    stone_hit_at: float = 0.0
+    mx: int = -1
+    my: int = -1
+    // the menu: which sidebar tab is open, the saved player, when the window opened (animations)
+    tab: str = "home"
+    prof: Profile
+    start_t: float = 0.0
+}
+
+fn zt_snd(a: App, name: str) {
+    let w = a.sounds.try_get(name)
+    if w != nil { sound_play(w!) }
+}
+
+// a line in the event feed for 3.5 seconds; at most 4 are shown
+fn zt_feed(a: App, s: str, col: int) {
+    a.feed.push(Feed{ text: s, color: col, until: clock() + 3.5 })
+    while a.feed.len() > 4 { a.feed.remove(0) }
+}
+
+// the whole screen turns one colour for a moment (bitten, trap)
+fn zt_flash(a: App, col: int, secs: float) {
+    a.flash_col = col
+    a.flash_until = clock() + secs
+}

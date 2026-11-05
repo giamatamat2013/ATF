@@ -1,0 +1,29 @@
+import "std/ui"
+import "icons"
+
+fn main() {
+    println(font_add(include_str("fonts/Rubik_400Regular.ttf")))
+    font_add(include_str("fonts/Rubik_500Medium.ttf"))
+    font_add(include_str("fonts/Rubik_700Bold.ttf"))
+    font_add(include_str("fonts/Rubik_800ExtraBold.ttf"))
+    font_add(include_str("fonts/Rubik_900Black.ttf"))
+    font_add(include_str("fonts/LilitaOne_400Regular.ttf"))
+    println(font_add(include_str("fonts/MaterialCommunityIcons.ttf")))
+    println(font_add("nope"))
+    ui_run("t", 600, 400, || {
+        return column([
+            text("Zombie Outbreak").family("Lilita One").font_size(44).color(hex("#c6ff3d")),
+            text("Rubik regular 400").family("Rubik").font_size(20).color(WHITE),
+            text("Rubik Medium 500").family("Rubik Medium").weight(500).font_size(20).color(WHITE),
+            text("Rubik Bold 700").family("Rubik").bold().font_size(20).color(WHITE),
+            text("Rubik ExtraBold 800").family("Rubik ExtraBold").weight(800).font_size(20).color(WHITE),
+            text("Rubik Black 900").family("Rubik Black").weight(900).font_size(20).color(WHITE),
+            row([text(mdi("cog") + mdi("home-variant") + mdi("skull") + mdi("timer-outline")).family("Material Design Icons").font_size(32).color(hex("#ffd23f"))]),
+            canvas(|c| {
+                c.clear(hex("#2a1a5e"))
+                c.text(10, 10, "9:56", hex("#c6ff3d"), 30, family: "Rubik Black", weight: 900)
+                c.text(120, 10, mdi("account-group"), hex("#3fa9ff"), 30, family: "Material Design Icons")
+            }).size(300, 60),
+        ]).gap(4).padding(16).bg(hex("#1a0f3d"))
+    })
+}

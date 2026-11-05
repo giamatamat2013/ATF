@@ -63,6 +63,36 @@ fn flee_from(g: Game, p: P, ex: float, ey: float, speed: float) {
     p.iy = sin(best) * speed
 }
 
+// flee along a real route: pick a far point that is away from the threat, whose first step does not lead toward it
+fn flee_smart(g: Game, p: P, ex: float, ey: float, speed: float) {
+    var replan = p.repath_at <= g.now or p.path.len() == 0
+    if not replan {
+        let f = p.path[0]
+        let toward = (f.x - p.x) * (ex - p.x) + (f.y - p.y) * (ey - p.y)
+        if toward > 0.0 and dist(p.x, p.y, ex, ey) < 170.0 { replan = true }
+    }
+    if replan {
+        var best_score = -1.0e18
+        var best: [V] = []
+        for i in 0..7 {
+            let w = g.walk[rand_int(0, g.walk.len() - 1)]
+            let path = find_path(g.map, tile_to(p.x), tile_to(p.y), tile_to(w.x), tile_to(w.y))
+            if path.len() < 2 { continue }
+            let f = path[1]
+            let toward = (f.x - p.x) * (ex - p.x) + (f.y - p.y) * (ey - p.y)
+            var sc = dist(w.x, w.y, ex, ey) - 0.5 * dist(w.x, w.y, p.x, p.y)
+            if toward > 0.0 { continue }
+            if sc > best_score {
+                best_score = sc
+                best = path
+            }
+        }
+        p.repath_at = g.now + 2.5
+        p.path = best
+    }
+    if not follow_path(g, p, speed) { flee_from(g, p, ex, ey, speed) }
+}
+
 fn angdiff(a: float, b: float) -> float {
     var d = a - b
     while d > PI { d -= 2.0 * PI }
@@ -91,7 +121,10 @@ fn check_stuck(g: Game, p: P) {
 }
 
 fn use_ability(g: Game, p: P) {
-    if rand_float() > level_ability(p.level) * 0.1 + 0.02 and p.level < 3 { return }
+    // a bot considers an ability every second or two, and only sometimes uses it, so abilities stay occasional
+    if g.now < p.ab_at { return }
+    p.ab_at = g.now + 1.5 + rand_float() * 2.5
+    if rand_float() > level_ability(p.level) * 0.6 { return }
     let ab = suggest(g, p)
     if ab >= 0 { activate(g, p, ab) }
 }
@@ -128,13 +161,13 @@ fn survivor_brain(g: Game, p: P) {
             p.seen_x = z.x
             p.seen_y = z.y
             p.seen_at = g.now
-            flee_from(g, p, z.x, z.y, sp)
+            flee_smart(g, p, z.x, z.y, sp)
             use_ability(g, p)
             return
         }
     }
     if p.mode == B_FLEE and g.now - p.seen_at < 1.0 {
-        flee_from(g, p, p.seen_x, p.seen_y, sp)
+        flee_smart(g, p, p.seen_x, p.seen_y, sp)
         return
     }
     if p.mode == B_FLEE { p.mode = B_IDLE }
@@ -205,7 +238,7 @@ fn survivor_brain(g: Game, p: P) {
 }
 
 fn zombie_brain(g: Game, p: P) {
-    let sp = level_speed(p.level)
+    let sp = level_speed(p.level) * 0.8
     if p.start_role == ZOMB and not zombies_released(g) {
         p.ix = 0.0
         p.iy = 0.0
@@ -257,7 +290,7 @@ fn zombie_brain(g: Game, p: P) {
     if p.mode == B_HUNT and follow_path(g, p, sp) { return }
     // hunt for the noise of survivors close by
     let hs = heard_by(g, p)
-    if hs.len() > 0 and p.level >= 2 {
+    if hs.len() > 0 and p.level >= 3 {
         let t = hs[0]
         if p.repath_at <= g.now {
             path_to(g, p, t.x, t.y)
@@ -269,7 +302,7 @@ fn zombie_brain(g: Game, p: P) {
     if not p.has_goal or p.path.len() == 0 {
         // wander toward the nearest unfinished task: survivors work there
         var w = random_walk_point(g)
-        if g.stations.len() > 0 and rand_float() < 0.6 {
+        if g.stations.len() > 0 and rand_float() < 0.15 {
             let s = g.stations[rand_int(0, g.stations.len() - 1)]
             w = V{ x: s.x, y: s.y }
         }

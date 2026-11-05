@@ -1,0 +1,331 @@
+// profile.atf - the player's profile: coins, XP and levels, medals, skins, stats and achievements.
+// The rules are the same as the original's progression.ts. The profile is saved as JSON in
+// %APPDATA%\ZombieTag\profile.json.
+
+import "std/json"
+
+const ZT_MAX_LEVEL = 50
+const ZT_TASK_COINS = 15
+const ZT_CURE_COINS = 25
+const ZT_CURE_XP = 40
+
+const ZT_STAT_KEYS = ["matchesPlayed", "wins", "survivorWins", "zombieWins", "tasksCompleted", "infections",
+    "secondsSurvived", "abilitiesUsed", "obstacleRuns", "obstacleGolds", "tournamentMatches", "skinsCreated",
+    "mapsCreated", "wiresTasks", "machineTasks", "downloadTasks", "trashTasks", "temperatureTasks"]
+
+struct Profile {
+    name: str = "Guest"
+    xp: int = 0
+    coins: int = 300
+    medals: int = 0
+    owned_skins: [str] = ["rookie", "camper"]
+    skin: str = "rookie"
+    owned_abilities: [int] = [0, 1, 2, 4, 5]
+    loadout_s: [int] = [0, 1, 2]
+    loadout_z: [int] = [4, 5]
+    upgrades: {str: int} = {}
+    owned_filters: [str] = ["classic"]
+    filter: str = "classic"
+    stats: {str: int} = {}
+    achievements: [str] = []
+    best_times: {str: int} = {}     // map id -> best time in ms
+    map_medals: {str: int} = {}     // map id -> 1 bronze, 2 silver, 3 gold
+}
+
+struct LevelInfo { level: int, into: int, needed: int, progress: float }
+
+// XP needed to go from level to level + 1
+fn zt_xp_to_next(level: int) -> int => 100 + (level - 1) * 60
+
+fn zt_level_info(xp: int) -> LevelInfo {
+    var level = 1
+    var rest = xp
+    while level < ZT_MAX_LEVEL and rest >= zt_xp_to_next(level) {
+        rest -= zt_xp_to_next(level)
+        level += 1
+    }
+    if level >= ZT_MAX_LEVEL { return LevelInfo(level, rest, 1, 1.0) }
+    let need = zt_xp_to_next(level)
+    return LevelInfo(level, rest, need, float(rest) / float(need))
+}
+
+fn zt_stat(p: Profile, key: str) -> int => p.stats.get(key, 0)
+
+fn zt_bump(p: Profile, key: str, by: int) {
+    p.stats[key] = zt_stat(p, key) + by
+}
+
+fn zt_new_profile() -> Profile {
+    let p = Profile()
+    for k in ZT_STAT_KEYS { p.stats[k] = 0 }
+    for k in ["speed", "cooldown", "vision", "taskSpeed", "reach", "stealth", "firstAid", "rotLegs", "deadEyes", "keenEars", "bloodPump"] { p.upgrades[k] = 0 }
+    return p
+}
+
+// "m:ss"
+fn zt_mmss(sec: int) -> str {
+    let s = sec % 60
+    return "{sec / 60}:{s:02}"
+}
+
+// ---------------------------------------------------------------- the result of one match and its rewards
+
+struct MatchResult {
+    mode: str = "classic"       // classic, training, tournament or obstacle
+    map_id: str = ""
+    won: bool = false
+    winner: str = ""            // survivor or zombie
+    start_role: str = "survivor"
+    final_role: str = "survivor"
+    tasks: int = 0
+    tasks_by_kind: [int] = [0, 0, 0, 0, 0]
+    cures: int = 0
+    infections: int = 0
+    seconds_survived: int = 0
+    abilities_used: int = 0
+    obstacle_ms: int = -1       // -1 when the course was not finished
+    medal_times: [int] = [40, 60, 90]
+}
+
+struct RewardLine { label: str, icon: str = "", xp: int = 0, coins: int = 0, medals: int = 0 }
+
+struct Rewards { xp: int = 0, coins: int = 0, medals: int = 0, lines: [RewardLine] = [] }
+
+// 3 gold, 2 silver, 1 bronze, 0 none
+fn zt_obstacle_medal(ms: int, times: [int]) -> int {
+    let s = float(ms) / 1000.0
+    if s <= float(times[0]) { return 3 }
+    if s <= float(times[1]) { return 2 }
+    if s <= float(times[2]) { return 1 }
+    return 0
+}
+
+fn zt_medal_name(m: int) -> str => if m == 3 { "Gold" } else if m == 2 { "Silver" } else { "Bronze" }
+
+fn zt_round_half(v: float) -> int => int(floor(v + 0.5))
+
+fn zt_compute_rewards(r: MatchResult, p: Profile) -> Rewards {
+    let lines: [RewardLine] = []
+    if r.mode == "obstacle" {
+        if r.obstacle_ms < 0 {
+            lines.push(RewardLine{ label: "Participation", xp: 10 })
+        } else {
+            lines.push(RewardLine{ label: "Course finished", xp: 60, coins: 20 })
+            let medal = zt_obstacle_medal(r.obstacle_ms, r.medal_times)
+            let gained = medal - p.map_medals.get(r.map_id, 0)
+            if medal > 0 and gained > 0 { lines.push(RewardLine{ label: "New medal ({zt_medal_name(medal)})", xp: 40 * gained, medals: gained }) }
+            if let best = p.best_times.try_get(r.map_id) {
+                if r.obstacle_ms < best { lines.push(RewardLine{ label: "Personal best!", xp: 30, coins: 30 }) }
+            }
+        }
+    } else {
+        lines.push(RewardLine{ label: "Participation", xp: 20, coins: 10 })
+        if r.tasks > 0 { lines.push(RewardLine{ label: "{r.tasks} tasks", xp: r.tasks * 25, coins: r.tasks * ZT_TASK_COINS }) }
+        if r.cures > 0 { lines.push(RewardLine{ label: "{r.cures} cures", icon: "\u{1FA7A}", xp: r.cures * ZT_CURE_XP, coins: r.cures * ZT_CURE_COINS }) }
+        if r.infections > 0 { lines.push(RewardLine{ label: "{r.infections} infections", xp: r.infections * 30, coins: r.infections * 10 }) }
+        if r.seconds_survived > 0 {
+            lines.push(RewardLine{ label: "Survived {zt_mmss(r.seconds_survived)}", xp: min(100, r.seconds_survived / 6), coins: r.seconds_survived / 20 })
+        }
+        if r.won { lines.push(RewardLine{ label: "Victory!", xp: 100, coins: 50 }) }
+    }
+    var xp = 0
+    var coins = 0
+    var medals = 0
+    for l in lines {
+        xp += l.xp
+        coins += l.coins
+        medals += l.medals
+    }
+    let turned = r.mode != "obstacle" and r.won and r.winner == "zombie" and r.start_role == "survivor" and r.final_role == "zombie"
+    if turned {
+        xp = zt_round_half(float(xp) / 2.0)
+        coins = zt_round_half(float(coins) / 2.0)
+        lines.push(RewardLine{ label: "Infected and the zombies won: half reward" })
+    }
+    if r.mode == "training" {
+        xp = zt_round_half(float(xp) * 0.5)
+        coins = zt_round_half(float(coins) * 0.3)
+        lines.push(RewardLine{ label: "Training: 50% XP, 30% coins" })
+    }
+    return Rewards(xp, coins, medals, lines)
+}
+
+// ---------------------------------------------------------------- achievements
+
+struct Achievement { id: str, title: str, badge: str, stat: str, target: int, coins: int, medals: int, info: str }
+
+const ZT_ACHIEVEMENTS = [
+    Achievement("first_match", "First Step", "\u{1F3AE}", "matchesPlayed", 1, 50, 0, "Play your first match"),
+    Achievement("first_win", "First Win", "\u{1F3C5}", "wins", 1, 100, 1, "Win a match"),
+    Achievement("wins_25", "Serial Winner", "\u{1F3C6}", "wins", 25, 500, 5, "Win 25 matches"),
+    Achievement("tasks_10", "Hard Worker", "\u{1F527}", "tasksCompleted", 10, 100, 1, "Complete 10 tasks"),
+    Achievement("tasks_100", "Chief Engineer", "\u{2699}\u{FE0F}", "tasksCompleted", 100, 600, 5, "Complete 100 tasks"),
+    Achievement("infect_10", "Spreading Plague", "\u{1F9DF}", "infections", 10, 150, 1, "Infect 10 survivors"),
+    Achievement("infect_100", "Apocalypse", "\u{2623}\u{FE0F}", "infections", 100, 800, 6, "Infect 100 survivors"),
+    Achievement("survivor_10", "True Survivor", "\u{1F6E1}\u{FE0F}", "survivorWins", 10, 400, 3, "Win 10 times as a survivor"),
+    Achievement("survive_hour", "An Hour Alive", "\u{23F1}\u{FE0F}", "secondsSurvived", 3600, 300, 2, "Survive one hour in total"),
+    Achievement("abilities_50", "Ability Expert", "\u{2728}", "abilitiesUsed", 50, 200, 1, "Use 50 abilities"),
+    Achievement("obstacle_gold", "Lightning Fast", "\u{1F947}", "obstacleGolds", 1, 200, 2, "Get a gold medal on an obstacle course"),
+    Achievement("tournament_5", "Tournament Warrior", "\u{2694}\u{FE0F}", "tournamentMatches", 5, 300, 2, "Play 5 tournament matches"),
+    Achievement("designer", "Fashion Designer", "\u{1F3A8}", "skinsCreated", 1, 100, 0, "Create your own skin"),
+    Achievement("architect", "Architect", "\u{1F5FA}\u{FE0F}", "mapsCreated", 1, 150, 1, "Create your own map"),
+    Achievement("level_10", "Veteran", "\u{1F51F}", "level", 10, 500, 3, "Reach level 10"),
+    Achievement("collector", "Collector", "\u{1F455}", "skins", 6, 400, 2, "Own 6 skins"),
+]
+
+// how far the player is toward an achievement: (done, target)
+fn zt_ach_progress(p: Profile, a: Achievement) -> (int, int) {
+    let v = if a.stat == "level" { zt_level_info(p.xp).level } else if a.stat == "skins" { p.owned_skins.len() } else { zt_stat(p, a.stat) }
+    return (min(v, a.target), a.target)
+}
+
+// gives every achievement that is newly reached, with its coins and medals; returns them
+fn zt_grant_achievements(p: Profile) -> [Achievement] {
+    let got: [Achievement] = []
+    for a in ZT_ACHIEVEMENTS {
+        if a.id in p.achievements { continue }
+        let (d, t) = zt_ach_progress(p, a)
+        if d < t { continue }
+        got.push(a)
+        p.achievements.push(a.id)
+        p.coins += a.coins
+        p.medals += a.medals
+    }
+    return got
+}
+
+struct Applied { rewards: Rewards, level_before: int, level_after: int, new_achievements: [Achievement] }
+
+const ZT_TASK_STATS = ["wiresTasks", "machineTasks", "downloadTasks", "trashTasks", "temperatureTasks"]
+
+// adds a finished match to the profile (stats, best times, medals, XP, coins) and saves it
+fn zt_apply_match(p: Profile, r: MatchResult) -> Applied {
+    let rw = zt_compute_rewards(r, p)
+    if r.mode == "obstacle" {
+        zt_bump(p, "obstacleRuns", 1)
+        if r.obstacle_ms >= 0 {
+            let best = p.best_times.get(r.map_id, -1)
+            if best < 0 or r.obstacle_ms < best { p.best_times[r.map_id] = r.obstacle_ms }
+            let medal = zt_obstacle_medal(r.obstacle_ms, r.medal_times)
+            if medal > p.map_medals.get(r.map_id, 0) { p.map_medals[r.map_id] = medal }
+            if medal == 3 { zt_bump(p, "obstacleGolds", 1) }
+        }
+    } else {
+        zt_bump(p, "matchesPlayed", 1)
+        zt_bump(p, "tasksCompleted", r.tasks)
+        zt_bump(p, "infections", r.infections)
+        zt_bump(p, "secondsSurvived", r.seconds_survived)
+        zt_bump(p, "abilitiesUsed", r.abilities_used)
+        for i, n in r.tasks_by_kind { zt_bump(p, ZT_TASK_STATS[i], n) }
+        if r.won {
+            zt_bump(p, "wins", 1)
+            zt_bump(p, if r.final_role == "survivor" { "survivorWins" } else { "zombieWins" }, 1)
+        }
+    }
+    let before = zt_level_info(p.xp).level
+    p.xp += rw.xp
+    p.coins += rw.coins
+    p.medals += rw.medals
+    let got = zt_grant_achievements(p)
+    zt_save_profile(p)
+    return Applied(rw, before, zt_level_info(p.xp).level, got)
+}
+
+// ---------------------------------------------------------------- saving
+
+fn zt_profile_path() -> str {
+    let base = getenv("APPDATA") ?? temp_dir()
+    return base + "\\ZombieTag\\profile.json"
+}
+
+// ZT_FRESH=1 starts from a new profile and never saves (used for screenshots and tests)
+fn zt_fresh() -> bool => (getenv("ZT_FRESH") ?? "") != ""
+
+fn zt_int_map(v: JsonValue?) -> {str: int} {
+    let out: {str: int} = {}
+    if let o = v {
+        if let m = o.as_object() {
+            for k, x in m { out[k] = x.as_int() ?? 0 }
+        }
+    }
+    return out
+}
+
+fn zt_str_list(v: JsonValue?, def: [str]) -> [str] {
+    if let o = v {
+        if let arr = o.as_array() { return [x.as_str() ?? "" for x in arr] }
+    }
+    return def
+}
+
+fn zt_int_list(v: JsonValue?, def: [int]) -> [int] {
+    if let o = v {
+        if let arr = o.as_array() { return [x.as_int() ?? 0 for x in arr] }
+    }
+    return def
+}
+
+fn zt_jstr(j: JsonValue, key: str, def: str) -> str {
+    if let v = j.get(key) { return v.as_str() ?? def }
+    return def
+}
+
+fn zt_jint(j: JsonValue, key: str, def: int) -> int {
+    if let v = j.get(key) { return v.as_int() ?? def }
+    return def
+}
+
+fn zt_load_profile() -> Profile {
+    let p = zt_new_profile()
+    if zt_fresh() { return p }
+    let r = json_read_file(zt_profile_path())
+    if r.is_err() { return p }
+    let j = r.unwrap()
+    p.name = zt_jstr(j, "name", p.name)
+    p.xp = zt_jint(j, "xp", 0)
+    p.coins = zt_jint(j, "coins", 300)
+    p.medals = zt_jint(j, "medals", 0)
+    p.owned_skins = zt_str_list(j.get("ownedSkins"), p.owned_skins)
+    p.skin = zt_jstr(j, "skin", p.skin)
+    p.owned_abilities = zt_int_list(j.get("ownedAbilities"), p.owned_abilities)
+    p.loadout_s = zt_int_list(j.get("loadoutSurvivor"), p.loadout_s)
+    p.loadout_z = zt_int_list(j.get("loadoutZombie"), p.loadout_z)
+    p.owned_filters = zt_str_list(j.get("ownedFilters"), p.owned_filters)
+    p.filter = zt_jstr(j, "filter", p.filter)
+    p.achievements = zt_str_list(j.get("achievements"), [])
+    for k, v in zt_int_map(j.get("stats")) { p.stats[k] = v }
+    for k, v in zt_int_map(j.get("upgrades")) { p.upgrades[k] = v }
+    p.best_times = zt_int_map(j.get("bestTimes"))
+    p.map_medals = zt_int_map(j.get("mapMedals"))
+    return p
+}
+
+fn zt_json_ints(m: {str: int}) -> JsonValue {
+    let o = json_object()
+    for k, v in m { o.set(k, json_int(v)) }
+    return o
+}
+
+fn zt_save_profile(p: Profile) {
+    if zt_fresh() { return }
+    let o = json_object()
+    o.set("name", json_str(p.name))
+    o.set("xp", json_int(p.xp))
+    o.set("coins", json_int(p.coins))
+    o.set("medals", json_int(p.medals))
+    o.set("ownedSkins", json_str_array(p.owned_skins))
+    o.set("skin", json_str(p.skin))
+    o.set("ownedAbilities", json_int_array(p.owned_abilities))
+    o.set("loadoutSurvivor", json_int_array(p.loadout_s))
+    o.set("loadoutZombie", json_int_array(p.loadout_z))
+    o.set("ownedFilters", json_str_array(p.owned_filters))
+    o.set("filter", json_str(p.filter))
+    o.set("achievements", json_str_array(p.achievements))
+    o.set("stats", zt_json_ints(p.stats))
+    o.set("upgrades", zt_json_ints(p.upgrades))
+    o.set("bestTimes", zt_json_ints(p.best_times))
+    o.set("mapMedals", zt_json_ints(p.map_medals))
+    let dir = (getenv("APPDATA") ?? temp_dir()) + "\\ZombieTag"
+    make_dir(dir)
+    json_write_file(zt_profile_path(), o)
+}

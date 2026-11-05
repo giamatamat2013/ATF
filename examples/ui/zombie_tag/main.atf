@@ -13,53 +13,37 @@ import "std/sound"
 import "bots"
 import "tasks"
 import "theme"
-
-const SCR_MENU = 0
-const SCR_GAME = 1
-const SCR_END = 2
-const SCR_REVEAL = 3
+import "app"
+import "gameview"
+import "menu"
+import "profile"
 
 const VIEW_W = 960
-const VIEW_H = 540
-
-struct App {
-    screen: int = SCR_MENU
-    maps: [GMap] = []
-    map_i: int = 0
-    skin_i: int = 0
-    bots: int = 9
-    level: int = 2
-    g: Game
-    has_game: bool = false
-    last: float = 0.0
-    task: Task
-    task_open: bool = false
-    task_station: int = -1
-    prev_keys: {str: bool} = {}
-    msg: str = ""
-    msg_until: float = 0.0
-    sounds: {str: str} = {}
-    cam_x: float = 0.0
-    cam_y: float = 0.0
-    mwx: float = 0.0
-    mwy: float = 0.0
-    end_wait: float = 0.0
-    reveal_left: float = 0.0
-}
-
-fn zt_snd(a: App, name: str) {
-    let w = a.sounds.try_get(name)
-    if w != nil { sound_play(w!) }
-}
+const VIEW_H = 644
 
 fn zt_make_sounds(a: App) {
-    a.sounds["task"] = sound_tone(880.0, 140, 0.4)
-    a.sounds["infect"] = sound_sweep(300.0, 90.0, 380, 0.5)
-    a.sounds["ability"] = sound_sweep(400.0, 900.0, 160, 0.35)
-    a.sounds["stone"] = sound_noise(160, 0.4)
-    a.sounds["win"] = sound_sweep(400.0, 1000.0, 500, 0.5)
-    a.sounds["lose"] = sound_sweep(500.0, 120.0, 700, 0.5)
-    a.sounds["cure"] = sound_tone(660.0, 300, 0.4)
+    a.sounds["task"] = include_str("sounds/task.wav")
+    a.sounds["infect"] = include_str("sounds/infected.wav")
+    a.sounds["ability"] = include_str("sounds/ability.wav")
+    a.sounds["stone"] = include_str("sounds/throw.wav")
+    a.sounds["win"] = include_str("sounds/win.wav")
+    a.sounds["lose"] = include_str("sounds/lose.wav")
+    a.sounds["cure"] = include_str("sounds/heal.wav")
+    a.sounds["bite"] = include_str("sounds/bite.wav")
+    a.sounds["click"] = include_str("sounds/click.wav")
+    a.sounds["shield"] = include_str("sounds/shield.wav")
+    a.sounds["released"] = include_str("sounds/released.wav")
+    a.sounds["hurt"] = include_str("sounds/hurt.wav")
+    a.sounds["checkpoint"] = include_str("sounds/checkpoint.wav")
+    a.sounds["tick"] = include_str("sounds/tick.wav")
+    a.sounds["step1"] = include_str("sounds/step1.wav")
+    a.sounds["step2"] = include_str("sounds/step2.wav")
+    a.sounds["zstep"] = include_str("sounds/zstep.wav")
+    a.sounds["heartbeat"] = include_str("sounds/heartbeat.wav")
+    a.sounds["groan"] = include_str("sounds/groan.wav")
+    a.sounds["beacon"] = include_str("sounds/beacon.wav")
+    a.sounds["heal"] = a.sounds["cure"]
+    a.sounds["stoneHit"] = include_str("sounds/stoneHit.wav")
 }
 
 fn zt_edge(a: App, k: str) -> bool {
@@ -67,11 +51,6 @@ fn zt_edge(a: App, k: str) -> bool {
     let was = a.prev_keys.get(k, false)
     a.prev_keys[k] = d
     return d and not was
-}
-
-fn zt_say(a: App, s: str, secs: float) {
-    a.msg = s
-    a.msg_until = a.last + secs
 }
 
 fn zt_start(a: App) {
@@ -84,31 +63,131 @@ fn zt_start(a: App) {
     a.screen = SCR_REVEAL
     a.reveal_left = 2.5
     a.end_wait = 0.0
-    let me = local_player(a.g)
-    if me.role == ZOMB { zt_say(a, "You are a ZOMBIE! Infect every survivor.", 4.0) } else { zt_say(a, "Finish tasks and survive. Press E at a station.", 4.0) }
+    a.feed = []
+    a.flash_until = 0.0
+    a.stone_hit_at = 0.0
 }
 
+// the feed line an ability shows when the local player uses it ("" for none)
+fn zt_ability_line(ab: int) -> str {
+    return match ab {
+        AB_SCAN => "Scan: all zombies revealed!"
+        AB_ZVIS => "Zombie vision: seeing through walls"
+        AB_SNIFF => "Sniff: you smell every survivor"
+        AB_MEDIC => "Medic shield on"
+        AB_BUBBLE => "Bubble shield on"
+        AB_FLASH => "Flashbang! Nearby zombies blinded"
+        AB_ROAR => "Roar! Nearby survivors slowed"
+        AB_HOWL => "Howl! Survivors far and wide slowed"
+        _ => ""
+    }
+}
+
+// turn the engine's events into sounds, feed lines and screen flashes, like the original GameScreen
 fn zt_events(a: App) {
     let g = a.g
+    let me = local_player(g)
     for e in g.events {
-        if e.kind == "task" and e.a == 0 { zt_snd(a, "task") }
-        if e.kind == "infected" and e.a == 0 {
-            zt_snd(a, "infect")
-            zt_say(a, "You were infected!", 3.0)
+        if e.kind == "infected" {
+            if e.a == me.id {
+                zt_snd(a, "infect")
+                zt_flash(a, zc_blood(), 0.45)
+                zt_feed(a, "You were bitten! Frozen for 10 seconds \u{2013} only a doctor can cure you", zc_zombie())
+                a.task_open = false
+            } else if e.b == me.id {
+                zt_snd(a, "bite")
+                zt_feed(a, "You infected {g.players[e.a].name}!", zc_zombie())
+            } else {
+                zt_feed(a, "{g.players[e.a].name} turned into a zombie", zc_blood())
+            }
         }
-        if e.kind == "infected" and e.b == 0 { zt_say(a, "You infected {g.players[e.a].name}", 2.0) }
-        if e.kind == "cured" and e.a == 0 {
-            zt_snd(a, "cure")
-            zt_say(a, "A doctor healed you!", 3.0)
+        if e.kind == "cured" {
+            if e.a == me.id {
+                zt_snd(a, "heal")
+                zt_feed(a, "Doctor {g.players[e.b].name} cured you!", zc_blue())
+            } else if e.b == me.id {
+                zt_snd(a, "heal")
+                zt_feed(a, "You cured {g.players[e.a].name}!", zc_blue())
+            } else {
+                zt_feed(a, "{g.players[e.b].name} cured {g.players[e.a].name}", zc_blue())
+            }
         }
-        if e.kind == "blocked" and e.a == 0 { zt_say(a, "Your tank skin blocked an infection!", 2.5) }
-        if e.kind == "ability" and e.a == 0 { zt_snd(a, "ability") }
-        if e.kind == "stone" and e.a == 0 { zt_snd(a, "stone") }
-        if e.kind == "released" { zt_say(a, "The zombies are loose!", 2.5) }
-        if e.kind == "checkpoint" and e.a == 0 { zt_say(a, "Checkpoint!", 1.5) }
-        if e.kind == "hazard" and e.a == 0 { zt_say(a, "Ouch! Back to the checkpoint", 1.5) }
+        if e.kind == "blocked" and e.a == me.id {
+            zt_snd(a, "shield")
+            zt_feed(a, "Tank armor blocked the infection!", zc_gold())
+        }
+        if e.kind == "task" and e.a == me.id {
+            zt_snd(a, "task")
+            let title = ZT_TASK_TITLES[g.stations[e.b].kind % 5]
+            zt_feed(a, "{title} done \u{B7} timer cut by 15s", zc_toxic())
+        }
+        if e.kind == "checkpoint" and e.a == me.id {
+            zt_snd(a, "checkpoint")
+            zt_feed(a, "Checkpoint!", zc_toxic())
+        }
+        if e.kind == "hazard" and e.a == me.id {
+            zt_snd(a, "hurt")
+            zt_flash(a, hex("#ff6b00"), 0.3)
+            zt_feed(a, "Ouch! Back to the checkpoint", zc_blood())
+        }
+        if e.kind == "stone" {
+            if e.a == me.id {
+                zt_snd(a, "stone")
+                a.stone_hit_at = clock() + 0.35
+                zt_feed(a, "You threw a stone! Zombies will hear a noise there", zc_gold())
+            } else if me.role == ZOMB {
+                let t = g.players[e.a]
+                if dist(t.noise_x, t.noise_y, me.x, me.y) <= NOISE_HEAR { zt_feed(a, "You heard a noise!", zc_gold()) }
+            }
+        }
+        if e.kind == "ability" and e.a == me.id {
+            zt_snd(a, "ability")
+            let line = zt_ability_line(e.b)
+            if line != "" { zt_feed(a, line, if me.role == ZOMB { zc_zombie() } else { zc_blue() }) }
+        }
+        if e.kind == "released" {
+            zt_snd(a, "released")
+            zt_feed(a, "The zombies are loose!", zc_blood())
+        }
     }
     g.events = []
+    if a.stone_hit_at > 0.0 and clock() >= a.stone_hit_at {
+        a.stone_hit_at = 0.0
+        zt_snd(a, "stoneHit")
+    }
+}
+
+// footsteps, heartbeat, groans and the release countdown tick
+fn zt_ambient(a: App, ox: float, oy: float) {
+    let g = a.g
+    let me = local_player(g)
+    a.step_d += dist(ox, oy, me.x, me.y)
+    let stride = if me.role == ZOMB { 58.0 } else { 44.0 }
+    if a.step_d >= stride {
+        a.step_d = 0.0
+        a.step_alt = not a.step_alt
+        zt_snd(a, if me.role == ZOMB { "zstep" } else if a.step_alt { "step1" } else { "step2" })
+    }
+    if me.role == SURV {
+        var near = 1.0e18
+        for p in g.players {
+            if p.role == ZOMB and zombies_released(g) and not is_frozen(g, p) { near = min(near, dist(p.x, p.y, me.x, me.y)) }
+        }
+        if near < 320.0 and g.now >= a.next_heart {
+            a.next_heart = g.now + 1.0
+            zt_snd(a, "heartbeat")
+        } else if near < 520.0 and g.now >= a.next_groan {
+            a.next_groan = g.now + 4.0
+            zt_snd(a, "groan")
+        }
+    }
+    if not zombies_released(g) {
+        let left = int(g.release_at - g.now)
+        if left != a.last_tick and left <= 5 {
+            a.last_tick = left
+            zt_snd(a, "tick")
+        }
+    }
 }
 
 fn zt_human_won(g: Game) -> bool {
@@ -133,8 +212,7 @@ fn zt_tick(a: App) {
     let g = a.g
     let me = local_player(g)
     if zt_edge(a, "escape") {
-        a.screen = SCR_MENU
-        return
+        a.confirm_exit = not a.confirm_exit
     }
     // keys
     var ix = 0.0
@@ -149,30 +227,23 @@ fn zt_tick(a: App) {
     for i in 0..lo.len() {
         if zt_edge(a, str(i + 1)) { activate(g, me, lo[i]) }
     }
-    if zt_edge(a, "q") {
-        if throw_stone(g, me, atan2(a.mwy - me.y, a.mwx - me.x)) { zt_say(a, "Stone thrown - zombies will hear it", 2.0) }
-    }
-    if zt_edge(a, "e") and not a.task_open {
-        let st = usable_station(g, me)
-        if st >= 0 {
-            me.in_task = true
-            a.task_open = true
-            a.task_station = st
-            a.task = task_new(g.stations[st].kind)
-        }
-    }
+    if zt_edge(a, "q") { throw_stone(g, me, me.facing) }
+    if zt_edge(a, "e") { zt_open_task(a) }
     if a.task_open {
         task_tick(a.task, dt)
         if a.task.done {
             complete_task(g, me, a.task_station)
             a.task_open = false
-            zt_say(a, "Task done: the clock is 15 s shorter", 2.5)
         } else if me.role != SURV {
             a.task_open = false
         }
     }
+    if a.confirm_exit { return }
+    let ox = me.x
+    let oy = me.y
     game_step(g, dt, bot_think)
     zt_events(a)
+    zt_ambient(a, ox, oy)
     if g.winner >= 0 {
         if a.end_wait == 0.0 {
             a.end_wait = now
@@ -181,339 +252,6 @@ fn zt_tick(a: App) {
         if now - a.end_wait > 1.5 { a.screen = SCR_END }
     }
 }
-
-// ---------------------------------------------------------------- drawing
-
-fn draw_tile(c: Canvas, code: int, sx: float, sy: float, now: float) {
-    let t = 48.0
-    c.frect(sx, sy, t, t, hex("#24261d"))
-    if code == T_WALL {
-        c.frect(sx, sy, t, t, hex("#4a4536"))
-        c.frect(sx, sy, t, 4.0, hex("#53664f"))
-        c.frect(sx, sy + t - 3.0, t, 3.0, hex("#222b21"))
-    } else if code == T_CRATE {
-        c.frect(sx + 2.0, sy + 2.0, t - 4.0, t - 4.0, hex("#85602f"))
-        c.outline(int(sx) + 2, int(sy) + 2, 44, 44, 0, 3, hex("#4a3418"))
-        c.fline(sx + 6.0, sy + t - 6.0, sx + t - 6.0, sy + 6.0, 4.0, hex("#4a3418"))
-    } else if code == T_TASK {
-        c.frect(sx, sy, t, t, hex("#2a6f97"))
-        c.outline(int(sx) + 2, int(sy) + 2, 44, 44, 0, 3, hex("#1c4a66"))
-        c.rrect(int(sx) + 10, int(sy) + 12, 28, 18, 3, hex("#0d0a1f"))
-        c.rrect(int(sx) + 13, int(sy) + 15, 22, 12, 2, zc_toxic())
-    } else if code == T_SURV {
-        c.frect(sx, sy, t, t, rgba(79, 142, 247, 0.18))
-    } else if code == T_ZOMB {
-        c.frect(sx, sy, t, t, rgba(229, 56, 59, 0.2))
-    } else if code == T_HAZARD {
-        c.frect(sx, sy, t, t, hex("#c0392b"))
-        c.outline(int(sx), int(sy), 48, 48, 0, 2, hex("#ff6b5f"))
-        c.fcircle(sx + 24.0, sy + 24.0, 4.0, hex("#ffd23f"))
-        for k in 0..3 {
-            let a = float(k) * 2.0 * PI / 3.0 + now * 2.0
-            c.fcircle(sx + 24.0 + cos(a) * 11.0, sy + 24.0 + sin(a) * 11.0, 5.0, hex("#ffd23f"))
-        }
-    } else if code == T_FINISH {
-        for yy in 0..4 {
-            for xx in 0..4 {
-                let dark = (xx + yy) % 2 == 0
-                c.frect(sx + float(xx * 12), sy + float(yy * 12), 12.0, 12.0, if dark { BLACK } else { WHITE })
-            }
-        }
-    } else if code == T_MUD {
-        c.frect(sx, sy, t, t, hex("#4f3d22"))
-        c.fcircle(sx + 14.0, sy + 16.0, 5.0, hex("#3d2e17"))
-        c.fcircle(sx + 32.0, sy + 30.0, 7.0, hex("#3d2e17"))
-    } else if code == T_CHECK {
-        c.frect(sx, sy, t, t, rgba(45, 106, 79, 0.6))
-        c.fline(sx + 16.0, sy + 8.0, sx + 16.0, sy + 40.0, 3.0, hex("#d8d2c0"))
-        c.polygon([(sx + 16.0, sy + 8.0), (sx + 36.0, sy + 15.0), (sx + 16.0, sy + 23.0)], zc_blood())
-    }
-}
-
-fn draw_player(c: Canvas, a: App, p: P, sx: float, sy: float) {
-    let g = a.g
-    let sk = SKINS[p.skin]
-    let zombie = p.role == ZOMB
-    let frozen = is_frozen(g, p)
-    var alpha = 1.0
-    if fx_on(g, p, E_INVIS) and p.id != 0 { alpha = 0.35 }
-    c.fcircle(sx, sy + 15.0, 14.0, rgba(0, 0, 0, 0.25))
-    if fx_on(g, p, E_SHIELD) {
-        c.fcircle(sx, sy, 32.0, rgba(111, 200, 255, 0.15))
-        c.ring(int(sx), int(sy), 32, 2, rgba(111, 200, 255, 0.9))
-    }
-    draw_character(c, sx, sy, 38.0, sk, zombie, p.facing, if frozen { 0.6 } else { alpha })
-    if frozen {
-        c.ring(int(sx), int(sy), 22, 3, zc_blue())
-        c.text(int(sx) - 6, int(sy) - 46, "{int(frozen_left(g, p)) + 1}", zc_blue(), 16, true)
-    }
-    if p.doctor and p.role == SURV {
-        c.rrect(int(sx) + 10, int(sy) - 30, 16, 16, 4, WHITE)
-        c.rect(int(sx) + 16, int(sy) - 28, 4, 12, zc_blood())
-        c.rect(int(sx) + 12, int(sy) - 24, 12, 4, zc_blood())
-    }
-    var label = p.name
-    if p.id == 0 { label = "You" }
-    let col = if p.id == 0 { zc_toxic() } else if zombie { hex("#a8e063") } else { WHITE }
-    c.text(int(sx) - c.text_width(label, 12) / 2, int(sy) + 26, label, col, 12, true)
-}
-
-fn zt_arrow(c: Canvas, cx: float, cy: float, tx: float, ty: float, col: int, label: str) {
-    let d = dist(cx, cy, tx, ty)
-    if d < 120.0 { return }
-    let a = atan2(ty - cy, tx - cx)
-    let px = cx + cos(a) * 90.0
-    let py = cy + sin(a) * 90.0
-    c.polygon([(px + cos(a) * 12.0, py + sin(a) * 12.0), (px + cos(a + 2.5) * 10.0, py + sin(a + 2.5) * 10.0), (px + cos(a - 2.5) * 10.0, py + sin(a - 2.5) * 10.0)], col)
-    if label != "" { c.text(int(px) - 6, int(py) + 12, label, col, 12, true) }
-}
-
-fn zt_chip(c: Canvas, x: int, y: int, label: str, col: int) -> int {
-    let w = c.text_width(label, 14, true) + 22
-    c.rrect(x, y, w, 26, 10, zc_bg_alt())
-    c.outline(x, y, w, 26, 10, 2, zc_rim())
-    c.text(x + 11, y + 5, label, col, 14, true)
-    return w + 6
-}
-
-fn zt_hud(c: Canvas, a: App) {
-    let g = a.g
-    let me = local_player(g)
-    let (sv, zb) = counts(g)
-    var done = 0
-    var total = 0
-    for p in g.players {
-        if p.start_role == SURV {
-            done += p.tasks.len()
-            total += g.stations.len()
-        }
-    }
-    var x = 10
-    if g.mode == M_OBSTACLE {
-        let secs = if me.finished_at >= 0.0 { me.finished_at } else { g.now }
-        let tl = "{secs:.1f}s"
-        c.rrect(x, 10, 96, 34, 12, zc_panel())
-        c.outline(x, 10, 96, 34, 12, 2, zc_rim())
-        c.text(x + 48 - c.text_width(tl, 18, true) / 2, 17, tl, zc_toxic(), 18, true)
-        x += 104
-        x += zt_chip(c, x, 14, "Deaths {me.deaths}", zc_blood())
-        if g.map.medals.len() >= 3 {
-            x += zt_chip(c, x, 14, "G {g.map.medals[0]}s", zc_gold())
-            x += zt_chip(c, x, 14, "S {g.map.medals[1]}s", hex("#cfc9bb"))
-            x += zt_chip(c, x, 14, "B {g.map.medals[2]}s", hex("#d08c60"))
-        }
-    } else {
-        let t = int(time_left(g))
-        let tl = "{t / 60}:{(t % 60):02}"
-        c.rrect(x, 10, 96, 34, 12, zc_panel())
-        c.outline(x, 10, 96, 34, 12, 2, zc_rim())
-        c.text(x + 48 - c.text_width(tl, 20, true) / 2, 16, tl, if t < 30 { zc_blood() } else { WHITE }, 20, true)
-        x += 104
-        x += zt_chip(c, x, 14, "Survivors {sv}", zc_blue())
-        x += zt_chip(c, x, 14, "Zombies {zb}", zc_zombie())
-        x += zt_chip(c, x, 14, "Tasks {done}/{total}", zc_gold())
-    }
-    // role pill, top right
-    let role = if me.role == ZOMB { "ZOMBIE" } else { "SURVIVOR" }
-    let rc = if me.role == ZOMB { zc_zombie() } else { zc_blue() }
-    let rw = c.text_width(role, 15, true) + 28
-    c.rrect(VIEW_W - rw - 10, 12, rw, 30, 15, rc)
-    c.text(VIEW_W - rw + 4, 18, role, zc_ink(), 15, true)
-}
-
-fn zt_minimap(c: Canvas, a: App) {
-    let g = a.g
-    let m = g.map
-    let me = local_player(g)
-    let box = 130.0
-    let s = min(box / float(m.w), box / float(m.h))
-    let ox = float(VIEW_W) - float(m.w) * s - 12.0
-    let oy = float(VIEW_H) - float(m.h) * s - 12.0
-    c.frect(ox - 3.0, oy - 3.0, float(m.w) * s + 6.0, float(m.h) * s + 6.0, rgba(13, 10, 31, 0.8))
-    for ty in 0..m.h {
-        for tx in 0..m.w {
-            let code = map_tile(m, tx, ty)
-            if code == T_WALL { c.frect(ox + float(tx) * s, oy + float(ty) * s, s, s, hex("#6b6650")) }
-            if code == T_CRATE { c.frect(ox + float(tx) * s, oy + float(ty) * s, s, s, hex("#85602f")) }
-            if code == T_TASK and me.role == SURV { c.frect(ox + float(tx) * s, oy + float(ty) * s, s, s, zc_gold()) }
-            if code == T_FINISH { c.frect(ox + float(tx) * s, oy + float(ty) * s, s, s, WHITE) }
-        }
-    }
-    c.fcircle(ox + me.x / 48.0 * s, oy + me.y / 48.0 * s, 3.0, zc_toxic())
-}
-
-fn zt_draw(c: Canvas, a: App) {
-    let g = a.g
-    let m = g.map
-    let me = local_player(g)
-    c.clear(hex("#0d0a1f"))
-    a.cam_x = me.x - float(VIEW_W) / 2.0
-    a.cam_y = me.y - float(VIEW_H) / 2.0
-    let mx = c.mouse_x()
-    let my = c.mouse_y()
-    if mx >= 0 {
-        a.mwx = float(mx) + a.cam_x
-        a.mwy = float(my) + a.cam_y
-    }
-    let tx0 = max(0, int(floor(a.cam_x / 48.0)))
-    let ty0 = max(0, int(floor(a.cam_y / 48.0)))
-    let tx1 = min(m.w - 1, int(floor((a.cam_x + float(VIEW_W)) / 48.0)))
-    let ty1 = min(m.h - 1, int(floor((a.cam_y + float(VIEW_H)) / 48.0)))
-    let vis = vision_radius(g, me)
-    let see_all = me.role == ZOMB and fx_on(g, me, E_VISION)
-    for ty in ty0..=ty1 {
-        for tx in tx0..=tx1 {
-            draw_tile(c, map_tile(m, tx, ty), float(tx * 48) - a.cam_x, float(ty * 48) - a.cam_y, g.now)
-        }
-    }
-    // stations the player still has to do glow gold
-    for s in g.stations {
-        if not me.tasks.contains(s.idx) and me.role == SURV {
-            let pulse = 0.5 + 0.5 * sin(g.now * 4.0)
-            c.outline(s.tx * 48 - int(a.cam_x), s.ty * 48 - int(a.cam_y), 48, 48, 0, 3, rgba(255, 210, 63, 0.4 + 0.5 * pulse))
-        }
-    }
-    for s in g.saw_pos {
-        let sx = s.x - a.cam_x
-        let sy = s.y - a.cam_y
-        c.fcircle(sx, sy, 18.0, hex("#cfd2d6"))
-        for k in 0..8 {
-            let ang = float(k) * PI / 4.0 + g.now * 8.0
-            c.fcircle(sx + cos(ang) * 17.0, sy + sin(ang) * 17.0, 4.0, hex("#cfd2d6"))
-        }
-        c.fcircle(sx, sy, 6.0, hex("#555a60"))
-    }
-    for n in active_noises(g) {
-        let (nx, ny, owner, at) = n
-        let age = g.now - at
-        for k in 0..3 {
-            let rr = 10.0 + age * 160.0 - float(k) * 14.0
-            if rr > 4.0 { c.ring(int(nx - a.cam_x), int(ny - a.cam_y), int(rr), 2, rgba(63, 169, 255, 0.7)) }
-        }
-    }
-    for p in g.players {
-        if p.id == 0 { continue }
-        var show = can_see(g, me, p)
-        if see_all and p.role == SURV { show = true }
-        if show { draw_player(c, a, p, p.x - a.cam_x, p.y - a.cam_y) }
-    }
-    draw_player(c, a, me, me.x - a.cam_x, me.y - a.cam_y)
-    // arrows: toward the nearest task, and toward frozen friends
-    let cx = me.x - a.cam_x
-    let cy = me.y - a.cam_y
-    if me.role == SURV and g.mode != M_OBSTACLE {
-        var bd = 1.0e18
-        var bx = 0.0
-        var by = 0.0
-        for s in g.stations {
-            if me.tasks.contains(s.idx) { continue }
-            let d = dist(s.x, s.y, me.x, me.y)
-            if d < bd {
-                bd = d
-                bx = s.x
-                by = s.y
-            }
-        }
-        if bd < 1.0e17 { zt_arrow(c, cx, cy, bx - a.cam_x, by - a.cam_y, zc_gold(), "") }
-        if me.doctor {
-            for p in g.players {
-                if is_frozen(g, p) and p.start_role == SURV { zt_arrow(c, cx, cy, p.x - a.cam_x, p.y - a.cam_y, zc_blue(), "{int(frozen_left(g, p)) + 1}s") }
-            }
-        }
-    }
-    // fog of war: a dark ring beyond the vision radius, with a soft inner edge
-    if not see_all {
-        c.ring(int(cx), int(cy), int(vis) + 700, 1400, rgba(3, 5, 3, 0.93))
-        c.ring(int(cx), int(cy), int(vis) - 24, 48, rgba(3, 5, 3, 0.45))
-    }
-    zt_hud(c, a)
-    zt_minimap(c, a)
-    // banners
-    var banner = a.msg
-    var bcol = zc_blood()
-    if a.msg_until <= a.last { banner = "" }
-    if me.start_role == ZOMB and not zombies_released(g) {
-        banner = "Zombies are released in {int(g.release_at - g.now) + 1}"
-    } else if not zombies_released(g) and me.role == SURV {
-        banner = "Run! Zombies released in {int(g.release_at - g.now) + 1}"
-    }
-    if is_frozen(g, me) {
-        banner = "Infected! Wait for a doctor: {int(frozen_left(g, me)) + 1}s"
-        bcol = zc_blue()
-    }
-    if banner != "" {
-        let w = c.text_width(banner, 20, true)
-        c.rrect(VIEW_W / 2 - w / 2 - 18, 62, w + 36, 38, 14, bcol)
-        c.outline(VIEW_W / 2 - w / 2 - 18, 62, w + 36, 38, 14, 2, zc_rim())
-        c.text(VIEW_W / 2 - w / 2, 70, banner, zc_ink(), 20, true)
-    }
-}
-
-fn zt_round_button(label: str, rem: float, ready: int, glow: bool, size: int, f: fn()) -> Node {
-    var t = label
-    if rem > 0.0 { t = "{int(rem) + 1}" }
-    let b = button(t, f).size(size, size).pill().bold().color(zc_ink())
-    if rem > 0.0 { b.bg(zc_border()) } else { b.bg(ready) }
-    if glow { b.border(4, zc_gold()) } else { b.border(3, zc_ink()) }
-    b.shadow(0, 4, 0, zc_ink())
-    return b
-}
-
-fn zt_ability_bar(a: App) -> Node {
-    let g = a.g
-    let me = local_player(g)
-    var items: [Node] = []
-    let lo = loadout(me)
-    let sugg = suggest(g, me)
-    let tint = if me.role == ZOMB { zc_toxic() } else { zc_blue() }
-    for i in 0..lo.len() {
-        let ab = lo[i]
-        let def = ABILITIES[ab]
-        let rem = ab_remaining(g, me, ab)
-        items.push(column([
-            zt_round_button(def.short, rem, tint, sugg == ab, 62, || { activate(g, me, ab) }),
-            text("{def.name} ({i + 1})").font_size(12).color(zc_text_dim()),
-            ]).align(Align.Center).gap(3))
-    }
-    items.push(column([
-        zt_round_button("Stone", 0.0, if me.stone_used { zc_border() } else { zc_gold() }, false, 66, || { throw_stone(g, me, atan2(a.mwy - me.y, a.mwx - me.x)) }),
-        text("Stone (Q)").font_size(12).color(zc_text_dim()),
-        ]).align(Align.Center).gap(3))
-    let st = usable_station(g, me)
-    if st >= 0 {
-        items.push(column([
-            button("Do task (E)", || {
-                me.in_task = true
-                a.task_open = true
-                a.task_station = st
-                a.task = task_new(g.stations[st].kind)
-            }).size(130, 44).pill().bg(zc_blue()).color(zc_ink()).bold().shadow(0, 4, 0, zc_ink()),
-            ]).align(Align.Center))
-    }
-    return row(items).gap(16).padding(8).justify(Justify.Center).align(Align.Center).bg(zc_bg_alt())
-}
-
-fn zt_game_view(a: App) -> Node {
-    let g = a.g
-    let me = local_player(g)
-    let kids: [Node] = [
-        canvas(|c| { zt_draw(c, a) }).size(VIEW_W, VIEW_H),
-        zt_ability_bar(a),
-    ]
-    let col = column(kids).bg(zc_bg_alt())
-    if a.task_open {
-        let name = TK_NAMES[a.task.kind]
-        return stack([col, modal(task_view(a.task, name, || {
-            a.task_open = false
-            me.in_task = false
-            }), || {
-                a.task_open = false
-                me.in_task = false
-        })])
-    }
-    return col
-}
-
 // ---------------------------------------------------------------- menu and end screens
 
 fn zt_role_reveal(a: App) -> Node {
@@ -527,50 +265,6 @@ fn zt_role_reveal(a: App) -> Node {
         text(sub).color(zc_text_dim()).font_size(16),
         text("{int(a.reveal_left) + 1}").bold().font_size(48).color(zc_gold()),
     ]).gap(10).align(Align.Center).justify(Justify.Center).bg(zc_bg()).grow(1.0)
-}
-
-fn zt_menu_view(a: App) -> Node {
-    let m = a.maps[a.map_i]
-    let sk = SKINS[a.skin_i]
-    let lv = ["Dummies", "Easy", "Normal", "Hard"]
-    let kind = if m.obstacle { "Obstacle course" } else { "Classic survival" }
-    let hero = column([
-        zt_title("ZOMBIE TAG", 44),
-        text("Survive the zombies,").color(zc_text_dim()).font_size(16),
-        text("or become one.").color(zc_text_dim()).font_size(16),
-        spacer().height(8),
-        zt_button("PLAY", zc_toxic(), 190, 56, || { zt_start(a) }).font_size(22),
-    ]).gap(4).padding(20).width(330)
-    let heroCard = row([
-        hero,
-        column([character_node(sk, 150, false), text(sk.name).bold().font_size(18).color(WHITE)]).align(Align.Center).gap(6).width(300),
-    ]).bg(zc_panel()).radius(18).border(2, zc_rim()).shadow(0, 6, 0, zc_ink()).align(Align.Center)
-    let pickMap = row([
-        zt_button("<", zc_panel_light(), 44, 44, || { a.map_i = (a.map_i + a.maps.len() - 1) % a.maps.len() }).color(WHITE),
-        column([text(m.name).bold().font_size(20).color(WHITE), text("{kind}  {m.w}x{m.h}").color(zc_text_muted())]).width(300).align(Align.Center),
-        zt_button(">", zc_panel_light(), 44, 44, || { a.map_i = (a.map_i + 1) % a.maps.len() }).color(WHITE),
-    ]).gap(10).align(Align.Center).padding(10).bg(zc_panel()).radius(16).border(2, zc_rim()).shadow(0, 5, 0, zc_ink())
-    let pickSkin = row([
-        zt_button("<", zc_panel_light(), 44, 44, || { a.skin_i = (a.skin_i + SKINS.len() - 1) % SKINS.len() }).color(WHITE),
-        column([text("Skin: {sk.name}").bold().font_size(18).color(WHITE), text(sk.info).color(zc_text_muted()).font_size(13)]).width(300).align(Align.Center),
-        zt_button(">", zc_panel_light(), 44, 44, || { a.skin_i = (a.skin_i + 1) % SKINS.len() }).color(WHITE),
-    ]).gap(10).align(Align.Center).padding(10).bg(zc_panel()).radius(16).border(2, zc_rim()).shadow(0, 5, 0, zc_ink())
-    let rules = row([
-        text("Bots {a.bots}").width(80).color(WHITE).bold(),
-        zt_button("-", zc_panel_light(), 36, 36, || { a.bots = max(1, a.bots - 1) }).color(WHITE),
-        zt_button("+", zc_panel_light(), 36, 36, || { a.bots = min(19, a.bots + 1) }).color(WHITE),
-        spacer().width(24),
-        text(lv[a.level]).width(90).color(WHITE).bold(),
-        zt_button("-", zc_panel_light(), 36, 36, || { a.level = max(0, a.level - 1) }).color(WHITE),
-        zt_button("+", zc_panel_light(), 36, 36, || { a.level = min(3, a.level + 1) }).color(WHITE),
-    ]).gap(8).align(Align.Center).padding(10).bg(zc_panel()).radius(16).border(2, zc_rim()).shadow(0, 5, 0, zc_ink())
-    return column([
-        heroCard,
-        pickMap,
-        pickSkin,
-        rules,
-        text("WASD move  -  1/2/3 abilities  -  E task  -  Q stone  -  Esc menu").color(zc_text_muted()).font_size(13),
-    ]).gap(12).align(Align.Center).justify(Justify.Center).padding(16).bg(zc_bg()).grow(1.0)
 }
 
 fn zt_end_view(a: App) -> Node {
@@ -627,7 +321,8 @@ fn zt_view(a: App) -> Node {
 
 fn main() {
     let ms = all_maps()
-    let a = App{ maps: ms, g: new_game(ms[0], M_CLASSIC, 0, 1, 1, 1, 0, 5.0, false), task: task_new(0) }
+    let a = App{ maps: ms, g: new_game(ms[0], M_CLASSIC, 0, 1, 1, 1, 0, 5.0, false), task: task_new(0), prof: zt_load_profile(), start_t: clock() }
+    zt_fonts()
     zt_make_sounds(a)
     // ZT_SHOT=game|reveal|end starts straight on that screen (used for screenshots)
     let shot = getenv("ZT_SHOT") ?? ""
@@ -641,5 +336,5 @@ fn main() {
         }
     }
     ui_every(16, || { zt_tick(a) })
-    ui_run("Zombie Tag", VIEW_W, VIEW_H + 104, || zt_view(a))
+    ui_run("Zombie Tag", VIEW_W, VIEW_H, || zt_view(a))
 }

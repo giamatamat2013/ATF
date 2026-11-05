@@ -90,6 +90,7 @@ extern "gdi32" fn CreateCompatibleDC(dc: int) -> int
 extern "gdi32" fn CreateDIBSection(dc: int, bmi: ptr<int>, usage: int, bits: ptr<int>, sec: int, off: int) -> int
 extern "gdi32" fn SelectObject(dc: int, o: int) -> int
 extern "gdi32" fn DeleteObject(o: int) -> i32
+extern "gdi32" fn AddFontMemResourceEx(data: ptr<byte>, n: int, pdv: int, count: ptr<int>) -> int
 extern "gdi32" fn CreateFontW(h: int, w: int, esc: int, ori: int, weight: int, italic: int, under: int, strike: int, cs: int, op: int, cp: int, q: int, pf: int, face: ptr<byte>) -> int
 extern "gdi32" fn SetTextColor(dc: int, c: int) -> i32
 extern "gdi32" fn SetBkMode(dc: int, m: int) -> i32
@@ -810,6 +811,29 @@ fn progress(value: float) -> Node {
     return n
 }
 
+// Make a font file (the bytes of a .ttf or .otf, e.g. include_str("Rubik.ttf") or read_file(path)) usable
+// in this program. Afterwards use its family name with .family("Rubik") or c.text(..., family: "Rubik").
+// Returns false when the bytes are not a font. The font is not installed on the computer.
+fn font_add(data: str) -> bool {
+    if data.len() == 0 { return false }
+    let count = __alloc_atomic(8) as ptr<int>
+    count[0] = 0
+    if AddFontMemResourceEx(str_data(data), data.len(), 0, count) == 0 { return false }
+    // fonts that were looked up before may have fallen back to another face: look them up again
+    ui_fonts = {}
+    ui_widths = {}
+    return true
+}
+
+// the text settings of Canvas.text
+fn ui_canvas_text(size: int, bold: bool, family: str, weight: int) -> UiText {
+    let t = UiText()
+    t.size = size
+    t.weight = if weight > 0 { weight } else if bold { 700 } else { 400 }
+    if family.len() > 0 { t.family = family }
+    return t
+}
+
 // a picture from a file (PNG, JPG, BMP, GIF); without a size it shows at its natural size.
 // The picture fills the box and is cut to keep its proportions (CSS object-fit: cover).
 fn image(path: str) -> Node {
@@ -1061,19 +1085,19 @@ impl Canvas {
         }
     }
     // one line of text with its top left corner at (x, y)
-    fn text(self, x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false) {
-        let t = UiText()
-        t.size = size
-        t.weight = if bold { 700 } else { 400 }
-        let f = ui_font(t)
+    // family and weight are optional: family "" keeps Segoe UI, weight 0 means 700 with bold and 400 without
+    fn text(self, x: int, y: int, s: str, c: int, size: int = 15, bold: bool = false, family: str = "", weight: int = 0) {
+        let f = ui_font(ui_canvas_text(size, bold, family, weight))
         ui_draw_mask(ui_text_mask(f, s), self.ox + ui_sc(x) - 1, self.oy + ui_sc(y), c)
     }
     // the width text would take
-    fn text_width(self, s: str, size: int = 15, bold: bool = false) -> int {
-        let t = UiText()
-        t.size = size
-        t.weight = if bold { 700 } else { 400 }
-        return int(float(ui_text_w(ui_font(t), s)) / ui_scale + 0.5)
+    fn text_width(self, s: str, size: int = 15, bold: bool = false, family: str = "", weight: int = 0) -> int {
+        return int(float(ui_text_w(ui_font(ui_canvas_text(size, bold, family, weight)), s)) / ui_scale + 0.5)
+    }
+    // How far below the top of text() the baseline lies (the font's ascent), in canvas pixels.
+    // Use it to line text up with a baseline, or to place it the way a browser does.
+    fn text_ascent(self, size: int = 15, bold: bool = false, family: str = "", weight: int = 0) -> float {
+        return float(ui_font(ui_canvas_text(size, bold, family, weight)).ascent) / ui_scale
     }
     // the size of the canvas in real screen pixels (w and h are at 100% scale, so on a high-DPI screen the
     // canvas has more pixels): render a software scene at pixel_w() x pixel_h() for full sharpness, no scaling
@@ -1136,6 +1160,95 @@ impl Canvas {
                 let top = ui_lerp_rgb(pix[r0 + cl[i]], pix[r0 + cr[i]], fx)
                 let bot = ui_lerp_rgb(pix[r1 + cl[i]], pix[r1 + cr[i]], fx)
                 fb[row + x0 + i] = ui_lerp_rgb(top, bot, fy)
+            }
+        }
+    }
+    // Turn what is already drawn in a rectangle of the canvas gray, like the CSS filter grayscale(1).
+    // Draw the scene first, call grayscale, then draw what should stay in color on top.
+    fn grayscale(self, x: int, y: int, w: int, h: int) {
+        let fb = ui_fb as ptr<int>
+        let dx0 = self.ox + ui_sc(x)
+        let dy0 = self.oy + ui_sc(y)
+        let x0 = max(dx0, ui_cx0)
+        let x1 = min(dx0 + ui_sc(w), ui_cx1)
+        let y0 = max(dy0, ui_cy0)
+        let y1 = min(dy0 + ui_sc(h), ui_cy1)
+        for yy in y0..y1 {
+            let row = yy * ui_fbw
+            for xx in x0..x1 {
+                let p = fb[row + xx]
+                // the brightness of the pixel: 0.2126 red + 0.7152 green + 0.0722 blue (in 1/256 steps)
+                let l = (((p >> 16) & 255) * 54 + ((p >> 8) & 255) * 183 + (p & 255) * 19) >> 8
+                fb[row + xx] = (l << 16) | (l << 8) | l
+            }
+        }
+    }
+    // A rounded rectangle w x h with corner radius r, turned by angle degrees around its centre (cx, cy).
+    // A positive angle turns clockwise, like the CSS transform rotate(). The edges are smoothed.
+    fn rrect_rotated(self, cx: float, cy: float, w: float, h: float, r: float, angle: float, c: int) {
+        let ca = ui_ca(c)
+        if ca == 0 or w <= 0.0 or h <= 0.0 { return }
+        let s = ui_scale
+        let px = float(self.ox) + cx * s
+        let py = float(self.oy) + cy * s
+        let hw = w * s / 2.0
+        let hh = h * s / 2.0
+        let rad = clamp(r * s, 0.0, min(hw, hh))
+        let co = cos(angle * PI / 180.0)
+        let si = sin(angle * PI / 180.0)
+        let ex = abs(co) * hw + abs(si) * hh + 1.0
+        let ey = abs(si) * hw + abs(co) * hh + 1.0
+        let fb = ui_fb as ptr<int>
+        for yy in max(floor_int(py - ey), ui_cy0)..min(ceil_int(py + ey), ui_cy1) {
+            let dy = float(yy) + 0.5 - py
+            let row = yy * ui_fbw
+            for xx in max(floor_int(px - ex), ui_cx0)..min(ceil_int(px + ex), ui_cx1) {
+                let dx = float(xx) + 0.5 - px
+                let u = co * dx + si * dy
+                let v = co * dy - si * dx
+                let cov = clamp(0.5 - ui_rr_dist(u, v, -hw, -hh, hw * 2.0, hh * 2.0, rad, rad, rad, rad), 0.0, 1.0)
+                if cov > 0.0 { ui_put(fb, row + xx, c, int(cov * float(ca) + 0.5)) }
+            }
+        }
+    }
+    // One line of text turned by angle degrees around the centre of the text (cx, cy).
+    // A positive angle turns clockwise, like the CSS transform rotate(). size, family and weight as in text().
+    fn text_rotated(self, cx: float, cy: float, s: str, c: int, size: int = 15, angle: float = 0.0, family: str = "", weight: int = 0) {
+        let ca = ui_ca(c)
+        if ca == 0 or s.len() == 0 { return }
+        let f = ui_font(ui_canvas_text(size, false, family, weight))
+        let m = ui_text_mask(f, s)
+        // the middle of the text inside the mask (the mask starts one pixel left of the text)
+        let mcx = 1.0 + float(ui_text_w(f, s)) / 2.0
+        let mcy = float(m.h) / 2.0
+        let px = float(self.ox) + cx * ui_scale
+        let py = float(self.oy) + cy * ui_scale
+        let co = cos(angle * PI / 180.0)
+        let si = sin(angle * PI / 180.0)
+        let hw = float(m.w) / 2.0
+        let hh = mcy
+        let ex = abs(co) * hw + abs(si) * hh + 2.0
+        let ey = abs(si) * hw + abs(co) * hh + 2.0
+        let fb = ui_fb as ptr<int>
+        for yy in max(floor_int(py - ey), ui_cy0)..min(ceil_int(py + ey), ui_cy1) {
+            let dy = float(yy) + 0.5 - py
+            let row = yy * ui_fbw
+            for xx in max(floor_int(px - ex), ui_cx0)..min(ceil_int(px + ex), ui_cx1) {
+                let dx = float(xx) + 0.5 - px
+                // the point of the mask this pixel shows, sampled between the four nearest mask pixels
+                let u = co * dx + si * dy + mcx - 0.5
+                let v = co * dy - si * dx + mcy - 0.5
+                let u0 = floor_int(u)
+                let v0 = floor_int(v)
+                if u0 < -1 or v0 < -1 or u0 >= m.w or v0 >= m.h { continue }
+                let fu = u - float(u0)
+                let fv = v - float(v0)
+                let a00 = ui_mask_at(m, u0, v0)
+                let a10 = ui_mask_at(m, u0 + 1, v0)
+                let a01 = ui_mask_at(m, u0, v0 + 1)
+                let a11 = ui_mask_at(m, u0 + 1, v0 + 1)
+                let cov = (a00 * (1.0 - fu) + a10 * fu) * (1.0 - fv) + (a01 * (1.0 - fu) + a11 * fu) * fv
+                if cov > 0.5 { ui_put(fb, row + xx, c, int(cov * float(ca) / 255.0 + 0.5)) }
             }
         }
     }
@@ -1700,6 +1813,12 @@ fn ui_shadow(x: int, y: int, w: int, h: int, ra: int, rb: int, rc: int, rd: int,
             if a > 0.004 { ui_put(fb, row + xx, c, int(a * float(ca) + 0.5)) }
         }
     }
+}
+
+// the coverage (0..255) of one mask pixel; 0 outside the mask
+fn ui_mask_at(m: UiMask, x: int, y: int) -> float {
+    if x < 0 or y < 0 or x >= m.w or y >= m.h { return 0.0 }
+    return float(m.data[y * m.w + x])
 }
 
 fn ui_draw_mask(m: UiMask, x: int, y: int, c: int) {
